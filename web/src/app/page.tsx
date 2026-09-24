@@ -1,28 +1,20 @@
-import { connection } from "next/server";
+import { ReadingMaterialsUpload } from "@/components/dashboard/reading-materials-upload";
+import { SyllabusUpload } from "@/components/dashboard/syllabus-upload";
 
-import { API_URL } from "@/lib/api";
-
-async function getApiStatus(): Promise<string> {
-  try {
-    const res = await fetch(`${API_URL}/health`, { cache: "no-store" });
-    if (!res.ok) return `error (${res.status})`;
-    const body: { status: string } = await res.json();
-    return body.status;
-  } catch {
-    return "unreachable";
-  }
-}
-
-export default async function Home() {
-  await connection();
-  const status = await getApiStatus();
-
+export default function Dashboard() {
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-4 p-16 font-sans">
-      <h1 className="text-3xl font-semibold tracking-tight">KSE AI Notes Taker</h1>
-      <p className="text-zinc-600 dark:text-zinc-400">
-        API status: <code className="font-mono">{status}</code>
-      </p>
+    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-10 sm:px-6">
+      <header className="flex flex-col gap-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Course materials</h1>
+        <p className="text-muted-foreground">
+          Upload the syllabus and reading materials for your course.
+        </p>
+      </header>
+
+      <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+        <SyllabusUpload />
+        <ReadingMaterialsUpload />
+      </div>
     </main>
   );
 }
