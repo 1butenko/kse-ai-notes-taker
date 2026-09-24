@@ -1,15 +1,18 @@
 # Local development. `docker compose up --build`
 #   web: http://localhost:3000
-#   api: http://localhost:8000  (docs at /docs)
+#   api: http://localhost:${API_PORT}  (docs at /docs), port set in .env
 services:
   api:
     build:
       context: ./api
       target: dev
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
+    env_file: .env
     environment:
       ENVIRONMENT: local
+      # macOS bind mounts don't always deliver file events; poll so --reload is reliable.
+      WATCHFILES_FORCE_POLLING: "true"
       CORS_ORIGINS: '["http://localhost:3000"]'
       UPLOADS_DIR: /data/uploads
     volumes:
@@ -29,6 +32,7 @@ services:
       - "3000:3000"
     environment:
       API_URL: http://api:8000
+      API_PORT: ${API_PORT:-8000}
     volumes:
       - ./web:/app
       # Keep the image's Linux node_modules and build cache instead of the host's.

@@ -1,33 +1,143 @@
 # KSE AI Notes Taker
 
-Plain monorepo: one directory per component, Docker Compose for local dev.
+A dashboard for KSE lecturers to collect their course materials in one place and turn them into AI-generated notes.
+
+Lecturers can:
+
+- **import a course from Moodle** (teaching.kse.org.ua) by its course ID; the syllabus is filled in automatically
+- upload the course **syllabus** by hand
+- upload **reading materials** (papers, book chapters, slides)
+
+The project is a plain monorepo:
 
 ```
-api/   FastAPI (Python 3.12, uv)
-web/   Next.js (App Router, TypeScript, Tailwind)
+api/   FastAPI backend (Python 3.12, uv)
+web/   Next.js frontend (App Router, TypeScript, Tailwind, shadcn/ui)
 ```
 
-## Run everything
+## Requirements
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Docker Compose v2
+- A Moodle web service token from teaching.kse.org.ua for the bot account the API uses
+
+To run without Docker you also need:
+
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/)
+- Node.js 20.9+ and npm
+
+## Installation
+
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/1butenko/kse-ai-notes-taker.git
+   cd kse-ai-notes-taker
+   ```
+
+2. Create your environment file and fill in `MOODLE_TOKEN`:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   | Variable       | Required | Example                        | Purpose                                  |
+   |----------------|----------|--------------------------------|------------------------------------------|
+   | `API_PORT`     | no       | `8000`                         | Host port for the API; the web app calls `http://localhost:$API_PORT` |
+   | `MOODLE_URL`   | yes      | `https://teaching.kse.org.ua`  | Moodle site the API talks to             |
+   | `MOODLE_TOKEN` | yes      |                                | Web service token of the Moodle bot account |
+
+   The API reads these from the root `.env` (compose passes it to the container). It refuses to start if `MOODLE_URL` or `MOODLE_TOKEN` is missing. Never commit `.env`.
+
+3. Build and start everything:
+
+   ```bash
+   docker compose up --build
+   ```
+
+4. Open the app:
+
+   - Web: http://localhost:3000
+   - API: http://localhost:8000 (interactive docs at http://localhost:8000/docs)
+
+Both services mount their source code, so code changes reload automatically. Changes to `.env` need a restart: `docker compose up -d api`. After adding npm packages, rebuild the web container with `docker compose up -d --build -V web`.
+
+### Running without Docker
+
+Run the API from `api/`; it picks up the root `.env` automatically.
 
 ```bash
-docker compose up --build   # or: make up
+cd api && uv sync && uv run uvicorn app.main:app --reload --port 8000
 ```
 
-- Web: http://localhost:3000
-- API: http://localhost:8000 (OpenAPI docs at `/docs`)
-
-Both services bind-mount their source, so edits hot-reload.
-
-## How web talks to api
-
-- Server components call `API_URL` directly (`http://api:8000` inside compose).
-- Browser code calls `/api/*`; Next.js rewrites it to FastAPI, so there's no CORS in the normal path.
-
-## Running without Docker
-
 ```bash
-cd api && uv sync && uv run uvicorn app.main:app --reload
 cd web && npm install && npm run dev
+```
+
+## Moodle
+
+The API talks to Moodle's REST web service (`{MOODLE_URL}/webservice/rest/server.php`) using the bot token from `.env`.
+
+### Endpoints
+
+| Endpoint                  | Moodle function                     | What it does                                   |
+|---------------------------|-------------------------------------|------------------------------------------------|
+| `GET /courses/{course_id}`| `core_course_get_courses_by_field`  | Returns one course by ID, e.g. `GET /courses/4510` |
+| `GET /courses/{course_id}/contents` | `core_course_get_contents` | Returns the course sections with their modules (files, links, assignments, quizzes) |
+| `POST /courses/connect`   | `core_webservice_get_site_info`     | Checks a token passed in the body (`{"token": "..."}`) and reports the account, Moodle version, whether file downloads are enabled and which required functions are missing |
+
+Both `GET` endpoints also print what they receive (the course, then its sections and modules) to the API log: `make logs`.
+
+### Importing a course in the UI
+
+1. Open the course in Moodle and copy the number after `id=` in the URL, e.g. `course/view.php?id=4510`.
+2. Click **Import from Moodle** in the sidebar, enter the ID and press **Import**.
+3. The web app calls `GET /courses/{course_id}`, then `GET /courses/{course_id}/contents`.
+
+The **Syllabus** card is then filled with every Moodle file whose activity name or file name contains "Syllabus" or "Силабус" (any letter case). Each one shows its Moodle name, file name, size and a **Moodle** badge, with a link to open it in Moodle. The ✕ button hides it from the card only. Links, assignments and quizzes are not treated as syllabus files.
+
+The imported course is kept in the page only, so a refresh clears it. Files are listed, not downloaded yet.
+
+### Errors
+
+- `401 Invalid Moodle token`: the token is wrong
+- `404 Course not found`: Moodle returned no course for that ID (it doesn't exist, or the bot can't see it)
+- `502 Moodle error: <code>`: Moodle rejected the request, e.g. `wsaccessusernologin` when the bot user has the "No login" authentication method
+- `502 Moodle is unreachable`: network or HTTP error talking to Moodle
+
+### Bot account setup
+
+The Moodle user behind the token must:
+
+- use an authentication method that allows web services (for example "Web services authentication"), not "No login"
+- not be suspended
+- be able to see the courses you want to read
+- belong to a web service that includes `core_course_get_courses_by_field` and `core_course_get_contents`, with file downloads enabled
+
+### Adding a Moodle function
+
+1. Add a model and a method to `MoodleClient` in `api/app/moodle.py` that calls `self.call(token, "<wsfunction>", **params)`.
+2. Add the function name to `REQUIRED_FUNCTIONS` in `api/app/routers/courses.py`, so `/courses/connect` reports it when the service doesn't include it.
+3. Expose it from a router, wrapping the call in `with moodle_errors():`.
+4. Test it with the `mock_moodle` fixture in `api/tests/test_courses.py`.
+5. To use it in the web app, add a typed function next to `getCourse` in `web/src/lib/api.ts`.
+
+### Where things live in the web app
+
+| File | Purpose |
+|------|---------|
+| `web/src/lib/api.ts` | API calls and the `Course` / `Section` / `Module` types |
+| `web/src/lib/moodle-files.ts` | Picks syllabus files out of the course contents (`findSyllabusFiles`) |
+| `web/src/components/dashboard/moodle-course-context.tsx` | Shares the imported course between the sidebar dialog and the cards |
+| `web/src/components/dashboard/moodle-import-dialog.tsx` | The **Import from Moodle** dialog |
+| `web/src/components/dashboard/file-upload-card.tsx` | Upload card used by Syllabus and Reading materials; shows Moodle files and local uploads |
+
+## Development
+
+```bash
+make test   # API tests (use test values from api/tests/conftest.py, not your .env)
+make lint   # ruff + eslint
+make logs   # follow container logs
+make down   # stop everything
 ```
 
 ## Production images
@@ -39,4 +149,4 @@ docker build --target prod -t notes-api ./api
 docker build --target prod --build-arg API_URL=https://api.example.com -t notes-web ./web
 ```
 
-The web image uses Next.js `standalone` output. `API_URL` is a build arg because rewrites are fixed at build time.
+The web image uses Next.js `standalone` output. `API_URL` and `API_PORT` are read at build time.

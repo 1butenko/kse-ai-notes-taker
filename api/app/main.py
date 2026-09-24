@@ -4,7 +4,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings
+from app.config import get_settings
+from app.routers import courses
+
+settings = get_settings()
 
 
 @asynccontextmanager
@@ -22,6 +25,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(courses.router)
 
 
 @app.get("/health")
