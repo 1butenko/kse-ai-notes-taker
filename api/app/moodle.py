@@ -1,4 +1,6 @@
+import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Annotated, Any
 
 import httpx2
@@ -112,6 +114,20 @@ class MoodleClient:
     async def get_course_contents(self, token: str, courseid: int) -> list[Section]:
         payload = await self.call(token, "core_course_get_contents", courseid=courseid)
         return [Section.model_validate(item) for item in payload]
+
+    async def download(self, token: str, fileurl: str, dest: Path) -> int:
+        url = httpx2.URL(fileurl).copy_merge_params({"token": token})
+        async with self.http.stream("GET", url) as response:
+            response.raise_for_status()
+            if "application/json" in response.headers.get("content-type", ""):
+                payload = json.loads(await response.aread())
+                raise MoodleError(payload.get("errorcode", "unknown"), payload.get("message", ""))
+            size = 0
+            with dest.open("wb") as out:
+                async for chunk in response.aiter_bytes():
+                    out.write(chunk)
+                    size += len(chunk)
+            return size
 
 
 async def get_moodle_client(

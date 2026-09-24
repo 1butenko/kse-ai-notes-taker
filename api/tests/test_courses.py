@@ -1,11 +1,7 @@
-from collections.abc import AsyncIterator, Callable, Iterator
-
 import httpx2
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.moodle import MoodleClient, get_moodle_client
 from app.routers.courses import REQUIRED_FUNCTIONS
 
 SITE_INFO = {
@@ -18,20 +14,6 @@ SITE_INFO = {
     "downloadfiles": 1,
     "functions": [{"name": name, "version": "2024100700"} for name in REQUIRED_FUNCTIONS],
 }
-
-
-@pytest.fixture
-def mock_moodle() -> Iterator[Callable[[Callable[[httpx2.Request], httpx2.Response]], TestClient]]:
-    def install(handler: Callable[[httpx2.Request], httpx2.Response]) -> TestClient:
-        async def override() -> AsyncIterator[MoodleClient]:
-            async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http:
-                yield MoodleClient("https://moodle.test", http)
-
-        app.dependency_overrides[get_moodle_client] = override
-        return TestClient(app)
-
-    yield install
-    app.dependency_overrides.clear()
 
 
 def test_connect_returns_site_info(mock_moodle) -> None:
