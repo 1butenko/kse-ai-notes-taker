@@ -2,7 +2,12 @@ import { BookOpenIcon } from "lucide-react";
 
 import { FileUploadCard } from "@/components/dashboard/file-upload-card";
 
-export function ReadingMaterialsUpload() {
+type ReadingMaterialsUploadProps = {
+  files: File[];
+  onFilesChange: (files: File[]) => void;
+};
+
+export function ReadingMaterialsUpload(props: ReadingMaterialsUploadProps) {
   return (
     <FileUploadCard
       title="Reading materials"
@@ -11,6 +16,7 @@ export function ReadingMaterialsUpload() {
       emptyTitle="No reading materials yet"
       accept=".pdf,.doc,.docx,.ppt,.pptx"
       multiple
+      {...props}
     />
   );
 }

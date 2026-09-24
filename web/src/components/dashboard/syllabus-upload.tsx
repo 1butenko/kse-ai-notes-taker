@@ -1,14 +1,16 @@
-"use client";
-
 import { ScrollTextIcon } from "lucide-react";
 
 import { FileUploadCard } from "@/components/dashboard/file-upload-card";
-import { useMoodleCourse } from "@/components/dashboard/moodle-course-context";
-import { findSyllabusFiles } from "@/lib/moodle-files";
+import type { MoodleFile } from "@/lib/moodle-files";
 
-export function SyllabusUpload() {
-  const { imported } = useMoodleCourse();
+type SyllabusUploadProps = {
+  files: File[];
+  onFilesChange: (files: File[]) => void;
+  moodleFiles: MoodleFile[];
+  onRemoveMoodleFile: (id: string) => void;
+};
 
+export function SyllabusUpload(props: SyllabusUploadProps) {
   return (
     <FileUploadCard
       title="Syllabus"
@@ -16,7 +18,7 @@ export function SyllabusUpload() {
       icon={<ScrollTextIcon />}
       emptyTitle="No syllabus yet"
       accept=".pdf,.doc,.docx"
-      moodleFiles={imported ? findSyllabusFiles(imported.sections) : []}
+      {...props}
     />
   );
 }

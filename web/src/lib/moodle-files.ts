@@ -6,7 +6,14 @@ export type MoodleFile = {
   filename: string;
   size: number;
   url: string;
+  fileurl: string;
+  saveAs: string;
 };
+
+function saveAsName(title: string, filename: string): string {
+  const extension = filename.match(/\.[^.]+$/)?.[0] ?? "";
+  return title.toLowerCase().endsWith(extension.toLowerCase()) ? title : `${title}${extension}`;
+}
 
 const SYLLABUS = /syllabus|силабус/iu;
 
@@ -25,6 +32,8 @@ export function findSyllabusFiles(sections: Section[]): MoodleFile[] {
           filename: content.filename,
           size: content.filesize,
           url: module.url,
+          fileurl: content.fileurl,
+          saveAs: saveAsName(module.name, content.filename),
         })),
     ),
   );

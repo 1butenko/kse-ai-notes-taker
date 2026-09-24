@@ -4,6 +4,7 @@ import { DM_Sans, Geist_Mono } from "next/font/google";
 import { AppSidebar } from "@/components/dashboard/app-sidebar";
 import { MoodleCourseProvider } from "@/components/dashboard/moodle-course-context";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 import "./globals.css";
@@ -38,6 +39,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             </SidebarProvider>
           </MoodleCourseProvider>
         </TooltipProvider>
+        <Toaster theme="light" richColors position="bottom-right" />
       </body>
     </html>
   );

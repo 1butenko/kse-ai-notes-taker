@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { ExternalLinkIcon, FileTextIcon, UploadIcon, XIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +38,10 @@ type FileUploadCardProps = {
   emptyTitle: string;
   accept: string;
   multiple?: boolean;
+  files: File[];
+  onFilesChange: (files: File[]) => void;
   moodleFiles?: MoodleFile[];
+  onRemoveMoodleFile?: (id: string) => void;
 };
 
 function formatSize(bytes: number) {
@@ -54,28 +57,24 @@ export function FileUploadCard({
   emptyTitle,
   accept,
   multiple = false,
+  files,
+  onFilesChange,
   moodleFiles = [],
+  onRemoveMoodleFile,
 }: FileUploadCardProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [files, setFiles] = useState<File[]>([]);
-  const [hiddenMoodleIds, setHiddenMoodleIds] = useState<Set<string>>(new Set());
 
-  const visibleMoodleFiles = moodleFiles.filter((file) => !hiddenMoodleIds.has(file.id));
-  const isEmpty = files.length === 0 && visibleMoodleFiles.length === 0;
+  const isEmpty = files.length === 0 && moodleFiles.length === 0;
 
   const openPicker = () => inputRef.current?.click();
 
   const onChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(event.target.files ?? []);
-    setFiles((prev) => (multiple ? [...prev, ...picked] : picked.slice(0, 1)));
+    onFilesChange(multiple ? [...files, ...picked] : picked.slice(0, 1));
     event.target.value = "";
   };
 
-  const remove = (index: number) =>
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-
-  const hideMoodleFile = (id: string) =>
-    setHiddenMoodleIds((prev) => new Set(prev).add(id));
+  const remove = (index: number) => onFilesChange(files.filter((_, i) => i !== index));
 
   return (
     <Card>
@@ -117,7 +116,7 @@ export function FileUploadCard({
           </Empty>
         ) : (
           <ItemGroup className="gap-2">
-            {visibleMoodleFiles.map((file) => (
+            {moodleFiles.map((file) => (
               <Item key={file.id} variant="outline">
                 <ItemMedia variant="icon">
                   <FileTextIcon />
@@ -146,7 +145,7 @@ export function FileUploadCard({
                     variant="ghost"
                     size="icon-sm"
                     aria-label={`Remove ${file.name}`}
-                    onClick={() => hideMoodleFile(file.id)}
+                    onClick={() => onRemoveMoodleFile?.(file.id)}
                   >
                     <XIcon />
                   </Button>
@@ -165,7 +164,7 @@ export function FileUploadCard({
                   <ItemDescription>{formatSize(file.size)}</ItemDescription>
                 </ItemContent>
                 <ItemActions>
-                  <Badge variant="secondary">Uploaded</Badge>
+                  <Badge variant="secondary">Attached</Badge>
                   <Button
                     variant="ghost"
                     size="icon-sm"

@@ -42,8 +42,20 @@ export type Section = {
 
 export class ApiError extends Error {}
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${PUBLIC_API_URL}${path}`);
+export type UploadCategory = "syllabus" | "reading";
+
+export type SavedFile = {
+  path: string;
+  size: number;
+};
+
+export type MoodleFileRef = {
+  fileurl: string;
+  filename: string;
+};
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${PUBLIC_API_URL}${path}`, init);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const detail = typeof body?.detail === "string" ? body.detail : `Request failed (${res.status})`;
@@ -53,9 +65,33 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 export function getCourse(courseId: number): Promise<Course> {
-  return getJson(`/courses/${courseId}`);
+  return request(`/courses/${courseId}`);
 }
 
 export function getCourseContents(courseId: number): Promise<Section[]> {
-  return getJson(`/courses/${courseId}/contents`);
+  return request(`/courses/${courseId}/contents`);
+}
+
+export function uploadFiles(
+  category: UploadCategory,
+  files: File[],
+  courseId?: number,
+): Promise<SavedFile[]> {
+  const form = new FormData();
+  form.append("category", category);
+  if (courseId) form.append("course_id", String(courseId));
+  for (const file of files) form.append("files", file);
+  return request("/uploads", { method: "POST", body: form });
+}
+
+export function uploadMoodleFiles(
+  category: UploadCategory,
+  files: MoodleFileRef[],
+  courseId?: number,
+): Promise<SavedFile[]> {
+  return request("/uploads/moodle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category, course_id: courseId, files }),
+  });
 }

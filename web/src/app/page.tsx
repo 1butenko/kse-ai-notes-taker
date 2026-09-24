@@ -1,5 +1,4 @@
-import { ReadingMaterialsUpload } from "@/components/dashboard/reading-materials-upload";
-import { SyllabusUpload } from "@/components/dashboard/syllabus-upload";
+import { CourseMaterials } from "@/components/dashboard/course-materials";
 
 export default function Dashboard() {
   return (
@@ -11,10 +10,7 @@ export default function Dashboard() {
         </p>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
-        <SyllabusUpload />
-        <ReadingMaterialsUpload />
-      </div>
+      <CourseMaterials />
     </div>
   );
 }
