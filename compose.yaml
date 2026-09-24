@@ -11,8 +11,10 @@ services:
     environment:
       ENVIRONMENT: local
       CORS_ORIGINS: '["http://localhost:3000"]'
+      UPLOADS_DIR: /data/uploads
     volumes:
       - ./api:/app
+      - uploads:/data/uploads
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -35,3 +37,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+volumes:
+  uploads:
