@@ -1,0 +1,37 @@
+# Local development. `docker compose up --build`
+#   web: http://localhost:3000
+#   api: http://localhost:8000  (docs at /docs)
+services:
+  api:
+    build:
+      context: ./api
+      target: dev
+    ports:
+      - "8000:8000"
+    environment:
+      ENVIRONMENT: local
+      CORS_ORIGINS: '["http://localhost:3000"]'
+    volumes:
+      - ./api:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build:
+      context: ./web
+      target: dev
+    ports:
+      - "3000:3000"
+    environment:
+      API_URL: http://api:8000
+    volumes:
+      - ./web:/app
+      # Keep the image's Linux node_modules and build cache instead of the host's.
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      api:
+        condition: service_healthy
