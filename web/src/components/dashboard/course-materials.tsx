@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { useMoodleCourse } from "@/components/dashboard/moodle-course-context";
 import { ReadingMaterialsUpload } from "@/components/dashboard/reading-materials-upload";
+import { SyllabusPlan } from "@/components/dashboard/syllabus-plan";
 import { SyllabusUpload } from "@/components/dashboard/syllabus-upload";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ export function CourseMaterials() {
   const [readingFiles, setReadingFiles] = useState<File[]>([]);
   const [hiddenMoodleIds, setHiddenMoodleIds] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [savedSyllabi, setSavedSyllabi] = useState<SavedFile[]>([]);
 
   const courseId = imported?.course.id;
   const syllabusMoodleFiles = (imported ? findSyllabusFiles(imported.sections) : []).filter(
@@ -43,17 +45,19 @@ export function CourseMaterials() {
   const onContinue = async () => {
     setStatus({ kind: "saving" });
     try {
-      const saved: SavedFile[] = [];
+      const syllabi: SavedFile[] = [];
       if (syllabusMoodleFiles.length > 0) {
         const refs = syllabusMoodleFiles.map((f) => ({ fileurl: f.fileurl, filename: f.saveAs }));
-        saved.push(...(await uploadMoodleFiles("syllabus", refs, courseId)));
+        syllabi.push(...(await uploadMoodleFiles("syllabus", refs, courseId)));
       }
       if (syllabusFiles.length > 0) {
-        saved.push(...(await uploadFiles("syllabus", syllabusFiles, courseId)));
+        syllabi.push(...(await uploadFiles("syllabus", syllabusFiles, courseId)));
       }
+      const saved = [...syllabi];
       if (readingFiles.length > 0) {
         saved.push(...(await uploadFiles("reading", readingFiles, courseId)));
       }
+      setSavedSyllabi(syllabi);
       setStatus({ kind: "idle" });
       toast.success("Files saved successfully", {
         description: `${saved.length} ${saved.length === 1 ? "file" : "files"} uploaded to storage.`,
@@ -93,6 +97,8 @@ export function CourseMaterials() {
           <ArrowRightIcon />
         </Button>
       </div>
+
+      <SyllabusPlan files={savedSyllabi} />
     </>
   );
 }

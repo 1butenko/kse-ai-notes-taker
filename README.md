@@ -45,6 +45,8 @@ To run without Docker you also need:
    | `API_PORT`     | no       | `8000`                         | Host port for the API; the web app calls `http://localhost:$API_PORT` |
    | `MOODLE_URL`   | yes      | `https://teaching.kse.org.ua`  | Moodle site the API talks to             |
    | `MOODLE_TOKEN` | yes      |                                | Web service token of the Moodle bot account |
+   | `OPENROUTER_API_KEY` | no |                              | Enables syllabus transcription via [OpenRouter](https://openrouter.ai) |
+   | `OPENROUTER_MODEL` | no  | `google/gemini-3.1-flash-lite` | Model used for transcription           |
 
    The API reads these from the root `.env` (compose passes it to the container). It refuses to start if `MOODLE_URL` or `MOODLE_TOKEN` is missing. Never commit `.env`.
 
@@ -130,6 +132,24 @@ The Moodle user behind the token must:
 | `web/src/components/dashboard/moodle-course-context.tsx` | Shares the imported course between the sidebar dialog and the cards |
 | `web/src/components/dashboard/moodle-import-dialog.tsx` | The **Import from Moodle** dialog |
 | `web/src/components/dashboard/file-upload-card.tsx` | Upload card used by Syllabus and Reading materials; shows Moodle files and local uploads |
+| `web/src/components/dashboard/syllabus-plan.tsx` | **Syllabus plan** cards: Transcribe / Re-run and the read-only session plan |
+
+## Syllabus transcription
+
+After **Continue** saves the files, each saved syllabus gets a card under **Syllabus plan**. **Transcribe** sends the file to the model and shows the session plan (weeks or lectures with topics and required and optional readings) and the course-wide learning materials. `→ #n` on a reading means the model matched it to item *n* of the course materials.
+
+- PDFs go to the model as files (OpenRouter's `native` PDF engine). DOCX is converted to HTML with `mammoth` first. Other formats are rejected.
+- The result is saved next to the source as `<file>.transcript.json`, with the file's sha256 hash. Transcribing again returns the saved result, unless the file has changed or you press **Re-run** (`?force=true`).
+- Citations are kept verbatim in the syllabus language. Readings not marked optional are listed as required.
+
+| Endpoint | What it does |
+|----------|--------------|
+| `POST /syllabus/transcribe` | Body `{"path": "<course>/syllabus/<file>"}` (the `path` returned by `/uploads`); `?force=true` re-runs |
+| `GET /syllabus/transcript?path=...` | Returns the saved transcript, `404` if there is none |
+
+Errors: `400` path outside uploads or not a syllabus, `404` file missing, `413` over 20 MB, `415` not PDF/DOCX, `422` no text in the DOCX, `502` model request failed or returned an invalid transcript, `503` no `OPENROUTER_API_KEY`, `504` model timed out (120 s).
+
+The schema lives in `api/app/syllabus.py` (Pydantic models, sent as a strict JSON schema). The OpenRouter client is `api/app/openrouter.py`; tests replace it with the `mock_openrouter` fixture.
 
 ## Development
 

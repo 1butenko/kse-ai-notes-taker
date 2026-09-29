@@ -1,0 +1,75 @@
+from collections.abc import AsyncIterator
+from typing import Annotated, Any
+
+import httpx2
+from fastapi import Depends
+
+from app.config import Settings, get_settings
+
+
+class OpenRouterError(Exception):
+    pass
+
+
+class OpenRouterClient:
+    def __init__(self, base_url: str, api_key: str, model: str, http: httpx2.AsyncClient) -> None:
+        self.endpoint = f"{base_url.rstrip('/')}/chat/completions"
+        self.api_key = api_key
+        self.model = model
+        self.http = http
+
+    async def complete_json(
+        self,
+        messages: list[dict[str, Any]],
+        schema_name: str,
+        schema: dict[str, Any],
+        plugins: list[dict[str, Any]] | None = None,
+    ) -> str:
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
+            },
+            "provider": {"require_parameters": True},
+            "temperature": 0,
+            "max_tokens": 16000,
+        }
+        if plugins:
+            body["plugins"] = plugins
+
+        response = await self.http.post(
+            self.endpoint, json=body, headers={"Authorization": f"Bearer {self.api_key}"}
+        )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        if response.is_error or "error" in payload:
+            error = payload.get("error") or {}
+            if isinstance(error, dict):
+                error = error.get("message", response.reason_phrase)
+            raise OpenRouterError(f"{response.status_code}: {error}")
+
+        try:
+            content = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as error:
+            raise OpenRouterError("Response has no message content") from error
+        if not isinstance(content, str) or not content:
+            raise OpenRouterError("Response has no message content")
+        return content
+
+
+async def get_openrouter_client(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AsyncIterator[OpenRouterClient | None]:
+    if not settings.openrouter_api_key:
+        yield None
+        return
+    async with httpx2.AsyncClient(timeout=120) as http:
+        yield OpenRouterClient(
+            settings.openrouter_url, settings.openrouter_api_key, settings.openrouter_model, http
+        )

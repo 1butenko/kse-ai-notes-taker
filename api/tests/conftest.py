@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.config import Settings, get_settings  # noqa: E402
 from app.main import app  # noqa: E402
 from app.moodle import MoodleClient, get_moodle_client  # noqa: E402
+from app.openrouter import OpenRouterClient, get_openrouter_client  # noqa: E402
 
 Handler = Callable[[httpx2.Request], httpx2.Response]
 
@@ -29,6 +30,22 @@ def mock_moodle() -> Iterator[Callable[[Handler], TestClient]]:
 
     yield install
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def mock_openrouter() -> Iterator[Callable[[Handler], TestClient]]:
+    def install(handler: Handler) -> TestClient:
+        async def override() -> AsyncIterator[OpenRouterClient]:
+            async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http:
+                yield OpenRouterClient(
+                    "https://openrouter.test/api/v1", "or-key", "test/model", http
+                )
+
+        app.dependency_overrides[get_openrouter_client] = override
+        return TestClient(app)
+
+    yield install
+    app.dependency_overrides.pop(get_openrouter_client, None)
 
 
 @pytest.fixture

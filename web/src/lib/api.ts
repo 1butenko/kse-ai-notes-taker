@@ -95,3 +95,45 @@ export function uploadMoodleFiles(
     body: JSON.stringify({ category, course_id: courseId, files }),
   });
 }
+
+export type Reading = {
+  raw: string;
+  title: string | null;
+  authors: string[];
+  year: string | null;
+  url: string | null;
+  pages: string | null;
+};
+
+export type SessionReading = Reading & {
+  material_ref: number | null;
+};
+
+export type Session = {
+  label: string;
+  number: number | null;
+  date: string | null;
+  topic: string;
+  subtopics: string[];
+  required_readings: SessionReading[];
+  optional_readings: SessionReading[];
+};
+
+export type Transcript = {
+  language: string | null;
+  learning_materials: Reading[];
+  sessions: Session[];
+  notes: string | null;
+  source_path: string;
+  source_sha256: string;
+  model: string;
+  created_at: string;
+};
+
+export function transcribeSyllabus(path: string, force = false): Promise<Transcript> {
+  return request(`/syllabus/transcribe${force ? "?force=true" : ""}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+}

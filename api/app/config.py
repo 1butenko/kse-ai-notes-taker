@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     uploads_dir: Path = Path("uploads")
     moodle_url: str
     moodle_token: str
+    openrouter_url: str = "https://openrouter.ai/api/v1"
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "google/gemini-3.1-flash-lite"
 
 
 @lru_cache
