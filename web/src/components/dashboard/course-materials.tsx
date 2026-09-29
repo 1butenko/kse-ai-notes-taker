@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowRightIcon, CircleAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { FileViewerProvider } from "@/components/dashboard/file-viewer";
 import { useMoodleCourse } from "@/components/dashboard/moodle-course-context";
 import { ReadingMaterialsUpload } from "@/components/dashboard/reading-materials-upload";
 import { SyllabusPlan } from "@/components/dashboard/syllabus-plan";
@@ -97,7 +98,7 @@ export function CourseMaterials() {
   };
 
   return (
-    <>
+    <FileViewerProvider>
       <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
         <SyllabusUpload
           files={syllabusFiles}
@@ -136,6 +137,6 @@ export function CourseMaterials() {
           reloadPlan();
         }}
       />
-    </>
+    </FileViewerProvider>
   );
 }

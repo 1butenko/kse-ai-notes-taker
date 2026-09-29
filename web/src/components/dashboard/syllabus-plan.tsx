@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   CircleAlertIcon,
+  EyeIcon,
   RefreshCwIcon,
   SparklesIcon,
   StarIcon,
@@ -11,6 +12,7 @@ import {
 import { toast } from "sonner";
 
 import { CoursePlan } from "@/components/dashboard/course-plan";
+import { useFileViewer } from "@/components/dashboard/file-viewer";
 import {
   CourseMaterialsList,
   SessionBlock,
@@ -152,6 +154,7 @@ function DeleteSyllabusButton({
 function SyllabusFileCard({ file, ...props }: PlanProps & { file: SavedFile }) {
   const { plan, onPlan, onReload } = props;
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const openFile = useFileViewer();
   const name = fileName(file.path);
   const canTranscribe = TRANSCRIBABLE.test(name);
   const isPrimary = plan?.primary === file.path;
@@ -225,6 +228,14 @@ function SyllabusFileCard({ file, ...props }: PlanProps & { file: SavedFile }) {
               </Button>
             </>
           )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Open ${name}`}
+            onClick={() => openFile({ path: file.path })}
+          >
+            <EyeIcon />
+          </Button>
           <DeleteSyllabusButton file={file} isPrimary={isPrimary} onDeleted={props.onDeleted} />
         </CardAction>
       </CardHeader>

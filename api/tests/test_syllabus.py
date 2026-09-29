@@ -6,9 +6,10 @@ from pathlib import Path
 import httpx2
 from fastapi.testclient import TestClient
 
+from app.llm import strict_schema
 from app.main import app
 from app.openrouter import get_openrouter_client
-from app.syllabus import SyllabusExtraction, strict_schema
+from app.syllabus import SyllabusExtraction
 
 EXTRACTION = {
     "language": "en",

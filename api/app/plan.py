@@ -1,6 +1,7 @@
 import re
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -14,10 +15,43 @@ class PlanSession(BaseModel):
     files: list[str] = []
 
 
+class BookMatch(BaseModel):
+    """Which uploaded file holds a course material. `raw` guards against a changed list."""
+
+    material: int
+    raw: str
+    file: str | None
+    confirmed: bool = False
+
+
+Method = Literal["pages", "bookmarks", "toc", "manual"]
+
+
+class Proposal(BaseModel):
+    id: str
+    session_id: str
+    reading: str
+    book: str
+    label: str
+    pdf_start: int | None
+    pdf_end: int | None
+    printed: str | None
+    method: Method
+    note: str | None = None
+    status: Literal["proposed", "approved", "rejected"] = "proposed"
+    excerpt: str | None = None
+
+
 class Plan(BaseModel):
     primary: str | None = None
     sessions: list[PlanSession] = []
     unassigned: list[str] = []
+    books: list[BookMatch] = []
+    proposals: list[Proposal] = []
+
+
+def new_id() -> str:
+    return uuid.uuid4().hex[:8]
 
 
 def plan_file(course_dir: Path) -> Path:
@@ -66,7 +100,7 @@ def sync(plan: Plan, transcript: Transcript) -> bool:
         )
         sessions.append(
             PlanSession(
-                id=match.id if match else uuid.uuid4().hex[:8],
+                id=match.id if match else new_id(),
                 label=session.label,
                 number=session.number,
                 files=match.files if match else [],
@@ -78,9 +112,14 @@ def sync(plan: Plan, transcript: Transcript) -> bool:
         if leftover.id not in used:
             unassigned += [f for f in leftover.files if f not in unassigned]
 
-    changed = sessions != old or unassigned != plan.unassigned
+    # Open proposals of vanished sessions go; approved ones stay to describe their excerpts.
+    ids = {s.id for s in sessions}
+    proposals = [p for p in plan.proposals if p.session_id in ids or p.status == "approved"]
+
+    changed = sessions != old or unassigned != plan.unassigned or proposals != plan.proposals
     plan.sessions = sessions
     plan.unassigned = unassigned
+    plan.proposals = proposals
     return changed
 
 
@@ -90,3 +129,4 @@ def drop_primary(plan: Plan) -> None:
         plan.unassigned += [f for f in session.files if f not in plan.unassigned]
     plan.primary = None
     plan.sessions = []
+    plan.proposals = [p for p in plan.proposals if p.status == "approved"]

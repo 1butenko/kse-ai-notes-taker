@@ -1,29 +1,27 @@
-import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-import httpx2
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings, get_settings
-from app.openrouter import OpenRouterClient, OpenRouterError, get_openrouter_client
+from app.llm import ask
+from app.openrouter import OpenRouterClient, get_openrouter_client
 from app.plan import drop_primary, load_plan, save_plan
+from app.storage import sha256
 from app.syllabus import (
     EmptyDocument,
     SyllabusExtraction,
     Transcript,
     build_messages,
     drop_bad_refs,
-    strict_schema,
 )
 
 router = APIRouter(prefix="/syllabus", tags=["syllabus"])
 
 ALLOWED_SUFFIXES = {".pdf", ".docx"}
 MAX_SIZE = 20 * 1024 * 1024
-SCHEMA = strict_schema(SyllabusExtraction)
 
 
 class TranscribeRequest(BaseModel):
@@ -69,11 +67,6 @@ def load_transcript(file: Path) -> Transcript | None:
         return None
 
 
-def sha256(file: Path) -> str:
-    with file.open("rb") as f:
-        return hashlib.file_digest(f, "sha256").hexdigest()
-
-
 def use_as_plan_if_first(settings: Settings, source_path: str) -> None:
     course_dir = settings.uploads_dir / source_path.split("/")[0]
     plan = load_plan(course_dir)
@@ -105,22 +98,7 @@ async def transcribe(
     except EmptyDocument as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
 
-    try:
-        content = await client.complete_json(messages, "syllabus", SCHEMA, plugins)
-    except httpx2.TimeoutException as error:
-        print(f"OpenRouter timed out: {error!r}")
-        raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "The model timed out") from error
-    except (OpenRouterError, httpx2.HTTPError) as error:
-        print(f"OpenRouter request failed: {error!r}")
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The model request failed") from error
-
-    try:
-        extraction = SyllabusExtraction.model_validate_json(content)
-    except ValidationError as error:
-        print(f"Model returned an invalid transcript: {error}")
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, "The model returned an invalid transcript"
-        ) from error
+    extraction = await ask(client, messages, SyllabusExtraction, "transcript", plugins)
     drop_bad_refs(extraction)
 
     transcript = Transcript(

@@ -152,10 +152,47 @@ export type CourseFiles = {
   reading: SavedFile[];
 };
 
+export type Excerpt = {
+  book: string;
+  label: string;
+  pdf_start: number;
+  pdf_end: number;
+  printed: string | null;
+};
+
+export type FileView = SavedFile & {
+  excerpt: Excerpt | null;
+};
+
+export type ProposalMethod = "pages" | "bookmarks" | "toc" | "manual";
+
+export type Proposal = {
+  id: string;
+  session_id: string;
+  reading: string;
+  book: string;
+  label: string;
+  pdf_start: number | null;
+  pdf_end: number | null;
+  printed: string | null;
+  method: ProposalMethod;
+  note: string | null;
+  status: "proposed" | "approved" | "rejected";
+  excerpt: string | null;
+};
+
 export type SessionView = {
   id: string;
   session: Session;
-  files: SavedFile[];
+  files: FileView[];
+  proposals: Proposal[];
+};
+
+export type BookView = {
+  material: number;
+  raw: string;
+  file: string | null;
+  confirmed: boolean;
 };
 
 export type PlanView = {
@@ -163,7 +200,9 @@ export type PlanView = {
   primary: string | null;
   transcript: Transcript | null;
   sessions: SessionView[];
-  unassigned: SavedFile[];
+  unassigned: FileView[];
+  books: BookView[];
+  mapped: boolean;
 };
 
 export function courseKey(courseId?: number): string {
@@ -209,4 +248,45 @@ export function dismissUnassigned(course: string, path: string): Promise<PlanVie
 
 export function fileName(path: string): string {
   return path.split("/").pop() ?? path;
+}
+
+export function fileUrl(path: string, page?: number): string {
+  const url = `${PUBLIC_API_URL}/files?path=${encodeURIComponent(path)}`;
+  return page ? `${url}#page=${page}` : url;
+}
+
+export function mapMaterials(course: string): Promise<PlanView> {
+  return request(`/plans/${course}/map`, { method: "POST" });
+}
+
+export function setBook(course: string, material: number, file: string | null): Promise<PlanView> {
+  return request(`/plans/${course}/books/${material}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file }),
+  });
+}
+
+export function approveProposal(
+  course: string,
+  id: string,
+  pages?: { pdf_start: number; pdf_end: number },
+): Promise<PlanView> {
+  return request(`/plans/${course}/proposals/${id}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(pages ?? {}),
+  });
+}
+
+export function rejectProposal(course: string, id: string): Promise<PlanView> {
+  return request(`/plans/${course}/proposals/${id}/reject`, { method: "POST" });
+}
+
+export function reopenProposal(course: string, id: string): Promise<PlanView> {
+  return request(`/plans/${course}/proposals/${id}/reopen`, { method: "POST" });
+}
+
+export function approveAllProposals(course: string): Promise<PlanView> {
+  return request(`/plans/${course}/proposals/approve-all`, { method: "POST" });
 }

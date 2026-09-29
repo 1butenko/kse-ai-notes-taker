@@ -135,6 +135,8 @@ The Moodle user behind the token must:
 | `web/src/components/dashboard/syllabus-plan.tsx` | **Syllabus plan** cards: Transcribe / Re-run, Use as course plan |
 | `web/src/components/dashboard/course-plan.tsx` | The course plan: sessions with their files, Unassigned |
 | `web/src/components/dashboard/add-material-dialog.tsx` | **Add material**: upload or choose an existing file |
+| `web/src/components/dashboard/mapping-parts.tsx` | **Books** panel and proposal rows (approve, edit pages, reject) |
+| `web/src/components/dashboard/file-viewer.tsx` | The in-app file viewer modal (`useFileViewer`) |
 
 ## Syllabus transcription
 
@@ -174,10 +176,32 @@ After a refresh the page re-imports the last opened Moodle course (remembered in
 | `DELETE /plans/{course}/sessions/{id}/files?path=` | Detach a file from the session |
 | `DELETE /plans/{course}/unassigned?path=` | Dismiss a file from Unassigned |
 
+## Mapping materials to book chapters
+
+Upload the course books as PDF reading materials, then press **Map materials** on the course plan. The app matches the syllabus's course materials to the uploaded PDFs (one AI call) and, for every session reading that cites chapters or pages, proposes an excerpt of the book.
+
+- **Books** lists each course material with the file it was matched to; change a match with the dropdown (marked "set by you" and kept on later runs). Materials that sessions cite but nobody uploaded are listed under **Not uploaded**.
+- Each proposal shows where its pages came from: **from bookmarks** (the PDF's own chapter outline), **from citation pages** (e.g. "p. 12-15", converted with the PDF's page labels or a detected page offset), **AI-estimated** (read from the printed table of contents, for PDFs without bookmarks) or **entered by you**. **Approve all exact** approves only the first two kinds.
+- Edit the PDF page range if needed, check it with **Open**, then **Approve**: the pages are cut into `uploads/<course>/excerpts/<session>/` and appear in the session's Files with an **Excerpt** badge. ✕ on an excerpt deletes it and puts the proposal back for review. **Reject** hides a proposal; **Map materials again** never overwrites approved or rejected ones.
+- Files, excerpts and proposals open in an in-app viewer (PDFs inline, other types as a download).
+
+A book's outline, page labels and offset are cached in `uploads/<course>/index/<book>.json`, keyed by the file's hash. Pipeline code: `api/app/mapping.py` (matching, page ranges) and `api/app/books.py` (index, page conversion, cutting).
+
+| Endpoint | What it does |
+|----------|--------------|
+| `POST /plans/{course}/map` | Run the mapping; returns the plan with `books` and per-session `proposals` |
+| `PUT /plans/{course}/books/{material}` | Body `{"file": "<course>/reading/x.pdf" \| null}`: set a book match |
+| `POST /plans/{course}/proposals/{id}/approve` | Optional body `{"pdf_start", "pdf_end"}`; cuts the excerpt |
+| `POST /plans/{course}/proposals/approve-all` | Approves proposals from bookmarks or citation pages |
+| `POST /plans/{course}/proposals/{id}/reject` / `reopen` | Reject, or undo a rejection |
+| `GET /files?path=...` | Serves a syllabus, reading file or excerpt inline |
+
 ## Development
 
 ```bash
 make test   # API tests (use test values from api/tests/conftest.py, not your .env)
+# Live checks against real syllabi/books in test_sullabys/ (git-ignored; calls OpenRouter):
+# cd api && LIVE=1 uv run pytest tests/test_syllabus_live.py -s
 make lint   # ruff + eslint
 make logs   # follow container logs
 make down   # stop everything

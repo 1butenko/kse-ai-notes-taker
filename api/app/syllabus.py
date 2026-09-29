@@ -1,13 +1,9 @@
-import base64
 from pathlib import Path
 from typing import Any
 
 import mammoth
-from pydantic import BaseModel, ConfigDict
 
-
-class Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+from app.llm import PDF_PLUGINS, Strict, chat, pdf_part
 
 
 class Reading(Strict):
@@ -101,28 +97,9 @@ notes: a short remark when something is missing or unclear, e.g. "No session pla
 else null. If a section is absent, return an empty list for it. Do not invent content.
 """
 
-PDF_PLUGINS = [{"id": "file-parser", "pdf": {"engine": "native"}}]
-
 
 class EmptyDocument(Exception):
     pass
-
-
-def strict_schema(model: type[BaseModel]) -> dict[str, Any]:
-    """JSON schema with $refs inlined, since not every provider resolves them."""
-    schema = model.model_json_schema()
-    defs = schema.pop("$defs", {})
-
-    def inline(node: Any) -> Any:
-        if isinstance(node, dict):
-            if "$ref" in node:
-                return inline(defs[node["$ref"].rsplit("/", 1)[-1]])
-            return {key: inline(value) for key, value in node.items()}
-        if isinstance(node, list):
-            return [inline(item) for item in node]
-        return node
-
-    return inline(schema)
 
 
 def build_messages(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
@@ -132,31 +109,12 @@ def build_messages(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any
         raise EmptyDocument("The file is empty")
 
     if path.suffix.lower() == ".pdf":
-        encoded = base64.b64encode(data).decode()
-        parts: list[dict[str, Any]] = [
-            {"type": "text", "text": "Extract the reading plan from this syllabus."},
-            {
-                "type": "file",
-                "file": {
-                    "filename": path.name,
-                    "file_data": f"data:application/pdf;base64,{encoded}",
-                },
-            },
-        ]
-        plugins = PDF_PLUGINS
-    else:
-        html = docx_to_html(path)
-        parts = [
-            {
-                "type": "text",
-                "text": "Extract the reading plan from this syllabus (converted from DOCX to HTML):"
-                f"\n\n{html}",
-            }
-        ]
-        plugins = None
+        prompt = "Extract the reading plan from this syllabus."
+        return chat(SYSTEM_PROMPT, prompt, pdf_part(path.name, data)), PDF_PLUGINS
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": parts}]
-    return messages, plugins
+    html = docx_to_html(path)
+    prompt = f"Extract the reading plan from this syllabus (converted from DOCX to HTML):\n\n{html}"
+    return chat(SYSTEM_PROMPT, prompt), None
 
 
 def docx_to_html(path: Path) -> str:

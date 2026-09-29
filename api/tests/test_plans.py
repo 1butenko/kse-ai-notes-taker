@@ -122,6 +122,8 @@ def test_empty_plan(tmp_uploads) -> None:
         "transcript": None,
         "sessions": [],
         "unassigned": [],
+        "books": [],
+        "mapped": False,
     }
     assert TestClient(app).get("/plans/..").status_code in (400, 404)
     assert TestClient(app).get("/plans/abc").status_code == 400

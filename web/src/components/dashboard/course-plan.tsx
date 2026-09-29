@@ -1,29 +1,44 @@
 "use client";
 
 import { useState } from "react";
-import { FileTextIcon, InboxIcon, XIcon } from "lucide-react";
+import {
+  CheckCheckIcon,
+  EyeIcon,
+  FileTextIcon,
+  InboxIcon,
+  ScissorsIcon,
+  WandSparklesIcon,
+  XIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { AddMaterialDialog } from "@/components/dashboard/add-material-dialog";
+import { useFileViewer } from "@/components/dashboard/file-viewer";
+import { BooksPanel, EXACT_METHODS, SessionProposals } from "@/components/dashboard/mapping-parts";
 import {
   CourseMaterialsList,
   SessionBlock,
   TranscriptNotes,
 } from "@/components/dashboard/transcript-parts";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Item,
   ItemActions,
   ItemContent,
+  ItemDescription,
   ItemGroup,
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item";
 import {
   ApiError,
+  approveAllProposals,
   detachFile,
   dismissUnassigned,
   fileName,
+  mapMaterials,
+  type FileView,
   type PlanView,
   type SavedFile,
 } from "@/lib/api";
@@ -36,20 +51,48 @@ type CoursePlanProps = {
   onUploaded: () => void;
 };
 
-function FileRow({ file, label, onRemove }: { file: SavedFile; label: string; onRemove: () => void }) {
+function FileRow({
+  file,
+  label,
+  onRemove,
+}: {
+  file: FileView;
+  label: string;
+  onRemove: () => void;
+}) {
+  const openFile = useFileViewer();
   const name = fileName(file.path);
+  const excerpt = file.excerpt;
   return (
     <Item variant="outline" size="sm">
-      <ItemMedia variant="icon">
-        <FileTextIcon />
-      </ItemMedia>
+      <ItemMedia variant="icon">{excerpt ? <ScissorsIcon /> : <FileTextIcon />}</ItemMedia>
       <ItemContent className="min-w-0">
         <ItemTitle className="block w-full truncate" title={name}>
           {name}
         </ItemTitle>
+        {excerpt && (
+          <ItemDescription className="truncate">
+            {excerpt.printed ?? `PDF pp. ${excerpt.pdf_start}–${excerpt.pdf_end}`} of{" "}
+            {fileName(excerpt.book)}
+          </ItemDescription>
+        )}
       </ItemContent>
       <ItemActions>
-        <Button variant="ghost" size="icon-sm" aria-label={`${label} ${name}`} onClick={onRemove}>
+        {excerpt && <Badge variant="secondary">Excerpt</Badge>}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Open ${name}`}
+          onClick={() => openFile({ path: file.path })}
+        >
+          <EyeIcon />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`${excerpt ? "Delete" : label} ${name}`}
+          onClick={onRemove}
+        >
           <XIcon />
         </Button>
       </ItemActions>
@@ -59,6 +102,7 @@ function FileRow({ file, label, onRemove }: { file: SavedFile; label: string; on
 
 export function CoursePlan({ plan, courseId, readingFiles, onPlan, onUploaded }: CoursePlanProps) {
   const [busy, setBusy] = useState(false);
+  const [mapping, setMapping] = useState(false);
   const transcript = plan.transcript;
   if (!transcript) return null;
 
@@ -74,9 +118,59 @@ export function CoursePlan({ plan, courseId, readingFiles, onPlan, onUploaded }:
     }
   };
 
+  const map = async () => {
+    setMapping(true);
+    try {
+      const next = await mapMaterials(plan.course);
+      onPlan(next);
+      const count = next.sessions
+        .flatMap((s) => s.proposals)
+        .filter((p) => p.status === "proposed").length;
+      toast.success("Materials mapped", {
+        description: `${count} ${count === 1 ? "excerpt" : "excerpts"} to review.`,
+      });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't reach the server.");
+    } finally {
+      setMapping(false);
+    }
+  };
+
+  const exact = plan.sessions
+    .flatMap((s) => s.proposals)
+    .filter(
+      (p) => p.status === "proposed" && EXACT_METHODS.includes(p.method) && p.pdf_start !== null,
+    );
+
   return (
     <div className="flex flex-col gap-4">
       <TranscriptNotes transcript={transcript} />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={map} disabled={mapping || busy}>
+          <WandSparklesIcon />
+          {mapping
+            ? "Mapping… (up to a minute)"
+            : plan.mapped
+              ? "Map materials again"
+              : "Map materials"}
+        </Button>
+        {exact.length > 0 && (
+          <Button
+            variant="outline"
+            disabled={busy || mapping}
+            onClick={() => update(() => approveAllProposals(plan.course))}
+          >
+            <CheckCheckIcon />
+            Approve all exact ({exact.length})
+          </Button>
+        )}
+        <span className="text-sm text-muted-foreground">
+          Finds the cited chapters in uploaded PDF books and proposes excerpts per session.
+        </span>
+      </div>
+
+      {plan.mapped && <BooksPanel plan={plan} readingFiles={readingFiles} update={update} />}
       <CourseMaterialsList transcript={transcript} />
 
       {plan.unassigned.length > 0 && (
@@ -86,8 +180,8 @@ export function CoursePlan({ plan, courseId, readingFiles, onPlan, onUploaded }:
             Unassigned
           </div>
           <p className="text-sm text-muted-foreground">
-            These files were attached to sessions that are no longer in the syllabus. Add them to
-            a session with <span className="font-medium">Add material → Choose existing</span>.
+            These files were attached to sessions that are no longer in the syllabus. Add them to a
+            session with <span className="font-medium">Add material → Choose existing</span>.
           </p>
           <ItemGroup className="gap-2">
             {plan.unassigned.map((file) => (
@@ -106,6 +200,7 @@ export function CoursePlan({ plan, courseId, readingFiles, onPlan, onUploaded }:
         <ol className="flex flex-col gap-2">
           {plan.sessions.map((entry) => (
             <SessionBlock key={entry.id} session={entry.session}>
+              <SessionProposals proposals={entry.proposals} course={plan.course} update={update} />
               <span className="text-xs font-semibold uppercase text-muted-foreground">Files</span>
               {entry.files.length > 0 && (
                 <ItemGroup className="gap-2">
