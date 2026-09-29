@@ -85,3 +85,26 @@ async def upload_moodle_files(
             size = await moodle.download(settings.moodle_token, ref.fileurl, dest)
         result.append(saved(settings, dest, size))
     return result
+
+
+class CourseFiles(BaseModel):
+    syllabus: list[SavedFile]
+    reading: list[SavedFile]
+
+
+@router.get("/{course}")
+def list_files(course: str, settings: Annotated[Settings, Depends(get_settings)]) -> CourseFiles:
+    if course != "local" and not course.isdigit():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {course!r}")
+
+    def listed(category: Category) -> list[SavedFile]:
+        directory = settings.uploads_dir / course / category
+        if not directory.is_dir():
+            return []
+        return [
+            SavedFile(path=f.relative_to(settings.uploads_dir).as_posix(), size=f.stat().st_size)
+            for f in sorted(directory.iterdir())
+            if f.is_file() and not f.name.endswith(".transcript.json")
+        ]
+
+    return CourseFiles(syllabus=listed("syllabus"), reading=listed("reading"))

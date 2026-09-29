@@ -5,3 +5,5 @@
 .idea/
 .vscode/
 .claude
+# Real syllabi for live extraction tests (contain personal data)
+test_sullabys/

@@ -61,6 +61,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const detail = typeof body?.detail === "string" ? body.detail : `Request failed (${res.status})`;
     throw new ApiError(detail);
   }
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 
@@ -136,4 +137,76 @@ export function transcribeSyllabus(path: string, force = false): Promise<Transcr
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
   });
+}
+
+export function deleteSyllabus(path: string): Promise<void> {
+  return request(`/syllabus?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+}
+
+export function getTranscript(path: string): Promise<Transcript> {
+  return request(`/syllabus/transcript?path=${encodeURIComponent(path)}`);
+}
+
+export type CourseFiles = {
+  syllabus: SavedFile[];
+  reading: SavedFile[];
+};
+
+export type SessionView = {
+  id: string;
+  session: Session;
+  files: SavedFile[];
+};
+
+export type PlanView = {
+  course: string;
+  primary: string | null;
+  transcript: Transcript | null;
+  sessions: SessionView[];
+  unassigned: SavedFile[];
+};
+
+export function courseKey(courseId?: number): string {
+  return courseId ? String(courseId) : "local";
+}
+
+export function listCourseFiles(course: string): Promise<CourseFiles> {
+  return request(`/uploads/${course}`);
+}
+
+export function getPlan(course: string): Promise<PlanView> {
+  return request(`/plans/${course}`);
+}
+
+function sendPath(method: string, url: string, path: string): Promise<PlanView> {
+  return request(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+}
+
+export function setPrimarySyllabus(course: string, path: string): Promise<PlanView> {
+  return sendPath("PUT", `/plans/${course}/primary`, path);
+}
+
+export function attachFile(course: string, sessionId: string, path: string): Promise<PlanView> {
+  return sendPath("POST", `/plans/${course}/sessions/${sessionId}/files`, path);
+}
+
+export function detachFile(course: string, sessionId: string, path: string): Promise<PlanView> {
+  return request(
+    `/plans/${course}/sessions/${sessionId}/files?path=${encodeURIComponent(path)}`,
+    { method: "DELETE" },
+  );
+}
+
+export function dismissUnassigned(course: string, path: string): Promise<PlanView> {
+  return request(`/plans/${course}/unassigned?path=${encodeURIComponent(path)}`, {
+    method: "DELETE",
+  });
+}
+
+export function fileName(path: string): string {
+  return path.split("/").pop() ?? path;
 }

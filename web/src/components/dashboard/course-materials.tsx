@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowRightIcon, CircleAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 
@@ -10,7 +10,17 @@ import { SyllabusPlan } from "@/components/dashboard/syllabus-plan";
 import { SyllabusUpload } from "@/components/dashboard/syllabus-upload";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { ApiError, uploadFiles, uploadMoodleFiles, type SavedFile } from "@/lib/api";
+import {
+  ApiError,
+  courseKey,
+  getPlan,
+  listCourseFiles,
+  uploadFiles,
+  uploadMoodleFiles,
+  type CourseFiles,
+  type PlanView,
+  type SavedFile,
+} from "@/lib/api";
 import { findSyllabusFiles } from "@/lib/moodle-files";
 
 type Status =
@@ -19,14 +29,30 @@ type Status =
   | { kind: "error"; message: string };
 
 export function CourseMaterials() {
-  const { imported } = useMoodleCourse();
+  const { imported, restoring } = useMoodleCourse();
   const [syllabusFiles, setSyllabusFiles] = useState<File[]>([]);
   const [readingFiles, setReadingFiles] = useState<File[]>([]);
   const [hiddenMoodleIds, setHiddenMoodleIds] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [savedSyllabi, setSavedSyllabi] = useState<SavedFile[]>([]);
+  const [stored, setStored] = useState<CourseFiles>({ syllabus: [], reading: [] });
+  const [plan, setPlan] = useState<PlanView | null>(null);
 
   const courseId = imported?.course.id;
+  const course = courseKey(courseId);
+
+  const reloadFiles = useCallback(() => {
+    listCourseFiles(course).then(setStored, () => {});
+  }, [course]);
+
+  const reloadPlan = useCallback(() => {
+    getPlan(course).then(setPlan, () => {});
+  }, [course]);
+
+  useEffect(() => {
+    if (restoring) return;
+    reloadFiles();
+    reloadPlan();
+  }, [restoring, reloadFiles, reloadPlan]);
   const syllabusMoodleFiles = (imported ? findSyllabusFiles(imported.sections) : []).filter(
     (file) => !hiddenMoodleIds.has(file.id),
   );
@@ -45,19 +71,18 @@ export function CourseMaterials() {
   const onContinue = async () => {
     setStatus({ kind: "saving" });
     try {
-      const syllabi: SavedFile[] = [];
+      const saved: SavedFile[] = [];
       if (syllabusMoodleFiles.length > 0) {
         const refs = syllabusMoodleFiles.map((f) => ({ fileurl: f.fileurl, filename: f.saveAs }));
-        syllabi.push(...(await uploadMoodleFiles("syllabus", refs, courseId)));
+        saved.push(...(await uploadMoodleFiles("syllabus", refs, courseId)));
       }
       if (syllabusFiles.length > 0) {
-        syllabi.push(...(await uploadFiles("syllabus", syllabusFiles, courseId)));
+        saved.push(...(await uploadFiles("syllabus", syllabusFiles, courseId)));
       }
-      const saved = [...syllabi];
       if (readingFiles.length > 0) {
         saved.push(...(await uploadFiles("reading", readingFiles, courseId)));
       }
-      setSavedSyllabi(syllabi);
+      reloadFiles();
       setStatus({ kind: "idle" });
       toast.success("Files saved successfully", {
         description: `${saved.length} ${saved.length === 1 ? "file" : "files"} uploaded to storage.`,
@@ -98,7 +123,19 @@ export function CourseMaterials() {
         </Button>
       </div>
 
-      <SyllabusPlan files={savedSyllabi} />
+      <SyllabusPlan
+        files={stored.syllabus}
+        plan={plan}
+        courseId={courseId}
+        readingFiles={stored.reading}
+        onPlan={setPlan}
+        onUploaded={reloadFiles}
+        onReload={reloadPlan}
+        onDeleted={() => {
+          reloadFiles();
+          reloadPlan();
+        }}
+      />
     </>
   );
 }

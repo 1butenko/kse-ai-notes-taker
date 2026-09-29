@@ -132,11 +132,13 @@ The Moodle user behind the token must:
 | `web/src/components/dashboard/moodle-course-context.tsx` | Shares the imported course between the sidebar dialog and the cards |
 | `web/src/components/dashboard/moodle-import-dialog.tsx` | The **Import from Moodle** dialog |
 | `web/src/components/dashboard/file-upload-card.tsx` | Upload card used by Syllabus and Reading materials; shows Moodle files and local uploads |
-| `web/src/components/dashboard/syllabus-plan.tsx` | **Syllabus plan** cards: Transcribe / Re-run and the read-only session plan |
+| `web/src/components/dashboard/syllabus-plan.tsx` | **Syllabus plan** cards: Transcribe / Re-run, Use as course plan |
+| `web/src/components/dashboard/course-plan.tsx` | The course plan: sessions with their files, Unassigned |
+| `web/src/components/dashboard/add-material-dialog.tsx` | **Add material**: upload or choose an existing file |
 
 ## Syllabus transcription
 
-After **Continue** saves the files, each saved syllabus gets a card under **Syllabus plan**. **Transcribe** sends the file to the model and shows the session plan (weeks or lectures with topics and required and optional readings) and the course-wide learning materials. `→ #n` on a reading means the model matched it to item *n* of the course materials.
+Every saved syllabus of the course gets a card under **Syllabus plan**. **Transcribe** sends the file to the model and shows the session plan (weeks or lectures with topics and required and optional readings) and the course-wide learning materials. `→ #n` on a reading means the model matched it to item *n* of the course materials.
 
 - PDFs go to the model as files (OpenRouter's `native` PDF engine). DOCX is converted to HTML with `mammoth` first. Other formats are rejected.
 - The result is saved next to the source as `<file>.transcript.json`, with the file's sha256 hash. Transcribing again returns the saved result, unless the file has changed or you press **Re-run** (`?force=true`).
@@ -146,10 +148,31 @@ After **Continue** saves the files, each saved syllabus gets a card under **Syll
 |----------|--------------|
 | `POST /syllabus/transcribe` | Body `{"path": "<course>/syllabus/<file>"}` (the `path` returned by `/uploads`); `?force=true` re-runs |
 | `GET /syllabus/transcript?path=...` | Returns the saved transcript, `404` if there is none |
+| `DELETE /syllabus?path=...` | Deletes the syllabus file and its transcript (`204`). If it was the course plan, files attached to its sessions move to Unassigned |
 
 Errors: `400` path outside uploads or not a syllabus, `404` file missing, `413` over 20 MB, `415` not PDF/DOCX, `422` no text in the DOCX, `502` model request failed or returned an invalid transcript, `503` no `OPENROUTER_API_KEY`, `504` model timed out (120 s).
 
 The schema lives in `api/app/syllabus.py` (Pydantic models, sent as a strict JSON schema). The OpenRouter client is `api/app/openrouter.py`; tests replace it with the `mock_openrouter` fixture.
+
+## Course plan and session materials
+
+The first syllabus you transcribe for a course becomes its **course plan** (badge on the card). The 🗑 button on a card deletes that syllabus after a confirmation. Another transcribed syllabus can take over with **Use as course plan**. Each session of the plan has two lists:
+
+- **From syllabus**: the required and optional readings the syllabus cites.
+- **Files**: materials you attached. **Add material** uploads new files (saved as the course's reading materials, any type) or picks existing ones. One file can be attached to several sessions. ✕ detaches it from that session only; the file stays in storage.
+
+The plan is stored in `uploads/<course>/plan.json` (`<course>` is the Moodle course ID, or `local`). Sessions have stable ids. When the plan's syllabus is re-transcribed, each new session takes over the files of the old session with the same label, or else the same number. Files of sessions that no longer exist go to **Unassigned** and are never deleted.
+
+After a refresh the page re-imports the last opened Moodle course (remembered in the browser) and loads its saved files and plan.
+
+| Endpoint | What it does |
+|----------|--------------|
+| `GET /uploads/{course}` | Lists the course's saved `syllabus` and `reading` files |
+| `GET /plans/{course}` | The plan: primary syllabus, its transcript, sessions with attached files, unassigned files |
+| `PUT /plans/{course}/primary` | Body `{"path"}`: use another transcribed syllabus as the plan (`409` if not transcribed) |
+| `POST /plans/{course}/sessions/{id}/files` | Body `{"path"}`: attach a reading file of this course |
+| `DELETE /plans/{course}/sessions/{id}/files?path=` | Detach a file from the session |
+| `DELETE /plans/{course}/unassigned?path=` | Dismiss a file from Unassigned |
 
 ## Development
 

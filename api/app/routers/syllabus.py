@@ -9,6 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import Settings, get_settings
 from app.openrouter import OpenRouterClient, OpenRouterError, get_openrouter_client
+from app.plan import drop_primary, load_plan, save_plan
 from app.syllabus import (
     EmptyDocument,
     SyllabusExtraction,
@@ -29,16 +30,22 @@ class TranscribeRequest(BaseModel):
     path: str
 
 
-def syllabus_file(settings: Settings, path: str) -> Path:
+def stored_syllabus(settings: Settings, path: str) -> Path:
     root = settings.uploads_dir.resolve()
     file = (root / path).resolve()
     if not file.is_relative_to(root):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Path is outside the uploads directory")
     relative = file.relative_to(root).parts
-    if len(relative) != 3 or relative[1] != "syllabus":
+    if len(relative) != 3 or relative[1] != "syllabus" or file.name.endswith(".transcript.json"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not a syllabus file")
     if not file.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Syllabus file not found")
+    return file
+
+
+def syllabus_file(settings: Settings, path: str) -> Path:
+    """A stored syllabus that can be transcribed."""
+    file = stored_syllabus(settings, path)
     if file.suffix.lower() not in ALLOWED_SUFFIXES:
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Only PDF and DOCX syllabi can be transcribed"
@@ -67,6 +74,14 @@ def sha256(file: Path) -> str:
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
+def use_as_plan_if_first(settings: Settings, source_path: str) -> None:
+    course_dir = settings.uploads_dir / source_path.split("/")[0]
+    plan = load_plan(course_dir)
+    if plan.primary is None:
+        plan.primary = source_path
+        save_plan(course_dir, plan)
+
+
 @router.post("/transcribe")
 async def transcribe(
     body: TranscribeRequest,
@@ -79,6 +94,7 @@ async def transcribe(
 
     cached = load_transcript(file)
     if cached and not force and cached.source_sha256 == digest:
+        use_as_plan_if_first(settings, cached.source_path)
         return cached
 
     if client is None:
@@ -115,6 +131,7 @@ async def transcribe(
         created_at=datetime.now(UTC).isoformat(),
     )
     transcript_file(file).write_text(transcript.model_dump_json(indent=2))
+    use_as_plan_if_first(settings, transcript.source_path)
     print(
         f"Transcribed {transcript.source_path}: {len(transcript.sessions)} sessions, "
         f"{len(transcript.learning_materials)} materials"
@@ -131,3 +148,22 @@ def get_transcript(
     if transcript is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No transcript for this file yet")
     return transcript
+
+
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+def delete_syllabus(
+    path: Annotated[str, Query()],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    file = stored_syllabus(settings, path)
+    relative = file.relative_to(settings.uploads_dir.resolve()).as_posix()
+    course_dir = settings.uploads_dir / relative.split("/")[0]
+
+    plan = load_plan(course_dir)
+    if plan.primary == relative:
+        drop_primary(plan)
+        save_plan(course_dir, plan)
+
+    transcript_file(file).unlink(missing_ok=True)
+    file.unlink()
+    print(f"Deleted syllabus: {relative}")
