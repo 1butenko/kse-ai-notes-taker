@@ -128,9 +128,12 @@ def docx_to_html(path: Path) -> str:
     return html
 
 
-def drop_bad_refs(extraction: SyllabusExtraction) -> None:
+def drop_bad_refs(extraction: SyllabusExtraction) -> int:
     count = len(extraction.learning_materials)
+    dropped = 0
     for session in extraction.sessions:
         for reading in session.required_readings + session.optional_readings:
             if reading.material_ref is not None and not 0 <= reading.material_ref < count:
                 reading.material_ref = None
+                dropped += 1
+    return dropped

@@ -239,6 +239,7 @@ async def read_toc(client: OpenRouterClient, book: Path, index: BookIndex) -> No
         TocExtraction,
         "book_toc",
         PDF_PLUGINS,
+        step="read-book-toc",
     )
     if not index.page_labels:
         index.offset = offset_from(result.samples)
@@ -266,5 +267,6 @@ async def read_offset(client: OpenRouterClient, book: Path, index: BookIndex) ->
         OffsetExtraction,
         "page_offset",
         PDF_PLUGINS,
+        step="read-page-offset",
     )
     index.offset = offset_from(result.samples)

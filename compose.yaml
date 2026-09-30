@@ -1,6 +1,10 @@
 # Local development. `docker compose up --build`
 #   web: http://localhost:3000
 #   api: http://localhost:${API_PORT}  (docs at /docs), port set in .env
+#   langfuse: http://localhost:3001  (traces of every model call)
+include:
+  - langfuse.compose.yaml
+
 services:
   api:
     build:
@@ -15,6 +19,8 @@ services:
       WATCHFILES_FORCE_POLLING: "true"
       CORS_ORIGINS: '["http://localhost:3000"]'
       UPLOADS_DIR: /data/uploads
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+      OTEL_SERVICE_NAME: kse-ai-notes-taker-api
     volumes:
       - ./api:/app
       - uploads:/data/uploads

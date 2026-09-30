@@ -33,7 +33,8 @@ def extract(path: Path) -> SyllabusExtraction:
             )
             messages, plugins = build_messages(path)
             schema = strict_schema(SyllabusExtraction)
-            return await client.complete_json(messages, "transcript", schema, plugins)
+            completion = await client.complete_json(messages, "transcript", schema, plugins)
+            return completion.content
 
     extraction = SyllabusExtraction.model_validate_json(asyncio.run(run()))
     drop_bad_refs(extraction)

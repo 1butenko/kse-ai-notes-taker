@@ -6,14 +6,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.routers import courses, files, plans, syllabus, uploads
+from app.tracing import init_langfuse
 
 settings = get_settings()
+langfuse = init_langfuse(settings)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings.uploads_dir.mkdir(parents=True, exist_ok=True)
     yield
+    langfuse.shutdown()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

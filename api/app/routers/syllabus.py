@@ -17,6 +17,7 @@ from app.syllabus import (
     build_messages,
     drop_bad_refs,
 )
+from app.tracing import course_trace
 
 router = APIRouter(prefix="/syllabus", tags=["syllabus"])
 
@@ -98,12 +99,32 @@ async def transcribe(
     except EmptyDocument as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
 
-    extraction = await ask(client, messages, SyllabusExtraction, "transcript", plugins)
-    drop_bad_refs(extraction)
+    source_path = file.relative_to(settings.uploads_dir.resolve()).as_posix()
+    with course_trace(
+        "transcribe-syllabus", source_path.split("/")[0], {"syllabus": file.name}
+    ) as span:
+        span.update(metadata={"path": source_path, "sha256": digest, "forced": force})
+        extraction = await ask(
+            client, messages, SyllabusExtraction, "transcript", plugins, step="extract-reading-plan"
+        )
+        dropped = drop_bad_refs(extraction)
+        span.update(
+            output={
+                "language": extraction.language,
+                "learning_materials": len(extraction.learning_materials),
+                "sessions": len(extraction.sessions),
+                "readings": sum(
+                    len(s.required_readings) + len(s.optional_readings) for s in extraction.sessions
+                ),
+                "notes": extraction.notes,
+            },
+        )
+        if dropped:
+            span.update(level="WARNING", status_message=f"Dropped {dropped} bad material_ref")
 
     transcript = Transcript(
         **extraction.model_dump(),
-        source_path=file.relative_to(settings.uploads_dir.resolve()).as_posix(),
+        source_path=source_path,
         source_sha256=digest,
         model=client.model,
         created_at=datetime.now(UTC).isoformat(),

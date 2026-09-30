@@ -3,6 +3,9 @@
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from langfuse import get_client
 
 from app.books import (
     BookIndex,
@@ -86,6 +89,7 @@ async def match_books(
         chat(MATCH_PROMPT, match_prompt(materials, citations, books)),
         BookMatches,
         "book_match",
+        step="match-books",
     )
 
     def pick(matches: list[Match], count: int) -> dict[int, str | None]:
@@ -234,7 +238,24 @@ def proposals_for(
     ]
 
 
+def proposal_summary(proposal: Proposal) -> dict[str, Any]:
+    return proposal.model_dump(include={"reading", "book", "label", "pdf_start", "pdf_end", "note"})
+
+
 async def map_book(
+    client: OpenRouterClient, course_dir: Path, book: Book, title: str, targets: list[Target]
+) -> list[Proposal]:
+    with get_client().start_as_current_observation(
+        name="map-book",
+        input={"book": title, "readings": [t.reading.raw for t in targets]},
+        metadata={"file": book.path, "outline": book.index.method},
+    ) as span:
+        proposals = await book_proposals(client, course_dir, book, title, targets)
+        span.update(output=[proposal_summary(p) for p in proposals])
+    return proposals
+
+
+async def book_proposals(
     client: OpenRouterClient, course_dir: Path, book: Book, title: str, targets: list[Target]
 ) -> list[Proposal]:
     index = book.index
@@ -250,6 +271,7 @@ async def map_book(
         chat(RANGES_PROMPT, ranges_prompt(book, title, targets)),
         RangesOut,
         "reading_ranges",
+        step="locate-reading-pages",
     )
     if needs_offset(index, result):
         await read_offset(client, book.file, index)

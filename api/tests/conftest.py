@@ -2,6 +2,8 @@ import os
 
 os.environ.setdefault("MOODLE_URL", "https://moodle.test")
 os.environ.setdefault("MOODLE_TOKEN", "test-token")
+os.environ["LANGFUSE_PUBLIC_KEY"] = ""
+os.environ["LANGFUSE_SECRET_KEY"] = ""
 
 from collections.abc import AsyncIterator, Callable, Iterator  # noqa: E402
 from pathlib import Path  # noqa: E402

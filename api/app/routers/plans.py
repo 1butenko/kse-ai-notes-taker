@@ -8,13 +8,14 @@ from pypdf import PdfReader
 
 from app.books import cut_excerpt, load_index, printed_range
 from app.config import Settings, get_settings
-from app.mapping import merge_proposals, run_mapping
+from app.mapping import merge_proposals, proposal_summary, run_mapping
 from app.openrouter import OpenRouterClient, get_openrouter_client
 from app.plan import BookMatch, Plan, PlanSession, Proposal, load_plan, new_id, save_plan, sync
 from app.routers.syllabus import load_transcript, syllabus_file
 from app.routers.uploads import SavedFile, safe_name
 from app.storage import sha256
 from app.syllabus import Session, Transcript
+from app.tracing import course_trace
 
 router = APIRouter(prefix="/plans", tags=["plans"])
 
@@ -363,9 +364,21 @@ async def map_materials(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Mapping is not configured")
 
     directory = course_dir(settings, course)
-    matches, proposals = await run_mapping(
-        client, settings.uploads_dir, directory, plan, transcript, reading_paths(settings, course)
-    )
+    books = reading_paths(settings, course)
+    with course_trace(
+        "map-materials",
+        course,
+        {"materials": [m.raw for m in transcript.learning_materials], "books": books},
+    ) as span:
+        matches, proposals = await run_mapping(
+            client, settings.uploads_dir, directory, plan, transcript, books
+        )
+        span.update(
+            output={
+                "books": [m.model_dump(include={"raw", "file"}) for m in matches if m.file],
+                "proposals": [proposal_summary(p) for p in proposals],
+            }
+        )
 
     # The run takes a while: apply its results to the plan as it is now.
     plan, transcript = current(settings, course)

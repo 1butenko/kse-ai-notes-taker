@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from typing import Annotated, Any
 
 import httpx2
@@ -6,9 +7,19 @@ from fastapi import Depends
 
 from app.config import Settings, get_settings
 
+PARAMETERS = {"temperature": 0, "max_tokens": 16000}
+
 
 class OpenRouterError(Exception):
     pass
+
+
+@dataclass
+class Completion:
+    content: str
+    model: str
+    usage: dict[str, Any] = field(default_factory=dict)
+    reasoning: str | None = None
 
 
 class OpenRouterClient:
@@ -24,7 +35,7 @@ class OpenRouterClient:
         schema_name: str,
         schema: dict[str, Any],
         plugins: list[dict[str, Any]] | None = None,
-    ) -> str:
+    ) -> Completion:
         body: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -33,8 +44,7 @@ class OpenRouterClient:
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
             "provider": {"require_parameters": True},
-            "temperature": 0,
-            "max_tokens": 16000,
+            **PARAMETERS,
         }
         if plugins:
             body["plugins"] = plugins
@@ -55,12 +65,20 @@ class OpenRouterClient:
             raise OpenRouterError(f"{response.status_code}: {error}")
 
         try:
-            content = payload["choices"][0]["message"]["content"]
+            message = payload["choices"][0]["message"]
+            content = message["content"]
         except (KeyError, IndexError, TypeError) as error:
             raise OpenRouterError("Response has no message content") from error
         if not isinstance(content, str) or not content:
             raise OpenRouterError("Response has no message content")
-        return content
+        usage = payload.get("usage")
+        reasoning = message.get("reasoning")
+        return Completion(
+            content=content,
+            model=payload.get("model") or self.model,
+            usage=usage if isinstance(usage, dict) else {},
+            reasoning=reasoning if isinstance(reasoning, str) and reasoning else None,
+        )
 
 
 async def get_openrouter_client(

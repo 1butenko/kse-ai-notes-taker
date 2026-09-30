@@ -50,16 +50,17 @@ To run without Docker you also need:
 
    The API reads these from the root `.env` (compose passes it to the container). It refuses to start if `MOODLE_URL` or `MOODLE_TOKEN` is missing. Never commit `.env`.
 
-3. Build and start everything:
+3. Build and start everything (this also adds the Langfuse secrets to `.env`, see [Tracing](#tracing-with-langfuse)):
 
    ```bash
-   docker compose up --build
+   make up
    ```
 
 4. Open the app:
 
    - Web: http://localhost:3000
    - API: http://localhost:8000 (interactive docs at http://localhost:8000/docs)
+   - Langfuse: http://localhost:3001 (log in with `LANGFUSE_INIT_USER_EMAIL` / `LANGFUSE_INIT_USER_PASSWORD` from `.env`)
 
 Both services mount their source code, so code changes reload automatically. Changes to `.env` need a restart: `docker compose up -d api`. After adding npm packages, rebuild the web container with `docker compose up -d --build -V web`.
 
@@ -196,6 +197,27 @@ A book's outline, page labels and offset are cached in `uploads/<course>/index/<
 | `POST /plans/{course}/proposals/{id}/reject` / `reopen` | Reject, or undo a rejection |
 | `GET /files?path=...` | Serves a syllabus, reading file or excerpt inline |
 
+## Tracing with Langfuse
+
+Every model call is traced to a self-hosted [Langfuse](https://langfuse.com) v4 that runs in Docker next to the app (`langfuse.compose.yaml`, included by `compose.yaml`: web, worker, Postgres, ClickHouse, Redis, MinIO). `make langfuse-env` adds any missing `LANGFUSE_*` keys and secrets to `.env` with random values; on first start Langfuse creates the `KSE` organization, the `kse-ai-notes-taker` project with those API keys, and the admin user. Tracing is off when `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` are empty, and always off in tests.
+
+Each request that calls the model is one trace; a course's traces share the session `course-<id>`:
+
+```
+transcribe-syllabus          span: syllabus in, counts of sessions/materials/readings out
+└─ extract-reading-plan      generation
+map-materials                span: materials and book files in, book matches and proposals out
+├─ match-books               generation
+└─ map-book (one per book)   span: citations in, page proposals out
+   ├─ read-book-toc          generation, only for PDFs without bookmarks
+   ├─ locate-reading-pages   generation
+   └─ read-page-offset       generation, only when printed pages need an offset
+```
+
+Generations record the model OpenRouter served, the full prompt (PDFs are attached as viewable files), token usage and OpenRouter's reported cost, and are marked `ERROR` when the call fails or the answer doesn't validate. Code: `api/app/tracing.py` and `ask()` in `api/app/llm.py`. Keep observation names stable: Langfuse dashboards and evaluators filter by them.
+
+The browser and the API container both reach MinIO as `http://minio.localhost:9090` (`*.localhost` resolves to your machine), so uploaded PDFs open in the Langfuse UI. The Langfuse Agent Skill for Claude Code is listed in `skills-lock.json`; restore it with `npx skills experimental_install`.
+
 ## Development
 
 ```bash
@@ -204,7 +226,8 @@ make test   # API tests (use test values from api/tests/conftest.py, not your .e
 # cd api && LIVE=1 uv run pytest tests/test_syllabus_live.py -s
 make lint   # ruff + eslint
 make logs   # follow container logs
-make down   # stop everything
+make down   # stop everything (Langfuse data stays in its kse-ai-notes-taker_langfuse_* volumes)
+make langfuse  # open the Langfuse UI
 ```
 
 ## Production images
