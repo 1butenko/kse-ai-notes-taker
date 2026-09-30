@@ -4,15 +4,11 @@ from typing import Any
 import httpx2
 from fastapi import HTTPException, status
 from langfuse import LangfuseGeneration, get_client
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ValidationError
 
-from app.openrouter import PARAMETERS, Completion, OpenRouterClient, OpenRouterError
+from app.worker.openrouter import PARAMETERS, Completion, OpenRouterClient, OpenRouterError
 
 PDF_PLUGINS = [{"id": "file-parser", "pdf": {"engine": "native"}}]
-
-
-class Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
 
 
 def strict_schema(model: type[BaseModel]) -> dict[str, Any]:

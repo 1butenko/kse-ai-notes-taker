@@ -9,10 +9,11 @@ from pathlib import Path
 import httpx2
 import pytest
 
-from app.config import Settings
-from app.llm import strict_schema
-from app.openrouter import OpenRouterClient
-from app.syllabus import SyllabusExtraction, build_messages, drop_bad_refs
+from app.syllabus import SyllabusExtraction
+from app.worker.config import WorkerSettings
+from app.worker.llm import strict_schema
+from app.worker.openrouter import OpenRouterClient
+from app.worker.transcribe import build_messages, drop_bad_refs
 
 SYLLABI = Path(__file__).parents[2] / "test_sullabys"
 
@@ -20,7 +21,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("LIVE") != "1", reason="set LIVE=
 
 
 def extract(path: Path) -> SyllabusExtraction:
-    settings = Settings()
+    settings = WorkerSettings()
     assert settings.openrouter_api_key, "OPENROUTER_API_KEY is not set"
 
     async def run() -> str:

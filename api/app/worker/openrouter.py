@@ -5,7 +5,7 @@ from typing import Annotated, Any
 import httpx2
 from fastapi import Depends
 
-from app.config import Settings, get_settings
+from app.worker.config import WorkerSettings, get_worker_settings
 
 PARAMETERS = {"temperature": 0, "max_tokens": 16000}
 
@@ -82,7 +82,7 @@ class OpenRouterClient:
 
 
 async def get_openrouter_client(
-    settings: Annotated[Settings, Depends(get_settings)],
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
 ) -> AsyncIterator[OpenRouterClient | None]:
     if not settings.openrouter_api_key:
         yield None

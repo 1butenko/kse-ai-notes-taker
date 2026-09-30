@@ -1,4 +1,4 @@
-from app.llm import usage_details
+from app.worker.llm import usage_details
 
 
 def test_usage_details_splits_inclusive_counts_into_exclusive_buckets() -> None:

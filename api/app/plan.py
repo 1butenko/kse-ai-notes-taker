@@ -130,3 +130,10 @@ def drop_primary(plan: Plan) -> None:
     plan.primary = None
     plan.sessions = []
     plan.proposals = [p for p in plan.proposals if p.status == "approved"]
+
+
+def merge_proposals(plan: Plan, fresh: list[Proposal]) -> None:
+    """Replace open proposals with fresh ones; never touch approved or rejected ones."""
+    kept = [p for p in plan.proposals if p.status != "proposed"]
+    decided = {(p.session_id, p.reading, p.book) for p in kept}
+    plan.proposals = kept + [p for p in fresh if (p.session_id, p.reading, p.book) not in decided]

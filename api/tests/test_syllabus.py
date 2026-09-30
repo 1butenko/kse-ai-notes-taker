@@ -6,10 +6,12 @@ from pathlib import Path
 import httpx2
 from fastapi.testclient import TestClient
 
-from app.llm import strict_schema
 from app.main import app
-from app.openrouter import get_openrouter_client
 from app.syllabus import SyllabusExtraction
+from app.worker.llm import strict_schema
+from app.worker.main import app as worker_app
+from app.worker.openrouter import get_openrouter_client
+from app.worker_client import WorkerClient, get_worker_client
 
 EXTRACTION = {
     "language": "en",
@@ -245,7 +247,7 @@ def test_transcribe_without_key_is_503(tmp_uploads):
     async def no_client():
         yield None
 
-    app.dependency_overrides[get_openrouter_client] = no_client
+    worker_app.dependency_overrides[get_openrouter_client] = no_client
     response = TestClient(app).post("/syllabus/transcribe", json={"path": "1/syllabus/s.pdf"})
     assert response.status_code == 503
 
@@ -256,3 +258,19 @@ def test_strict_schema_has_no_refs_and_requires_every_field():
     session = schema["properties"]["sessions"]["items"]
     assert set(session["required"]) == set(session["properties"])
     assert session["additionalProperties"] is False
+
+
+def test_transcribe_with_worker_down_is_502(tmp_uploads):
+    put(tmp_uploads, "1/syllabus/s.pdf", b"%PDF")
+
+    def refuse(_: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("refused")
+
+    async def down():
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(refuse)) as http:
+            yield WorkerClient("http://worker.test", http)
+
+    app.dependency_overrides[get_worker_client] = down
+    response = TestClient(app).post("/syllabus/transcribe", json={"path": "1/syllabus/s.pdf"})
+    assert response.status_code == 502
+    assert response.json()["detail"] == "The worker is unavailable"

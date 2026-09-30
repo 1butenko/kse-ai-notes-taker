@@ -15,9 +15,26 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.config import Settings, get_settings  # noqa: E402
 from app.main import app  # noqa: E402
 from app.moodle import MoodleClient, get_moodle_client  # noqa: E402
-from app.openrouter import OpenRouterClient, get_openrouter_client  # noqa: E402
+from app.worker.config import WorkerSettings, get_worker_settings  # noqa: E402
+from app.worker.main import app as worker_app  # noqa: E402
+from app.worker.openrouter import OpenRouterClient, get_openrouter_client  # noqa: E402
+from app.worker_client import WorkerClient, get_worker_client  # noqa: E402
 
 Handler = Callable[[httpx2.Request], httpx2.Response]
+
+
+@pytest.fixture(autouse=True)
+def in_process_worker() -> Iterator[None]:
+    """The API reaches the worker over ASGI, inside the test process."""
+
+    async def override() -> AsyncIterator[WorkerClient]:
+        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=worker_app)) as http:
+            yield WorkerClient("http://worker.test", http)
+
+    app.dependency_overrides[get_worker_client] = override
+    yield
+    app.dependency_overrides.pop(get_worker_client, None)
+    worker_app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -43,16 +60,18 @@ def mock_openrouter() -> Iterator[Callable[[Handler], TestClient]]:
                     "https://openrouter.test/api/v1", "or-key", "test/model", http
                 )
 
-        app.dependency_overrides[get_openrouter_client] = override
+        worker_app.dependency_overrides[get_openrouter_client] = override
         return TestClient(app)
 
     yield install
-    app.dependency_overrides.pop(get_openrouter_client, None)
 
 
 @pytest.fixture
 def tmp_uploads(tmp_path: Path) -> Iterator[Path]:
     settings = Settings(uploads_dir=tmp_path)
+    worker_settings = WorkerSettings(uploads_dir=tmp_path)
     app.dependency_overrides[get_settings] = lambda: settings
+    worker_app.dependency_overrides[get_worker_settings] = lambda: worker_settings
     yield tmp_path
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(get_settings, None)
+    worker_app.dependency_overrides.pop(get_worker_settings, None)

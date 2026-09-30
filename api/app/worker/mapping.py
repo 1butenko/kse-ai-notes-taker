@@ -14,16 +14,16 @@ from app.books import (
     outline_text,
     printed_range,
     read_index,
-    read_offset,
-    read_toc,
     save_index,
     to_pdf,
 )
-from app.llm import Strict, ask, chat
-from app.openrouter import OpenRouterClient
 from app.plan import BookMatch, Plan, Proposal, new_id
+from app.schemas import Strict
 from app.storage import sha256
 from app.syllabus import SessionReading, Transcript
+from app.worker.book_reading import read_offset, read_toc
+from app.worker.llm import ask, chat
+from app.worker.openrouter import OpenRouterClient
 
 
 @dataclass
@@ -357,10 +357,3 @@ async def run_mapping(
     ]
     proposals = [p for batch in await asyncio.gather(*jobs) for p in batch]
     return matches, proposals
-
-
-def merge_proposals(plan: Plan, fresh: list[Proposal]) -> None:
-    """Replace open proposals with fresh ones; never touch approved or rejected ones."""
-    kept = [p for p in plan.proposals if p.status != "proposed"]
-    decided = {(p.session_id, p.reading, p.book) for p in kept}
-    plan.proposals = kept + [p for p in fresh if (p.session_id, p.reading, p.book) not in decided]

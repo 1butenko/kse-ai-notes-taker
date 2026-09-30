@@ -6,18 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings, get_settings
-from app.llm import ask
-from app.openrouter import OpenRouterClient, get_openrouter_client
 from app.plan import drop_primary, load_plan, save_plan
 from app.storage import sha256
-from app.syllabus import (
-    EmptyDocument,
-    SyllabusExtraction,
-    Transcript,
-    build_messages,
-    drop_bad_refs,
-)
-from app.tracing import course_trace
+from app.syllabus import Transcript
+from app.worker_client import WorkerClient, get_worker_client
+from app.worker_contract import TranscribeRequest as WorkerTranscribeRequest
 
 router = APIRouter(prefix="/syllabus", tags=["syllabus"])
 
@@ -80,7 +73,7 @@ def use_as_plan_if_first(settings: Settings, source_path: str) -> None:
 async def transcribe(
     body: TranscribeRequest,
     settings: Annotated[Settings, Depends(get_settings)],
-    client: Annotated[OpenRouterClient | None, Depends(get_openrouter_client)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
     force: Annotated[bool, Query()] = False,
 ) -> Transcript:
     file = syllabus_file(settings, body.path)
@@ -91,42 +84,13 @@ async def transcribe(
         use_as_plan_if_first(settings, cached.source_path)
         return cached
 
-    if client is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Transcription is not configured")
-
-    try:
-        messages, plugins = build_messages(file)
-    except EmptyDocument as error:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
-
-    source_path = file.relative_to(settings.uploads_dir.resolve()).as_posix()
-    with course_trace(
-        "transcribe-syllabus", source_path.split("/")[0], {"syllabus": file.name}
-    ) as span:
-        span.update(metadata={"path": source_path, "sha256": digest, "forced": force})
-        extraction = await ask(
-            client, messages, SyllabusExtraction, "transcript", plugins, step="extract-reading-plan"
-        )
-        dropped = drop_bad_refs(extraction)
-        span.update(
-            output={
-                "language": extraction.language,
-                "learning_materials": len(extraction.learning_materials),
-                "sessions": len(extraction.sessions),
-                "readings": sum(
-                    len(s.required_readings) + len(s.optional_readings) for s in extraction.sessions
-                ),
-                "notes": extraction.notes,
-            },
-        )
-        if dropped:
-            span.update(level="WARNING", status_message=f"Dropped {dropped} bad material_ref")
+    reply = await worker.transcribe(WorkerTranscribeRequest(path=body.path, force=force))
 
     transcript = Transcript(
-        **extraction.model_dump(),
-        source_path=source_path,
+        **reply.extraction.model_dump(),
+        source_path=file.relative_to(settings.uploads_dir.resolve()).as_posix(),
         source_sha256=digest,
-        model=client.model,
+        model=reply.model,
         created_at=datetime.now(UTC).isoformat(),
     )
     transcript_file(file).write_text(transcript.model_dump_json(indent=2))

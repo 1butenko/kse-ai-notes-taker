@@ -4,10 +4,10 @@ from typing import Any
 
 from langfuse import Langfuse, LangfuseSpan, get_client, propagate_attributes
 
-from app.config import Settings
+from app.worker.config import WorkerSettings
 
 
-def init_langfuse(settings: Settings) -> Langfuse:
+def init_langfuse(settings: WorkerSettings) -> Langfuse:
     return Langfuse(
         public_key=settings.langfuse_public_key,
         secret_key=settings.langfuse_secret_key,

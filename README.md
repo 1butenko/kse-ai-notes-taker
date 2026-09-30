@@ -155,7 +155,7 @@ Every saved syllabus of the course gets a card under **Syllabus plan**. **Transc
 
 Errors: `400` path outside uploads or not a syllabus, `404` file missing, `413` over 20 MB, `415` not PDF/DOCX, `422` no text in the DOCX, `502` model request failed or returned an invalid transcript, `503` no `OPENROUTER_API_KEY`, `504` model timed out (120 s).
 
-The schema lives in `api/app/syllabus.py` (Pydantic models, sent as a strict JSON schema). The OpenRouter client is `api/app/openrouter.py`; tests replace it with the `mock_openrouter` fixture.
+The schema lives in `api/app/syllabus.py` (Pydantic models, sent as a strict JSON schema). The OpenRouter client is `api/app/worker/openrouter.py`; tests replace it with the `mock_openrouter` fixture.
 
 ## Course plan and session materials
 
@@ -197,6 +197,18 @@ A book's outline, page labels and offset are cached in `uploads/<course>/index/<
 | `POST /plans/{course}/proposals/{id}/reject` / `reopen` | Reject, or undo a rejection |
 | `GET /files?path=...` | Serves a syllabus, reading file or excerpt inline |
 
+## Worker
+
+The API never calls a model. `POST /syllabus/transcribe` and `POST /plans/{course}/map` validate the request, then forward it to the `worker` container (`api/app/worker/`, same image as the API, run with `uvicorn app.worker.main:app`), which owns OpenRouter and Langfuse and is not published to the host. The API keeps the plan, transcripts and Moodle; both containers share the `uploads` volume, so the worker reads syllabi and books and caches book indexes there.
+
+| Worker endpoint | Called by | Does |
+| --- | --- | --- |
+| `POST /transcribe` | `POST /syllabus/transcribe` | Extracts the reading plan from a stored syllabus |
+| `POST /map` | `POST /plans/{course}/map` | Matches materials to books and locates the cited pages |
+| `GET /health` | compose healthcheck | |
+
+The request and response shapes are in `api/app/worker_contract.py`; the API side is `WorkerClient` in `api/app/worker_client.py` (`WORKER_URL`, default `http://localhost:8001`). Worker errors pass through with their status (`422`, `502`, `503`, `504`); an unreachable worker is `502`, a slow one `504`. `OPENROUTER_*` and `LANGFUSE_*` are read by the worker only. Tests run the worker in-process over ASGI.
+
 ## Tracing with Langfuse
 
 Every model call is traced to a self-hosted [Langfuse](https://langfuse.com) v4 that runs in Docker next to the app (`langfuse.compose.yaml`, included by `compose.yaml`: web, worker, Postgres, ClickHouse, Redis, MinIO). `make langfuse-env` adds any missing `LANGFUSE_*` keys and secrets to `.env` with random values; on first start Langfuse creates the `KSE` organization, the `kse-ai-notes-taker` project with those API keys, and the admin user. Tracing is off when `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` are empty, and always off in tests.
@@ -214,9 +226,9 @@ map-materials                span: materials and book files in, book matches and
    └─ read-page-offset       generation, only when printed pages need an offset
 ```
 
-Generations record the model OpenRouter served, the full prompt (PDFs are attached as viewable files), token usage and OpenRouter's reported cost, and are marked `ERROR` when the call fails or the answer doesn't validate. Code: `api/app/tracing.py` and `ask()` in `api/app/llm.py`. Keep observation names stable: Langfuse dashboards and evaluators filter by them.
+Generations record the model OpenRouter served, the full prompt (PDFs are attached as viewable files), token usage and OpenRouter's reported cost, and are marked `ERROR` when the call fails or the answer doesn't validate. Code: `api/app/worker/tracing.py` and `ask()` in `api/app/worker/llm.py`. Keep observation names stable: Langfuse dashboards and evaluators filter by them.
 
-The browser and the API container both reach MinIO as `http://minio.localhost:9090` (`*.localhost` resolves to your machine), so uploaded PDFs open in the Langfuse UI. The Langfuse Agent Skill for Claude Code is listed in `skills-lock.json`; restore it with `npx skills experimental_install`.
+The browser and the worker container both reach MinIO as `http://minio.localhost:9090` (`*.localhost` resolves to your machine), so uploaded PDFs open in the Langfuse UI. The Langfuse Agent Skill for Claude Code is listed in `skills-lock.json`; restore it with `npx skills experimental_install`.
 
 ## Development
 
