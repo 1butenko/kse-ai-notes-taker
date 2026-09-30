@@ -10,7 +10,7 @@ from app.main import app
 from app.plan import Plan
 from app.storage import sha256
 from app.syllabus import Reading, Session, SessionReading, Transcript
-from tests.test_plans import put_plan, put_transcript
+from tests.test_plans import put, put_plan, put_transcript
 
 # A 40-page book: pages 1-2 are front matter (i, ii), printed page n is PDF page n + 2.
 OUTLINE = [
@@ -323,3 +323,43 @@ def test_files_endpoint_serves_only_uploads(tmp_uploads) -> None:
     assert client.get("/files", params={"path": "../../etc/passwd"}).status_code == 400
     assert client.get("/files", params={"path": "1/plan.json"}).status_code == 400
     assert client.get("/files", params={"path": "1/reading/missing.pdf"}).status_code == 404
+
+
+def test_add_excerpt_cuts_pages_and_detach_forgets_it(tmp_uploads) -> None:
+    make_book(tmp_uploads / "1/reading/b.pdf", pages=20)
+    put(tmp_uploads, "1/reading/notes.docx")
+    course(tmp_uploads, session("Lecture 1"))
+    client = TestClient(app)
+    session_id = client.get("/plans/1").json()["sessions"][0]["id"]
+    url = f"/plans/1/sessions/{session_id}/excerpts"
+
+    assert (
+        client.post(url, json={"path": "1/reading/b.pdf", "pdf_start": 9, "pdf_end": 3}).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            url, json={"path": "1/reading/b.pdf", "pdf_start": 1, "pdf_end": 99}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            url, json={"path": "1/reading/notes.docx", "pdf_start": 1, "pdf_end": 1}
+        ).status_code
+        == 400
+    )
+
+    plan = client.post(url, json={"path": "1/reading/b.pdf", "pdf_start": 5, "pdf_end": 6}).json()
+    entry = plan["sessions"][0]
+    [file] = entry["files"]
+    assert file["excerpt"]["book"] == "1/reading/b.pdf"
+    assert (file["excerpt"]["pdf_start"], file["excerpt"]["pdf_end"]) == (5, 6)
+    assert len(PdfReader(tmp_uploads / file["path"]).pages) == 2
+    assert entry["proposals"][0]["status"] == "approved"
+
+    plan = client.delete(
+        f"/plans/1/sessions/{session_id}/files", params={"path": file["path"]}
+    ).json()
+    assert not (tmp_uploads / file["path"]).exists()
+    assert plan["sessions"][0]["files"] == [] and plan["sessions"][0]["proposals"] == []

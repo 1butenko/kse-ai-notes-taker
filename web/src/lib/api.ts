@@ -290,3 +290,16 @@ export function reopenProposal(course: string, id: string): Promise<PlanView> {
 export function approveAllProposals(course: string): Promise<PlanView> {
   return request(`/plans/${course}/proposals/approve-all`, { method: "POST" });
 }
+
+export function addExcerpt(
+  course: string,
+  sessionId: string,
+  path: string,
+  pages: { pdf_start: number; pdf_end: number },
+): Promise<PlanView> {
+  return request(`/plans/${course}/sessions/${sessionId}/excerpts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, ...pages }),
+  });
+}

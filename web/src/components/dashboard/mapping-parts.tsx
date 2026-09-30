@@ -7,6 +7,7 @@ import { useFileViewer } from "@/components/dashboard/file-viewer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import {
   approveProposal,
   fileName,
@@ -59,6 +60,7 @@ function ProposalRow({
   const [start, setStart] = useState(proposal.pdf_start?.toString() ?? "");
   const [end, setEnd] = useState(proposal.pdf_end?.toString() ?? "");
   const pages = { pdf_start: Number(start), pdf_end: Number(end) };
+  const notFound = proposal.pdf_start === null || proposal.pdf_end === null;
   const valid =
     Number.isInteger(pages.pdf_start) &&
     Number.isInteger(pages.pdf_end) &&
@@ -66,10 +68,15 @@ function ProposalRow({
     pages.pdf_start <= pages.pdf_end;
 
   return (
-    <li className="flex flex-col gap-2 rounded-md border border-dashed p-2 text-sm">
+    <li
+      className={cn(
+        "flex flex-col gap-2 rounded-md border border-dashed p-2 text-sm",
+        notFound && "border-destructive/50 bg-destructive/5",
+      )}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{proposal.label}</span>
-        <span className="text-muted-foreground">
+        <span className={notFound ? "text-destructive" : "text-muted-foreground"}>
           {fileName(proposal.book)} · {pagesText(proposal)}
         </span>
         <MethodBadge method={proposal.method} />

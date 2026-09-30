@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { InfoIcon } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import type { Reading, Session, SessionReading, Transcript } from "@/lib/api";
 
 export function ReadingText({ reading }: { reading: Reading }) {
@@ -19,20 +18,44 @@ export function ReadingText({ reading }: { reading: Reading }) {
   );
 }
 
-export function ReadingList({ title, readings }: { title: string; readings: SessionReading[] }) {
+function bookName(book: Reading) {
+  if (!book.title) return book.raw.replace(/^\[\d+\]\s*/, "");
+  const byline = [book.authors.join(", "), book.year].filter(Boolean).join(", ");
+  return byline ? `${book.title} (${byline})` : book.title;
+}
+
+export function ReadingList({
+  title,
+  readings,
+  materials,
+}: {
+  title: string;
+  readings: SessionReading[];
+  materials: Reading[];
+}) {
   if (readings.length === 0) return null;
   return (
     <div className="flex flex-col gap-1">
       <span className="text-xs font-medium text-muted-foreground">{title}</span>
-      <ul className="flex flex-col gap-1 text-sm">
-        {readings.map((reading, index) => (
-          <li key={index} className="flex gap-2">
-            <ReadingText reading={reading} />
-            {reading.material_ref !== null && (
-              <Badge variant="outline">→ #{reading.material_ref + 1}</Badge>
-            )}
-          </li>
-        ))}
+      <ul className="flex flex-col gap-2 text-sm">
+        {readings.map((reading, index) => {
+          const book = reading.material_ref !== null ? materials[reading.material_ref] : undefined;
+          if (!book) {
+            return (
+              <li key={index}>
+                <ReadingText reading={reading} />
+              </li>
+            );
+          }
+          return (
+            <li key={index} className="flex flex-col">
+              <span className="font-medium">{bookName(book)}</span>
+              <span className="text-muted-foreground">
+                {reading.raw.replace(/^\[\d+\]\s*/, "")}
+              </span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -48,27 +71,16 @@ export function TranscriptNotes({ transcript }: { transcript: Transcript }) {
   );
 }
 
-export function CourseMaterialsList({ transcript }: { transcript: Transcript }) {
-  const materials = transcript.learning_materials;
-  if (materials.length === 0) return null;
-  return (
-    <details className="rounded-lg border p-3">
-      <summary className="cursor-pointer font-medium">
-        All course materials ({materials.length})
-      </summary>
-      <ol className="mt-2 flex list-decimal flex-col gap-1 pl-5 text-sm">
-        {materials.map((reading, index) => (
-          <li key={index}>
-            <ReadingText reading={reading} />
-          </li>
-        ))}
-      </ol>
-    </details>
-  );
-}
-
 /** One session: heading, subtopics and the readings the syllabus lists, plus optional extras. */
-export function SessionBlock({ session, children }: { session: Session; children?: ReactNode }) {
+export function SessionBlock({
+  session,
+  materials,
+  children,
+}: {
+  session: Session;
+  materials: Reading[];
+  children?: ReactNode;
+}) {
   const hasReadings =
     session.required_readings.length > 0 || session.optional_readings.length > 0;
   return (
@@ -90,8 +102,8 @@ export function SessionBlock({ session, children }: { session: Session; children
           From syllabus
         </span>
       )}
-      <ReadingList title="Required" readings={session.required_readings} />
-      <ReadingList title="Optional" readings={session.optional_readings} />
+      <ReadingList title="Required" readings={session.required_readings} materials={materials} />
+      <ReadingList title="Optional" readings={session.optional_readings} materials={materials} />
       {children}
     </li>
   );

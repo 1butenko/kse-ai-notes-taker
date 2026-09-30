@@ -1,8 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { FileTextIcon, PlusIcon, UploadIcon } from "lucide-react";
+import { CheckIcon, EyeIcon, FileTextIcon, PlusIcon, ScissorsIcon, UploadIcon } from "lucide-react";
 
+import { useFileViewer } from "@/components/dashboard/file-viewer";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   Item,
   ItemActions,
@@ -21,6 +23,7 @@ import {
 } from "@/components/ui/item";
 import { Separator } from "@/components/ui/separator";
 import {
+  addExcerpt,
   ApiError,
   attachFile,
   fileName,
@@ -39,6 +42,8 @@ type AddMaterialDialogProps = {
   onUploaded: () => void;
 };
 
+const isPdf = (path: string) => /\.pdf$/i.test(path);
+
 export function AddMaterialDialog({
   course,
   courseId,
@@ -48,12 +53,21 @@ export function AddMaterialDialog({
   onUploaded,
 }: AddMaterialDialogProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const openFile = useFileViewer();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cropping, setCropping] = useState<string | null>(null);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
 
   const attached = new Set(entry.files.map((file) => file.path));
-  const available = readingFiles.filter((file) => !attached.has(file.path));
+  const pages = { pdf_start: Number(start), pdf_end: Number(end) };
+  const validPages =
+    Number.isInteger(pages.pdf_start) &&
+    Number.isInteger(pages.pdf_end) &&
+    pages.pdf_start >= 1 &&
+    pages.pdf_start <= pages.pdf_end;
 
   const attachAll = async (paths: string[]) => {
     let plan: PlanView | null = null;
@@ -76,6 +90,13 @@ export function AddMaterialDialog({
     }
   };
 
+  const toggleCrop = (path: string) => {
+    setError(null);
+    setStart("");
+    setEnd("");
+    setCropping(cropping === path ? null : path);
+  };
+
   const onUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(event.target.files ?? []);
     event.target.value = "";
@@ -95,6 +116,7 @@ export function AddMaterialDialog({
         className="self-start"
         onClick={() => {
           setError(null);
+          setCropping(null);
           setOpen(true);
         }}
       >
@@ -103,11 +125,11 @@ export function AddMaterialDialog({
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Add material to {entry.session.label}</DialogTitle>
             <DialogDescription>
-              Upload a new file or pick one already uploaded for this course.
+              Upload a new file, or add a whole file or a page range from one already uploaded.
             </DialogDescription>
           </DialogHeader>
 
@@ -120,34 +142,94 @@ export function AddMaterialDialog({
           <Separator />
 
           <span className="text-sm font-medium">Choose existing</span>
-          {available.length === 0 ? (
+          {readingFiles.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No other reading materials uploaded for this course.
+              No reading materials uploaded for this course.
             </p>
           ) : (
-            <ItemGroup className="max-h-72 gap-2 overflow-y-auto">
-              {available.map((file) => (
-                <Item key={file.path} variant="outline" size="sm">
-                  <ItemMedia variant="icon">
-                    <FileTextIcon />
-                  </ItemMedia>
-                  <ItemContent className="min-w-0">
-                    <ItemTitle className="block w-full truncate" title={fileName(file.path)}>
-                      {fileName(file.path)}
-                    </ItemTitle>
-                  </ItemContent>
-                  <ItemActions>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={pending}
-                      onClick={() => run(() => attachAll([file.path]))}
-                    >
-                      Add
-                    </Button>
-                  </ItemActions>
-                </Item>
-              ))}
+            <ItemGroup className="max-h-80 gap-2 overflow-y-auto">
+              {readingFiles.map((file) => {
+                const name = fileName(file.path);
+                const pdf = isPdf(file.path);
+                const isAttached = attached.has(file.path);
+                return (
+                  <div key={file.path} className="flex flex-col gap-2">
+                    <Item variant="outline" size="sm">
+                      <ItemMedia variant="icon">
+                        <FileTextIcon />
+                      </ItemMedia>
+                      <ItemContent className="min-w-0">
+                        <ItemTitle className="block w-full truncate" title={name}>
+                          {name}
+                        </ItemTitle>
+                      </ItemContent>
+                      <ItemActions>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Open ${name}`}
+                          onClick={() => openFile({ path: file.path })}
+                        >
+                          <EyeIcon />
+                        </Button>
+                        {pdf && (
+                          <Button
+                            size="sm"
+                            variant={cropping === file.path ? "secondary" : "ghost"}
+                            disabled={pending}
+                            onClick={() => toggleCrop(file.path)}
+                          >
+                            <ScissorsIcon />
+                            Pages
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={pending || isAttached}
+                          onClick={() => run(() => attachAll([file.path]))}
+                        >
+                          {isAttached && <CheckIcon />}
+                          {isAttached ? "Added" : "Add"}
+                        </Button>
+                      </ItemActions>
+                    </Item>
+                    {cropping === file.path && (
+                      <div className="flex flex-wrap items-center gap-2 pl-3">
+                        <span className="text-xs text-muted-foreground">PDF pages</span>
+                        <Input
+                          aria-label="First PDF page"
+                          inputMode="numeric"
+                          className="h-8 w-20"
+                          autoFocus
+                          value={start}
+                          onChange={(event) => setStart(event.target.value)}
+                        />
+                        <span>–</span>
+                        <Input
+                          aria-label="Last PDF page"
+                          inputMode="numeric"
+                          className="h-8 w-20"
+                          value={end}
+                          onChange={(event) => setEnd(event.target.value)}
+                        />
+                        <Button
+                          size="sm"
+                          disabled={pending || !validPages}
+                          onClick={() =>
+                            run(async () =>
+                              onPlan(await addExcerpt(course, entry.id, file.path, pages)),
+                            )
+                          }
+                        >
+                          <ScissorsIcon />
+                          Add pages
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </ItemGroup>
           )}
 

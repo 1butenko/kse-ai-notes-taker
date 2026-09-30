@@ -15,11 +15,7 @@ import { toast } from "sonner";
 import { AddMaterialDialog } from "@/components/dashboard/add-material-dialog";
 import { useFileViewer } from "@/components/dashboard/file-viewer";
 import { BooksPanel, EXACT_METHODS, SessionProposals } from "@/components/dashboard/mapping-parts";
-import {
-  CourseMaterialsList,
-  SessionBlock,
-  TranscriptNotes,
-} from "@/components/dashboard/transcript-parts";
+import { SessionBlock, TranscriptNotes } from "@/components/dashboard/transcript-parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,6 +38,7 @@ import {
   type PlanView,
   type SavedFile,
 } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 type CoursePlanProps = {
   plan: PlanView;
@@ -64,8 +61,14 @@ function FileRow({
   const name = fileName(file.path);
   const excerpt = file.excerpt;
   return (
-    <Item variant="outline" size="sm">
-      <ItemMedia variant="icon">{excerpt ? <ScissorsIcon /> : <FileTextIcon />}</ItemMedia>
+    <Item
+      variant="outline"
+      size="sm"
+      className={cn(excerpt && "border-success/50 bg-success/5")}
+    >
+      <ItemMedia variant="icon" className={cn(excerpt && "text-success")}>
+        {excerpt ? <ScissorsIcon /> : <FileTextIcon />}
+      </ItemMedia>
       <ItemContent className="min-w-0">
         <ItemTitle className="block w-full truncate" title={name}>
           {name}
@@ -78,7 +81,7 @@ function FileRow({
         )}
       </ItemContent>
       <ItemActions>
-        {excerpt && <Badge variant="secondary">Excerpt</Badge>}
+        {excerpt && <Badge className="bg-success/15 text-success">Cropped</Badge>}
         <Button
           variant="ghost"
           size="icon-sm"
@@ -165,13 +168,9 @@ export function CoursePlan({ plan, courseId, readingFiles, onPlan, onUploaded }:
             Approve all exact ({exact.length})
           </Button>
         )}
-        <span className="text-sm text-muted-foreground">
-          Finds the cited chapters in uploaded PDF books and proposes excerpts per session.
-        </span>
       </div>
 
       {plan.mapped && <BooksPanel plan={plan} readingFiles={readingFiles} update={update} />}
-      <CourseMaterialsList transcript={transcript} />
 
       {plan.unassigned.length > 0 && (
         <div className="flex flex-col gap-2 rounded-lg border border-dashed p-3">
@@ -199,7 +198,11 @@ export function CoursePlan({ plan, courseId, readingFiles, onPlan, onUploaded }:
       {plan.sessions.length > 0 ? (
         <ol className="flex flex-col gap-2">
           {plan.sessions.map((entry) => (
-            <SessionBlock key={entry.id} session={entry.session}>
+            <SessionBlock
+              key={entry.id}
+              session={entry.session}
+              materials={transcript.learning_materials}
+            >
               <SessionProposals proposals={entry.proposals} course={plan.course} update={update} />
               <span className="text-xs font-semibold uppercase text-muted-foreground">Files</span>
               {entry.files.length > 0 && (

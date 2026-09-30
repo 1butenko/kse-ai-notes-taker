@@ -1,7 +1,9 @@
 "use client";
 
 import { useRef, type ReactNode } from "react";
-import { ExternalLinkIcon, FileTextIcon, UploadIcon, XIcon } from "lucide-react";
+import { ExternalLinkIcon, EyeIcon, FileTextIcon, UploadIcon, XIcon } from "lucide-react";
+
+import { useFileViewer } from "@/components/dashboard/file-viewer";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -9,7 +11,6 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -29,11 +30,11 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item";
+import { fileName, type SavedFile } from "@/lib/api";
 import type { MoodleFile } from "@/lib/moodle-files";
 
 type FileUploadCardProps = {
   title: string;
-  description: string;
   icon: ReactNode;
   emptyTitle: string;
   accept: string;
@@ -42,6 +43,7 @@ type FileUploadCardProps = {
   onFilesChange: (files: File[]) => void;
   moodleFiles?: MoodleFile[];
   onRemoveMoodleFile?: (id: string) => void;
+  savedFiles?: SavedFile[];
 };
 
 function formatSize(bytes: number) {
@@ -52,7 +54,6 @@ function formatSize(bytes: number) {
 
 export function FileUploadCard({
   title,
-  description,
   icon,
   emptyTitle,
   accept,
@@ -61,10 +62,12 @@ export function FileUploadCard({
   onFilesChange,
   moodleFiles = [],
   onRemoveMoodleFile,
+  savedFiles = [],
 }: FileUploadCardProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const openFile = useFileViewer();
 
-  const isEmpty = files.length === 0 && moodleFiles.length === 0;
+  const isEmpty = files.length === 0 && moodleFiles.length === 0 && savedFiles.length === 0;
 
   const openPicker = () => inputRef.current?.click();
 
@@ -80,12 +83,11 @@ export function FileUploadCard({
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
         {!isEmpty && (
           <CardAction>
             <Button variant="outline" size="sm" onClick={openPicker}>
               <UploadIcon />
-              {multiple ? "Add more" : "Replace"}
+              {multiple ? "Add more" : files.length > 0 ? "Replace" : "Upload"}
             </Button>
           </CardAction>
         )}
@@ -116,6 +118,30 @@ export function FileUploadCard({
           </Empty>
         ) : (
           <ItemGroup className="gap-2">
+            {savedFiles.map((file) => (
+              <Item key={file.path} variant="outline">
+                <ItemMedia variant="icon">
+                  <FileTextIcon />
+                </ItemMedia>
+                <ItemContent className="min-w-0">
+                  <ItemTitle className="block w-full truncate" title={fileName(file.path)}>
+                    {fileName(file.path)}
+                  </ItemTitle>
+                  <ItemDescription>{formatSize(file.size)}</ItemDescription>
+                </ItemContent>
+                <ItemActions>
+                  <Badge variant="outline">Saved</Badge>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Open ${fileName(file.path)}`}
+                    onClick={() => openFile({ path: file.path })}
+                  >
+                    <EyeIcon />
+                  </Button>
+                </ItemActions>
+              </Item>
+            ))}
             {moodleFiles.map((file) => (
               <Item key={file.id} variant="outline">
                 <ItemMedia variant="icon">

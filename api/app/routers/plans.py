@@ -10,7 +10,7 @@ from app.books import cut_excerpt, load_index, printed_range
 from app.config import Settings, get_settings
 from app.mapping import merge_proposals, run_mapping
 from app.openrouter import OpenRouterClient, get_openrouter_client
-from app.plan import BookMatch, Plan, PlanSession, Proposal, load_plan, save_plan, sync
+from app.plan import BookMatch, Plan, PlanSession, Proposal, load_plan, new_id, save_plan, sync
 from app.routers.syllabus import load_transcript, syllabus_file
 from app.routers.uploads import SavedFile, safe_name
 from app.storage import sha256
@@ -33,6 +33,12 @@ class BookRequest(BaseModel):
 class PagesRequest(BaseModel):
     pdf_start: int | None = None
     pdf_end: int | None = None
+
+
+class ExcerptRequest(BaseModel):
+    path: str
+    pdf_start: int
+    pdf_end: int
 
 
 class Excerpt(BaseModel):
@@ -194,6 +200,7 @@ def delete_excerpt(settings: Settings, plan: Plan, path: str, *, forget: bool) -
     if forget:
         plan.proposals = [p for p in plan.proposals if p.excerpt != path]
         return
+    plan.proposals = [p for p in plan.proposals if not (p.excerpt == path and not p.reading)]
     for proposal in plan.proposals:
         if proposal.excerpt == path:
             proposal.excerpt = None
@@ -207,6 +214,19 @@ def excerpt_name(directory: Path, book: str, label: str) -> str:
     while (directory / name).exists():
         name, n = f"{base} ({n}).pdf", n + 1
     return name
+
+
+def check_pages(book: Path, start: int, end: int) -> None:
+    count = len(PdfReader(book).pages) if book.is_file() else 0
+    if not 1 <= start <= end <= count:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"Pages must be within 1-{count}, start ≤ end"
+        )
+
+
+def printed_pages(settings: Settings, course: str, book: Path, start: int, end: int) -> str | None:
+    index = load_index(course_dir(settings, course), book, sha256(book))
+    return printed_range(index, start, end) if index else None
 
 
 def approve(settings: Settings, course: str, plan: Plan, proposal: Proposal) -> None:
@@ -264,6 +284,38 @@ def attach_file(
     if path not in entry.files:
         entry.files.append(path)
     plan.unassigned = [f for f in plan.unassigned if f != path]
+    save_plan(course_dir(settings, course), plan)
+    return render(settings, course, plan, transcript)
+
+
+@router.post("/{course}/sessions/{session_id}/excerpts")
+def add_excerpt(
+    course: str,
+    session_id: str,
+    body: ExcerptRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> PlanView:
+    plan, transcript = current(settings, course)
+    entry = find_session(plan, session_id)
+    path = reading_file(settings, course, body.path)
+    if not path.lower().endswith(".pdf"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only PDF files can be cropped")
+    book = settings.uploads_dir / path
+    start, end = body.pdf_start, body.pdf_end
+    check_pages(book, start, end)
+    proposal = Proposal(
+        id=new_id(),
+        session_id=entry.id,
+        reading="",
+        book=path,
+        label=f"PDF p. {start}" if start == end else f"PDF pp. {start}–{end}",
+        pdf_start=start,
+        pdf_end=end,
+        printed=printed_pages(settings, course, book, start, end),
+        method="manual",
+    )
+    plan.proposals.append(proposal)
+    approve(settings, course, plan, proposal)
     save_plan(course_dir(settings, course), plan)
     return render(settings, course, plan, transcript)
 
@@ -380,14 +432,9 @@ def approve_proposal(
         pages = (body.pdf_start, body.pdf_end)
         if pages != (proposal.pdf_start, proposal.pdf_end):
             book = settings.uploads_dir / proposal.book
-            count = len(PdfReader(book).pages) if book.is_file() else 0
-            if not 1 <= body.pdf_start <= body.pdf_end <= count:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST, f"Pages must be within 1-{count}, start ≤ end"
-                )
-            index = load_index(course_dir(settings, course), book, sha256(book))
+            check_pages(book, *pages)
             proposal.pdf_start, proposal.pdf_end = pages
-            proposal.printed = printed_range(index, *pages) if index else None
+            proposal.printed = printed_pages(settings, course, book, *pages)
             proposal.method = "manual"
     approve(settings, course, plan, proposal)
     save_plan(course_dir(settings, course), plan)
