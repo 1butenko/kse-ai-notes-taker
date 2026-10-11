@@ -23,40 +23,47 @@ TEXT_SUFFIXES = {".txt", ".md", ".qmd", ".tex"}
 
 class PageTexts(BaseModel):
     source_sha256: str
-    pages: list[str]
+    count: int
+    pages: dict[int, str]
 
 
 def text_cache(course_dir: Path, digest: str) -> Path:
-    return course_dir / "text" / f"{digest[:16]}.json"
+    return course_dir / "text" / f"{digest[:16]}.pages.json"
 
 
-def page_texts(course_dir: Path, file: Path, digest: str) -> list[str]:
-    """Text of every page (one entry for non-PDF files), cached by the file's hash."""
-    cache = text_cache(course_dir, digest)
-    if cache.is_file():
-        cached = PageTexts.model_validate_json(cache.read_text())
-        if cached.source_sha256 == digest:
-            return cached.pages
-
+def page_texts(
+    course_dir: Path, file: Path, digest: str, first: int = 1, last: int | None = None
+) -> dict[int, str]:
+    """Text of PDF pages first..last (a whole PDF up to MAX_PAGES), or of a whole non-PDF file
+    as page 1. Only missing pages are extracted; the cache is keyed by the file's hash."""
     suffix = file.suffix.lower()
-    if suffix == ".pdf":
-        pages = []
-        for page in PdfReader(file).pages[:MAX_PAGES]:
-            try:
-                pages.append(page.extract_text() or "")
-            except Exception:
-                pages.append("")
-    elif suffix == ".docx":
+    if suffix == ".docx":
         with file.open("rb") as f:
-            pages = [mammoth.extract_raw_text(f).value]
-    elif suffix in TEXT_SUFFIXES:
-        pages = [file.read_text(errors="replace")]
-    else:
-        return []
+            return {1: mammoth.extract_raw_text(f).value}
+    if suffix in TEXT_SUFFIXES:
+        return {1: file.read_text(errors="replace")}
+    if suffix != ".pdf":
+        return {}
 
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(PageTexts(source_sha256=digest, pages=pages).model_dump_json())
-    return pages
+    cache = text_cache(course_dir, digest)
+    cached = PageTexts.model_validate_json(cache.read_text()) if cache.is_file() else None
+    reader = None
+    if cached is None or cached.source_sha256 != digest:
+        reader = PdfReader(file)
+        cached = PageTexts(source_sha256=digest, count=len(reader.pages), pages={})
+    end = min(last, cached.count) if last else min(cached.count, MAX_PAGES)
+    wanted = range(first, end + 1)
+    missing = [page for page in wanted if page not in cached.pages]
+    if missing or not cache.is_file():
+        reader = reader or PdfReader(file)
+        for page in missing:
+            try:
+                cached.pages[page] = reader.pages[page - 1].extract_text() or ""
+            except Exception:
+                cached.pages[page] = ""
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(cached.model_dump_json())
+    return {page: cached.pages[page] for page in wanted}
 
 
 def split_text(text: str) -> list[str]:
@@ -133,7 +140,7 @@ def build_inputs(uploads_dir: Path, course_dir: Path, plan: Plan, transcript: Tr
             continue
         digest = sha256(file)
         try:
-            pages = page_texts(course_dir, file, digest)
+            pages = page_texts(course_dir, file, digest, material.pdf_start or 1, material.pdf_end)
         except Exception as error:
             print(f"Can't read {material.file}: {error!r}")
             skipped.append(f"{material.file}: could not read the text")
@@ -142,7 +149,7 @@ def build_inputs(uploads_dir: Path, course_dir: Path, plan: Plan, transcript: Tr
         is_pdf = file.suffix.lower() == ".pdf"
         index = load_index(course_dir, file, digest) if is_pdf else None
         first = material.pdf_start or 1
-        last = material.pdf_end or len(pages)
+        last = material.pdf_end or max(pages, default=0)
         source = Source(
             id=len(sources),
             file=material.file,
@@ -156,8 +163,8 @@ def build_inputs(uploads_dir: Path, course_dir: Path, plan: Plan, transcript: Tr
             ],
             chunk_ids=[],
         )
-        for page in range(first, min(last, len(pages)) + 1):
-            for n, piece in enumerate(split_text(pages[page - 1])):
+        for page, text in pages.items():
+            for n, piece in enumerate(split_text(text)):
                 chunk_id = f"{digest[:8]}-p{page}-{n}" if is_pdf else f"{digest[:8]}-{n}"
                 source.chunk_ids.append(chunk_id)
                 chunks.setdefault(

@@ -142,7 +142,9 @@ async def run_notes(
         ) as span:
             async with opener() as client:
                 store.log("inputs", "Collecting mapped chunks")
-                inputs = build_inputs(settings.uploads_dir, course_dir, plan, transcript)
+                inputs = await asyncio.to_thread(
+                    build_inputs, settings.uploads_dir, course_dir, plan, transcript
+                )
                 store.write("inputs.json", inputs)
                 for skipped in inputs.skipped:
                     store.warn(skipped)

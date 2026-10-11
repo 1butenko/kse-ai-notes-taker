@@ -286,7 +286,12 @@ def test_build_inputs_reads_excerpt_pages_from_the_book(tmp_path: Path) -> None:
         [1],
         None,
     )
-    assert list((tmp_path / "1/text").glob("*.json"))
+    (book_cache,) = [
+        json.loads(f.read_text())
+        for f in (tmp_path / "1/text").glob("*.json")
+        if json.loads(f.read_text())["count"] == len(BOOK_PAGES)
+    ]
+    assert sorted(book_cache["pages"]) == ["1", "2"]
 
     again = build_inputs(tmp_path, tmp_path / "1", plan, transcript)
     assert [c.id for c in again.chunks] == [c.id for c in inputs.chunks]
