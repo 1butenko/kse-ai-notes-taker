@@ -1,4 +1,5 @@
 import base64
+import json
 from typing import Any
 
 import httpx2
@@ -6,6 +7,7 @@ from fastapi import HTTPException, status
 from langfuse import LangfuseGeneration, get_client
 from pydantic import BaseModel, ValidationError
 
+from app.worker.models import ModelSpec
 from app.worker.openrouter import PARAMETERS, Completion, OpenRouterClient, OpenRouterError
 
 PDF_PLUGINS = [{"id": "file-parser", "pdf": {"engine": "native"}}]
@@ -75,18 +77,26 @@ async def ask[T: BaseModel](
     plugins: list[dict[str, Any]] | None = None,
     *,
     step: str,
+    spec: ModelSpec | None = None,
 ) -> T:
     """Ask for a `model`-shaped answer, mapping failures to 502/504."""
+    model_name = spec.model if spec else client.model
+    parameters = spec.parameters() if spec else PARAMETERS
     with get_client().start_as_current_observation(
         as_type="generation",
         name=step,
-        model=client.model,
-        model_parameters=PARAMETERS,
+        model=model_name,
+        model_parameters={
+            key: value if isinstance(value, str | int | float | bool) else json.dumps(value)
+            for key, value in parameters.items()
+        },
         input=messages,
         metadata={"response_schema": name, "plugins": plugins},
     ) as generation:
         try:
-            completion = await client.complete_json(messages, name, strict_schema(model), plugins)
+            completion = await client.complete_json(
+                messages, name, strict_schema(model), plugins, model_name, parameters
+            )
         except httpx2.TimeoutException as error:
             print(f"OpenRouter timed out ({name}): {error!r}")
             generation.update(level="ERROR", status_message=f"Timed out: {error!r}")

@@ -9,6 +9,8 @@ from app.config import Settings, get_settings
 from app.worker_contract import (
     MapRequest,
     MapResponse,
+    NotesRequest,
+    NotesResponse,
     TranscribeRequest,
     TranscribeResponse,
 )
@@ -26,6 +28,9 @@ class WorkerClient:
 
     async def map_materials(self, request: MapRequest) -> MapResponse:
         return await self.call("/map", request, MapResponse)
+
+    async def generate_notes(self, request: NotesRequest) -> NotesResponse:
+        return await self.call("/notes", request, NotesResponse)
 
     async def call[T: BaseModel](self, path: str, request: BaseModel, response: type[T]) -> T:
         try:

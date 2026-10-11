@@ -62,7 +62,7 @@ To run without Docker you also need:
    - API: http://localhost:8000 (interactive docs at http://localhost:8000/docs)
    - Langfuse: http://localhost:3001 (log in with `LANGFUSE_INIT_USER_EMAIL` / `LANGFUSE_INIT_USER_PASSWORD` from `.env`)
 
-Both services mount their source code, so code changes reload automatically. Changes to `.env` need a restart: `docker compose up -d api`. After adding npm packages, rebuild the web container with `docker compose up -d --build -V web`.
+Both services mount their source code, so code changes reload automatically. Changes to `.env` only reach a container when it is recreated (`docker compose restart` keeps the old values): `docker compose up -d --force-recreate api worker`. `OPENROUTER_*` and `LANGFUSE_*` are read by the worker. After adding npm packages, rebuild the web container with `docker compose up -d --build -V web`.
 
 ### Running without Docker
 
@@ -197,6 +197,63 @@ A book's outline, page labels and offset are cached in `uploads/<course>/index/<
 | `POST /plans/{course}/proposals/{id}/reject` / `reopen` | Reject, or undo a rejection |
 | `GET /files?path=...` | Serves a syllabus, reading file or excerpt inline |
 
+## Notes generation
+
+Once sessions have materials (excerpts or attached files), `POST /plans/{course}/notes` generates the course notes. The pipeline plans globally, writes each topic from all of its readings, verifies each topic, then composes the document:
+
+1. **Inputs**: every session material is read as text (excerpts from their book's page range, PDFs page by page, DOCX/Markdown/text whole). The text is cut into chunks with stable ids (`<file hash>-p<page>-<n>`) and page metadata, then indexed for retrieval (BM25). Page text is cached in `uploads/<course>/text/`. Scanned PDFs have no text and are reported as warnings.
+2. **Planning**: the planner builds sections → topics with objectives, success criteria, prerequisites, sources and shared notation. The coverage checker reviews it against a rubric (syllabus coverage, duplicates, granularity, evidence, ordering). The plan is revised with that feedback until no blocking issues remain, for up to `NOTES_PLAN_ROUNDS` rounds.
+3. **Topics** (up to `NOTES_CONCURRENCY` at a time): retrieve candidate chunks → the selector keeps the useful ones and gives each a role (definition, theorem, proof, example, …) → the writer synthesizes structured blocks with citations → the verifier checks them against the evidence. Failing drafts are revised with the verifier's issues for up to `NOTES_REVISION_ROUNDS` revisions. Verification moves to the escalation model when the verifier asks for it (hard proofs, conflicting sources) or when errors survive a revision.
+4. **Composition**: notes are collected in plan order. A consistency pass makes targeted edits to individual blocks to unify notation, remove repetition and add cross-references, and citations are kept. The format writer renders `notes.qmd` deterministically, and Quarto typesets it to `notes.pdf` with Typst (DejaVu fonts, Ukrainian or English labels).
+5. **Topic PDFs**: every written topic (verified or unresolved) is also typeset on its own as `topics/<id>/note.pdf`: the topic title, its section and course as subtitle, its blocks and only the sources it cites, numbered from 1. Up to 4 render at a time; a topic that fails to render is a warning, not a failed run.
+
+| Stage | Default model (OpenRouter) | Reasoning | Env var |
+|-------|----------------------------|-----------|---------|
+| Planner | `openai/gpt-6.1-sol` | medium | `NOTES_PLANNER_MODEL` |
+| Coverage checker | `openai/gpt-6.1-sol` | high | `NOTES_PLANNER_MODEL` |
+| Evidence selector | `openai/gpt-6-luna` | low | `NOTES_SELECTOR_MODEL` |
+| Topic synthesizer | `google/gemini-3.7-flash` | medium | `NOTES_WRITER_MODEL` |
+| Topic verifier | `openai/gpt-6-luna` | high | `NOTES_VERIFIER_MODEL` |
+| Escalated verifier | `openai/gpt-6.1-sol` | high | `NOTES_ESCALATION_MODEL` |
+| Global consistency | `google/gemini-3.7-flash` | medium | `NOTES_WRITER_MODEL` |
+
+Writing and verification use different model families, so each draft gets a second opinion. Coverage issues of kind `weak_evidence` (a topic no uploaded material covers) never block the plan: no revision can fix them, so they become run warnings instead.
+
+A run takes minutes, so the worker answers `202` at once and keeps working. Poll `GET /plans/{course}/notes/{run}` until its `status` is `done` or `failed`. Every stage stores its artifacts in `uploads/<course>/notes/<run>/`:
+
+```
+run.json                 status, stage, progress, warnings, event log, models
+inputs.json              sources and mapped chunks
+plan/draft-N.json        planner output per round
+plan/review-N.json       coverage review per round
+plan.json                final course plan
+topics/<id>/evidence.json        selected chunks with roles, relevance, excerpt; gaps
+topics/<id>/draft-N.json         each draft version
+topics/<id>/verification-N.json  check results, issues, the model that checked
+topics/<id>/note.json            the completed topic note
+topics/<id>/note.qmd, note.pdf   the topic as its own document and PDF
+notes.json               final structured notes with provenance
+notes.qmd, notes.pdf     the Quarto document and its PDF (quarto.log on failure)
+```
+
+`POST /plans/{course}/notes` with `{"resume": "<run>"}` continues a failed or finished run. It reuses the plan and every finished topic, retries failed topics, then composes again. A topic whose model call fails is marked `failed` without stopping the run, and a topic still failing verification is kept as `unresolved`, flagged in the PDF with its open issues.
+
+| Endpoint | What it does |
+|----------|--------------|
+| `POST /plans/{course}/notes` | Start a run (`202`), or resume one with `{"resume": "<run>"}`. `409` without a transcribed plan, without session materials, or while a run is going |
+| `GET /plans/{course}/notes` | The course's runs, newest first |
+| `GET /plans/{course}/notes/{run}` | The run's status, plus the structured notes once it is done |
+| `GET /plans/{course}/notes/{run}/pdf` / `qmd` | The typeset PDF or its Quarto source |
+| `GET /plans/{course}/notes/{run}/topics/{topic}/pdf` | One topic's PDF (`404` if the topic has none). The run view lists them in `topic_pdfs` |
+
+### Preview links
+
+`/preview/<course>/<run>` in the web app shows the full notes PDF with every topic listed next to it; `/preview/<course>/<run>/<topic>` shows one topic's PDF. The page has no dashboard around it, so the link can be shared as is (**Copy link**), and it carries the notes or topic title for link previews. The **Lecture notes** card links to it (**Preview page**) and opens each topic's PDF in the viewer (**Open**).
+
+Langfuse trace: `generate-notes` → `plan-course` (`draft-course-plan`, `check-coverage`), one `generate-topic` per topic (`select-evidence`, `synthesize-topic`, `verify-topic`, `verify-topic-escalated`, `revise-topic`), `compose-notes` (`harmonize-notes`). Code: `api/app/notes.py` (artifacts) and `api/app/worker/` (`sources.py`, `planning.py`, `topics.py`, `composition.py`, `render.py`, `notes.py`, `models.py`).
+
+The worker image (`worker-dev` / `worker-prod` targets) adds Quarto, whose bundled Typst makes the PDF, so no LaTeX is needed. Its build renders a sample document, so a broken Quarto or font setup fails the build instead of the first run. Without Quarto (e.g. running the worker outside Docker) the run still finishes with `notes.qmd` and a warning instead of a PDF.
+
 ## Worker
 
 The API never calls a model. `POST /syllabus/transcribe` and `POST /plans/{course}/map` validate the request, then forward it to the `worker` container (`api/app/worker/`, same image as the API, run with `uvicorn app.worker.main:app`), which owns OpenRouter and Langfuse and is not published to the host. The API keeps the plan, transcripts and Moodle; both containers share the `uploads` volume, so the worker reads syllabi and books and caches book indexes there.
@@ -205,6 +262,7 @@ The API never calls a model. `POST /syllabus/transcribe` and `POST /plans/{cours
 | --- | --- | --- |
 | `POST /transcribe` | `POST /syllabus/transcribe` | Extracts the reading plan from a stored syllabus |
 | `POST /map` | `POST /plans/{course}/map` | Matches materials to books and locates the cited pages |
+| `POST /notes` | `POST /plans/{course}/notes` | Starts or resumes a notes run in the background (`202`) |
 | `GET /health` | compose healthcheck | |
 
 The request and response shapes are in `api/app/worker_contract.py`; the API side is `WorkerClient` in `api/app/worker_client.py` (`WORKER_URL`, default `http://localhost:8001`). Worker errors pass through with their status (`422`, `502`, `503`, `504`); an unreachable worker is `502`, a slow one `504`. `OPENROUTER_*` and `LANGFUSE_*` are read by the worker only. Tests run the worker in-process over ASGI.
@@ -242,12 +300,25 @@ make down   # stop everything (Langfuse data stays in its kse-ai-notes-taker_lan
 make langfuse  # open the Langfuse UI
 ```
 
+## Demo deployment (free)
+
+The web app runs on Vercel (project `kse-notes`, root directory `web`); the API and the worker run together in one free [Render](https://render.com) web service, built from the `demo` stage of `api/Dockerfile` (`api/demo/start.sh` starts both, on `$PORT`). Vercel alone can't host the backend: notes runs take minutes in the background, need Quarto and keep files on disk.
+
+1. In Render, **New → Blueprint**, pick this repository: `render.yaml` creates the `kse-notes-api` service (free plan, from the `notes-generation-engine` branch; change `branch` after merging). Enter the `MOODLE_TOKEN` and `OPENROUTER_API_KEY` secrets when asked.
+2. The service answers at `https://kse-notes-api.onrender.com` (Render adds a suffix if the name is taken). The Vercel project's `NEXT_PUBLIC_API_URL` and `API_URL` must be that URL; `NEXT_PUBLIC_API_URL` is read at build time, so redeploy the web app after changing it.
+3. CORS allows the project's Vercel domains through `CORS_ORIGIN_REGEX`; add other origins to `CORS_ORIGINS`.
+
+The free instance has 512 MB of RAM, so the blueprint typesets one PDF at a time (`QUARTO_CONCURRENCY=1`) and writes two topics at a time (`NOTES_CONCURRENCY=2`). It sleeps after 15 minutes without requests (the first request wakes it in about a minute) and its disk is reset on every deploy or restart, so uploads and runs are lost; download what you want to keep.
+
+With a Hugging Face PRO account, `scripts/deploy-space.sh <hf-user>/<space> [<course>/<run> ...]` deploys the same image as a Docker Space (16 GB RAM) and can copy finished runs from the local uploads volume onto it, without book text. `SPACE_DRY_RUN=1` builds the image locally instead.
+
 ## Production images
 
 Each Dockerfile has a `dev` and a `prod` target:
 
 ```bash
 docker build --target prod -t notes-api ./api
+docker build --target worker-prod -t notes-worker ./api
 docker build --target prod --build-arg API_URL=https://api.example.com -t notes-web ./web
 ```
 

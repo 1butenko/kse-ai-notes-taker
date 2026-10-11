@@ -6,13 +6,13 @@ import {
   ArrowRightIcon,
   CheckIcon,
   CircleAlertIcon,
-  NotebookPenIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { CoursePlan } from "@/components/dashboard/course-plan";
 import { FileViewerProvider } from "@/components/dashboard/file-viewer";
 import { useMoodleCourse } from "@/components/dashboard/moodle-course-context";
+import { NotesStage } from "@/components/dashboard/notes-stage";
 import { ReadingMaterialsUpload } from "@/components/dashboard/reading-materials-upload";
 import { SyllabusStage } from "@/components/dashboard/syllabus-stage";
 import { SyllabusUpload } from "@/components/dashboard/syllabus-upload";
@@ -20,13 +20,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -66,7 +59,7 @@ const STAGES = [
     id: "notes",
     title: "Notes",
     heading: "Generate lecture notes",
-    summary: "Notes for each session will appear here.",
+    summary: "Plan the topics, write each from its readings, verify it and typeset a PDF.",
   },
 ] as const;
 
@@ -101,6 +94,7 @@ export function CourseWorkflow() {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [stored, setStored] = useState<CourseFiles>(NO_FILES);
   const [plan, setPlan] = useState<PlanView | null>(null);
+  const [notesDone, setNotesDone] = useState(false);
 
   const courseId = imported?.course.id;
   const course = courseKey(courseId);
@@ -143,7 +137,7 @@ export function CourseWorkflow() {
     upload: stored.syllabus.length > 0,
     syllabus: Boolean(plan?.transcript),
     materials: Boolean(plan?.mapped),
-    notes: false,
+    notes: notesDone,
   };
   const reachable = (id: StageId) =>
     STAGES.slice(
@@ -333,17 +327,11 @@ export function CourseWorkflow() {
         </TabsContent>
 
         <TabsContent value="notes" className="flex flex-col gap-6">
-          <Empty className="border border-dashed">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <NotebookPenIcon />
-              </EmptyMedia>
-              <EmptyTitle>Notes generation is coming next</EmptyTitle>
-              <EmptyDescription>
-                Lecture notes for each session will be generated here from the mapped materials.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+          <NotesStage
+            course={course}
+            hasMaterials={Boolean(plan?.sessions.some((s) => s.files.length > 0))}
+            onDoneChange={setNotesDone}
+          />
           <StageFooter onBack={() => setStage("materials")} />
         </TabsContent>
       </Tabs>

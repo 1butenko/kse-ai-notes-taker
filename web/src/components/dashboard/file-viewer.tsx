@@ -7,7 +7,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { fileName, fileUrl } from "@/lib/api";
 
-type Viewing = { path: string; page?: number; title?: string };
+type Viewing = { path: string; page?: number; title?: string; url?: string };
 
 const FileViewerContext = createContext<((viewing: Viewing) => void) | null>(null);
 
@@ -38,7 +38,7 @@ export function FileViewerProvider({ children }: { children: ReactNode }) {
                 <iframe
                   // Re-mount per page: changing only the #page hash doesn't scroll the viewer.
                   key={`${viewing.path}#${viewing.page ?? ""}`}
-                  src={fileUrl(viewing.path, viewing.page)}
+                  src={viewing.url ?? fileUrl(viewing.path, viewing.page)}
                   title={fileName(viewing.path)}
                   className="min-h-0 w-full flex-1 rounded-lg border"
                 />
@@ -47,7 +47,11 @@ export function FileViewerProvider({ children }: { children: ReactNode }) {
                   <p className="text-muted-foreground">
                     This file type can&apos;t be previewed in the browser.
                   </p>
-                  <a href={fileUrl(viewing.path)} download className={buttonVariants()}>
+                  <a
+                    href={viewing.url ?? fileUrl(viewing.path)}
+                    download
+                    className={buttonVariants()}
+                  >
                     <DownloadIcon />
                     Download {fileName(viewing.path)}
                   </a>

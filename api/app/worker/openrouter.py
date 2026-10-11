@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
@@ -8,6 +9,7 @@ from fastapi import Depends
 from app.worker.config import WorkerSettings, get_worker_settings
 
 PARAMETERS = {"temperature": 0, "max_tokens": 16000}
+LONG_TIMEOUT = 600
 
 
 class OpenRouterError(Exception):
@@ -35,16 +37,18 @@ class OpenRouterClient:
         schema_name: str,
         schema: dict[str, Any],
         plugins: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        parameters: dict[str, Any] | None = None,
     ) -> Completion:
         body: dict[str, Any] = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": messages,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
             "provider": {"require_parameters": True},
-            **PARAMETERS,
+            **(parameters or PARAMETERS),
         }
         if plugins:
             body["plugins"] = plugins
@@ -75,7 +79,7 @@ class OpenRouterClient:
         reasoning = message.get("reasoning")
         return Completion(
             content=content,
-            model=payload.get("model") or self.model,
+            model=payload.get("model") or model or self.model,
             usage=usage if isinstance(usage, dict) else {},
             reasoning=reasoning if isinstance(reasoning, str) and reasoning else None,
         )
@@ -87,7 +91,31 @@ async def get_openrouter_client(
     if not settings.openrouter_api_key:
         yield None
         return
-    async with httpx2.AsyncClient(timeout=120) as http:
-        yield OpenRouterClient(
-            settings.openrouter_url, settings.openrouter_api_key, settings.openrouter_model, http
-        )
+    async with openrouter_opener(settings, 120)() as client:
+        yield client
+
+
+type Opener = Callable[[], AbstractAsyncContextManager[OpenRouterClient]]
+
+
+def openrouter_opener(settings: WorkerSettings, timeout: float) -> Opener:
+    @asynccontextmanager
+    async def open_client() -> AsyncIterator[OpenRouterClient]:
+        async with httpx2.AsyncClient(timeout=timeout) as http:
+            yield OpenRouterClient(
+                settings.openrouter_url,
+                settings.openrouter_api_key or "",
+                settings.openrouter_model,
+                http,
+            )
+
+    return open_client
+
+
+def get_openrouter_opener(
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+) -> Opener | None:
+    """Opens clients for background jobs, which outlive the request's own client."""
+    if not settings.openrouter_api_key:
+        return None
+    return openrouter_opener(settings, LONG_TIMEOUT)

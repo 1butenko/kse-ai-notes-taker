@@ -1,6 +1,7 @@
 export const API_URL = process.env.API_URL ?? "http://localhost:8000";
 
-export const PUBLIC_API_URL = `http://localhost:${process.env.API_PORT}`;
+export const PUBLIC_API_URL =
+  process.env.NEXT_PUBLIC_API_URL ?? `http://localhost:${process.env.API_PORT}`;
 
 export type Course = {
   id: number;
@@ -302,4 +303,135 @@ export function addExcerpt(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, ...pages }),
   });
+}
+
+export type NotesRunState = "queued" | "running" | "done" | "failed";
+
+export type NotesRunEvent = {
+  at: string;
+  stage: string;
+  message: string;
+};
+
+export type NotesRun = {
+  id: string;
+  course: string;
+  status: NotesRunState;
+  stage: string;
+  created_at: string;
+  updated_at: string;
+  models: Record<string, string>;
+  topics_total: number;
+  topics_done: number;
+  warnings: string[];
+  error: string | null;
+  events: NotesRunEvent[];
+};
+
+export type VerificationIssue = {
+  block: number | null;
+  kind: string;
+  severity: "major" | "minor";
+  detail: string;
+  fix: string;
+};
+
+export type EvidenceItem = {
+  chunk_id: string;
+  source: number;
+  title: string;
+  page: string | null;
+  role: string;
+  relevance: number;
+  reason: string;
+  text: string;
+};
+
+export type NoteBlock = {
+  id: string;
+  kind: string;
+  title: string | null;
+  content: string;
+  citations: string[];
+};
+
+export type TopicStatus = "verified" | "unresolved" | "no_evidence" | "failed";
+
+export type TopicNote = {
+  topic_id: string;
+  title: string;
+  status: TopicStatus;
+  blocks: NoteBlock[];
+  evidence: EvidenceItem[];
+  rounds: number;
+  verifier: string | null;
+  open_issues: VerificationIssue[];
+  error: string | null;
+};
+
+export type NotesSource = {
+  id: number;
+  file: string;
+  title: string;
+  label: string | null;
+  pdf_start: number | null;
+  pdf_end: number | null;
+  sessions: number[];
+};
+
+export type NotesDocument = {
+  course: string;
+  run: string;
+  title: string;
+  created_at: string;
+  sections: { title: string; topics: TopicNote[] }[];
+  sources: NotesSource[];
+  models: Record<string, string>;
+};
+
+export type NotesRunView = {
+  run: NotesRun;
+  document: NotesDocument | null;
+  pdf: boolean;
+  topic_pdfs: string[];
+};
+
+export function listNotesRuns(course: string): Promise<NotesRun[]> {
+  return request(`/plans/${course}/notes`);
+}
+
+export function getNotesRun(course: string, run: string): Promise<NotesRunView> {
+  return request(`/plans/${course}/notes/${run}`);
+}
+
+export function generateNotes(course: string, resume?: string): Promise<NotesRunView> {
+  return request(`/plans/${course}/notes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(resume ? { resume } : {}),
+  });
+}
+
+export function notesFileUrl(course: string, run: string, kind: "pdf" | "qmd"): string {
+  return `${PUBLIC_API_URL}/plans/${course}/notes/${run}/${kind}`;
+}
+
+export function topicPdfUrl(course: string, run: string, topic: string): string {
+  return `${PUBLIC_API_URL}/plans/${course}/notes/${run}/topics/${encodeURIComponent(topic)}/pdf`;
+}
+
+export function previewPath(course: string, run: string, topic?: string): string {
+  const path = `/preview/${encodeURIComponent(course)}/${encodeURIComponent(run)}`;
+  return topic ? `${path}/${encodeURIComponent(topic)}` : path;
+}
+
+/** Server-side read of a notes run, through the API's internal address. */
+export async function fetchNotesRun(course: string, run: string): Promise<NotesRunView | null> {
+  const res = await fetch(
+    `${API_URL}/plans/${encodeURIComponent(course)}/notes/${encodeURIComponent(run)}`,
+    { cache: "no-store" },
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(`Request failed (${res.status})`);
+  return res.json();
 }

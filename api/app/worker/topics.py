@@ -1,0 +1,443 @@
+"""Topic generation: select evidence, synthesize a note, verify it and revise with feedback."""
+
+import json
+from typing import Literal
+
+from langfuse import get_client
+
+from app.notes import (
+    BlockKind,
+    Chunk,
+    CoursePlan,
+    EvidenceItem,
+    Inputs,
+    NoteBlock,
+    PlannedSection,
+    PlannedTopic,
+    Role,
+    TopicNote,
+    Verification,
+    VerificationIssue,
+)
+from app.schemas import Strict
+from app.worker.artifacts import RunStore
+from app.worker.llm import ask, chat
+from app.worker.models import ModelSpec, NotesModels
+from app.worker.openrouter import OpenRouterClient
+from app.worker.sources import Retriever
+
+TOPIC_CANDIDATES = 24
+OTHER_CANDIDATES = 8
+
+
+# Evidence selection.
+
+
+class EvidenceChoice(Strict):
+    candidate: int
+    role: Role
+    relevance: int
+    reason: str
+
+
+class EvidenceSelection(Strict):
+    selected: list[EvidenceChoice]
+    gaps: list[str]
+
+
+SELECTOR_PROMPT = """\
+You select the evidence for one topic of a course's lecture notes.
+
+You get the topic with its objectives and candidate excerpts (C0, C1, ...) retrieved from the
+course materials. Keep only candidates that help a writer meet the objectives, at most 16:
+- role: what the excerpt contributes: definition, theorem (or lemma, proposition), proof,
+  example, intuition, exercise, background (needed context) or complementary (a second
+  reading's angle on the same idea).
+- relevance: 1-5, 5 being essential.
+- reason: one short sentence.
+Prefer excerpts from the topic's own sources; keep a complementary one from another reading
+when it adds a different explanation or example. gaps: objectives no candidate supports.
+"""
+
+
+def topic_text(section: PlannedSection, topic: PlannedTopic) -> str:
+    lines = [
+        f"Section: {section.title}",
+        f"Topic {topic.id}: {topic.title}",
+        "Objectives:",
+        *[f"- {o}" for o in topic.objectives],
+        "Success criteria:",
+        *[f"- {c}" for c in topic.success_criteria],
+        f"Key terms: {', '.join(topic.key_terms)}",
+    ]
+    return "\n".join(lines)
+
+
+def page_of(chunk: Chunk) -> str | None:
+    if chunk.printed_page:
+        return f"p. {chunk.printed_page}"
+    return f"PDF p. {chunk.pdf_page}" if chunk.pdf_page else None
+
+
+def candidates_for(topic: PlannedTopic, inputs: Inputs, retriever: Retriever) -> list[Chunk]:
+    query = " ".join([topic.title, *topic.key_terms, *topic.objectives])
+    own = {
+        chunk_id
+        for source in inputs.sources
+        if source.id in topic.sources
+        for chunk_id in source.chunk_ids
+    }
+    found = retriever.search(query, TOPIC_CANDIDATES, own) if own else []
+    others = retriever.search(query, OTHER_CANDIDATES + len(found))
+    seen = {c.id for c in found}
+    found += [c for c in others if c.id not in seen][:OTHER_CANDIDATES]
+    return found
+
+
+async def select_evidence(
+    client: OpenRouterClient,
+    spec: ModelSpec,
+    section: PlannedSection,
+    topic: PlannedTopic,
+    inputs: Inputs,
+    retriever: Retriever,
+) -> tuple[list[EvidenceItem], list[str]]:
+    candidates = candidates_for(topic, inputs, retriever)
+    if not candidates:
+        return [], ["No excerpt of the course materials matches this topic"]
+    titles = {s.id: s.title for s in inputs.sources}
+    listing = [
+        f"C{i} ({titles[c.source]}, {page_of(c) or 'no page'}):\n{c.text}"
+        for i, c in enumerate(candidates)
+    ]
+    result = await ask(
+        client,
+        chat(SELECTOR_PROMPT, topic_text(section, topic), "Candidates:\n\n" + "\n\n".join(listing)),
+        EvidenceSelection,
+        "evidence_selection",
+        step="select-evidence",
+        spec=spec,
+    )
+    chosen: dict[int, EvidenceChoice] = {}
+    for choice in result.selected:
+        if 0 <= choice.candidate < len(candidates) and choice.candidate not in chosen:
+            chosen[choice.candidate] = choice
+    evidence = [
+        EvidenceItem(
+            chunk_id=candidates[i].id,
+            source=candidates[i].source,
+            title=titles[candidates[i].source],
+            page=page_of(candidates[i]),
+            role=choice.role,
+            relevance=max(1, min(5, choice.relevance)),
+            reason=choice.reason,
+            text=candidates[i].text,
+        )
+        for i, choice in sorted(chosen.items(), key=lambda c: (-c[1].relevance, c[0]))
+    ]
+    return evidence, result.gaps
+
+
+# Synthesis.
+
+
+class DraftBlock(Strict):
+    kind: BlockKind
+    title: str | None
+    content: str
+    citations: list[int]
+
+
+class TopicDraft(Strict):
+    blocks: list[DraftBlock]
+
+
+WRITER_PROMPT = """\
+You write one topic of a university course's lecture notes from the selected evidence.
+
+Combine the readings into one clear explanation; do not summarise them one by one.
+- Blocks, in teaching order: overview, then definitions, theorems (with every assumption),
+  proofs or proof sketches when the evidence has them, intuition, worked examples,
+  explanation and remarks as needed, and a short summary.
+- content is Pandoc Markdown. Mathematics in standard LaTeX: $...$ inline, $$...$$ for
+  display; \\mathrm{...} rather than {\\rm ...}, no custom macros. Put a blank line before
+  lists. Do not use headings (#) inside content; the block title is the heading.
+- Use the shared notation and terminology exactly; introduce any new symbol before using it.
+- citations: the evidence numbers (E0, E1, ... as integers) supporting the block. Every
+  claim, formula and example must be supported by the cited evidence. Add standard
+  explanatory steps freely, but never facts the evidence does not support.
+- Meet every objective and success criterion. Write in the language of the syllabus.
+When you get a previous draft and reviewer issues, return the full revised draft: fix every
+issue, keep what was correct and keep its citations.
+"""
+
+
+def registry_text(plan: CoursePlan) -> str:
+    lines = ["Notation:"]
+    lines += [f"- {n.symbol}: {n.meaning}" for n in plan.notation] or ["(none)"]
+    lines += ["Terminology:"]
+    lines += [f"- {t.term}: {t.definition}" for t in plan.terminology] or ["(none)"]
+    lines += ["Conventions:"]
+    lines += [f"- {c}" for c in plan.conventions] or ["(none)"]
+    return "\n".join(lines)
+
+
+def context_text(plan: CoursePlan, topic: PlannedTopic) -> str:
+    order = [t for _, t in plan.topics()]
+    position = next(i for i, t in enumerate(order) if t.id == topic.id)
+    before = ", ".join(f"{t.id} {t.title}" for t in order[:position]) or "(none)"
+    after = ", ".join(f"{t.id} {t.title}" for t in order[position + 1 :]) or "(none)"
+    prerequisites = ", ".join(topic.prerequisites) or "(none)"
+    return (
+        f"Prerequisites: {prerequisites}\nTopics before this one: {before}\n"
+        f"Topics after this one (do not cover them): {after}"
+    )
+
+
+def evidence_text(evidence: list[EvidenceItem]) -> str:
+    return "\n\n".join(
+        f"E{i} [{e.role}] ({e.title}, {e.page or 'no page'}):\n{e.text}"
+        for i, e in enumerate(evidence)
+    )
+
+
+def draft_text(draft: TopicDraft) -> str:
+    return "\n\n".join(
+        f"B{i} [{b.kind}] {b.title or ''} (cites {', '.join(f'E{c}' for c in b.citations)}):\n"
+        f"{b.content}"
+        for i, b in enumerate(draft.blocks)
+    )
+
+
+async def synthesize(
+    client: OpenRouterClient,
+    spec: ModelSpec,
+    plan: CoursePlan,
+    section: PlannedSection,
+    topic: PlannedTopic,
+    evidence: list[EvidenceItem],
+    language: str | None,
+    previous: TopicDraft | None = None,
+    issues: list[VerificationIssue] | None = None,
+) -> TopicDraft:
+    parts = [
+        f"Language: {language or 'the language of the topic title'}",
+        topic_text(section, topic),
+        context_text(plan, topic),
+        registry_text(plan),
+        "Evidence:\n\n" + evidence_text(evidence),
+    ]
+    if previous is not None:
+        parts += [
+            "Previous draft:\n\n" + draft_text(previous),
+            "Reviewer issues:\n"
+            + json.dumps([i.model_dump() for i in issues or []], ensure_ascii=False, indent=1),
+        ]
+    return await ask(
+        client,
+        chat(WRITER_PROMPT, *parts),
+        TopicDraft,
+        "topic_draft",
+        step="revise-topic" if previous is not None else "synthesize-topic",
+        spec=spec,
+    )
+
+
+# Verification.
+
+
+class TopicCheck(Strict):
+    passed: bool
+    issues: list[VerificationIssue]
+    escalate: bool
+    escalation_reason: str | None
+
+
+VERIFIER_PROMPT = """\
+You verify one topic of a course's lecture notes against the evidence it was written from.
+
+Check every block (B0, B1, ...):
+- Each claim, formula and example is supported by the evidence it cites; citations point at
+  evidence that says it (unsupported_claim, citation).
+- Equations, derivations and worked examples are mathematically correct (math_error).
+- Theorems state all their assumptions (assumption).
+- Notation and terms follow the shared registry (notation).
+- Every objective and success criterion is met (missing_objective; block null).
+- The explanation is clear enough for a student (clarity).
+For each problem give the block number, what is wrong and the exact fix. severity "major"
+when a student would learn something false or miss an objective; "minor" otherwise.
+passed is true only when there are no major issues. Set escalate to true, with a reason,
+when a proof or derivation is too hard to check confidently, when sources conflict, or when
+you are unsure an error is real. Material missing from the course readings is a known gap,
+not a reason to escalate: report what it leaves unsupported as citation issues.
+"""
+
+
+async def verify(
+    client: OpenRouterClient,
+    spec: ModelSpec,
+    plan: CoursePlan,
+    section: PlannedSection,
+    topic: PlannedTopic,
+    evidence: list[EvidenceItem],
+    draft: TopicDraft,
+    step: str,
+) -> TopicCheck:
+    check = await ask(
+        client,
+        chat(
+            VERIFIER_PROMPT,
+            topic_text(section, topic),
+            context_text(plan, topic),
+            registry_text(plan),
+            "Evidence:\n\n" + evidence_text(evidence),
+            "Draft:\n\n" + draft_text(draft),
+        ),
+        TopicCheck,
+        "topic_verification",
+        step=step,
+        spec=spec,
+    )
+    majors = [i for i in check.issues if i.severity == "major"]
+    check.passed = not majors
+    return check
+
+
+def to_note(
+    topic: PlannedTopic,
+    draft: TopicDraft,
+    evidence: list[EvidenceItem],
+    status: Literal["verified", "unresolved"],
+    rounds: int,
+    verifier: str,
+    open_issues: list[VerificationIssue],
+) -> TopicNote:
+    def chunk_ids(citations: list[int]) -> list[str]:
+        cited = [evidence[c].chunk_id for c in citations if 0 <= c < len(evidence)]
+        return list(dict.fromkeys(cited))
+
+    blocks = [
+        NoteBlock(
+            id=f"{topic.id}.{n}",
+            kind=block.kind,
+            title=block.title,
+            content=block.content,
+            citations=chunk_ids(block.citations),
+        )
+        for n, block in enumerate(draft.blocks, 1)
+    ]
+    return TopicNote(
+        topic_id=topic.id,
+        title=topic.title,
+        status=status,
+        blocks=blocks,
+        evidence=evidence,
+        rounds=rounds,
+        verifier=verifier,
+        open_issues=open_issues,
+    )
+
+
+async def generate_topic(
+    client: OpenRouterClient,
+    models: NotesModels,
+    store: RunStore,
+    plan: CoursePlan,
+    section: PlannedSection,
+    topic: PlannedTopic,
+    inputs: Inputs,
+    retriever: Retriever,
+    language: str | None,
+    revisions: int,
+) -> TopicNote:
+    folder = f"topics/{topic.id}"
+    with get_client().start_as_current_observation(
+        name="generate-topic", input={"topic": topic.title, "objectives": topic.objectives}
+    ) as span:
+        evidence, gaps = await select_evidence(
+            client, models.selector, section, topic, inputs, retriever
+        )
+        store.write(
+            f"{folder}/evidence.json",
+            json.dumps(
+                {"items": [e.model_dump() for e in evidence], "gaps": gaps},
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        if not evidence:
+            span.update(level="WARNING", status_message="No evidence")
+            return TopicNote(
+                topic_id=topic.id,
+                title=topic.title,
+                status="no_evidence",
+                blocks=[],
+                evidence=[],
+                rounds=0,
+                verifier=None,
+                open_issues=[],
+            )
+
+        store.log("topics", f"{topic.id}: writing from {len(evidence)} excerpts")
+        draft = await synthesize(client, models.writer, plan, section, topic, evidence, language)
+        escalated = False
+        check: TopicCheck | None = None
+        spec = models.verifier
+        for round in range(1, revisions + 2):
+            store.write(f"{folder}/draft-{round}.json", draft)
+            spec = models.escalation if escalated else models.verifier
+            step = "verify-topic-escalated" if escalated else "verify-topic"
+            store.log("topics", f"{topic.id}: checking, round {round} ({spec.model})")
+            check = await verify(client, spec, plan, section, topic, evidence, draft, step)
+            if check.escalate and not escalated:
+                escalated = True
+                spec = models.escalation
+                store.log("topics", f"{topic.id}: escalated check, round {round} ({spec.model})")
+                check = await verify(
+                    client, spec, plan, section, topic, evidence, draft, "verify-topic-escalated"
+                )
+            store.write(
+                f"{folder}/verification-{round}.json",
+                Verification(
+                    round=round,
+                    model=spec.model,
+                    passed=check.passed,
+                    issues=check.issues,
+                    escalate=check.escalate,
+                    escalation_reason=check.escalation_reason,
+                ),
+            )
+            if check.passed or round > revisions:
+                break
+            if round >= 2:
+                escalated = True
+            majors = sum(i.severity == "major" for i in check.issues)
+            store.log("topics", f"{topic.id}: revising {majors} major issues")
+            draft = await synthesize(
+                client,
+                models.writer,
+                plan,
+                section,
+                topic,
+                evidence,
+                language,
+                draft,
+                check.issues,
+            )
+
+        assert check is not None
+        open_issues = [i for i in check.issues if i.severity == "major"]
+        note = to_note(
+            topic,
+            draft,
+            evidence,
+            "verified" if check.passed else "unresolved",
+            round,
+            spec.model,
+            open_issues,
+        )
+        span.update(
+            output={"status": note.status, "blocks": len(note.blocks), "rounds": round},
+            level="DEFAULT" if check.passed else "WARNING",
+        )
+        return note

@@ -1,7 +1,7 @@
 # Local development. `docker compose up --build`
 #   web: http://localhost:3000
 #   api: http://localhost:${API_PORT}  (docs at /docs), port set in .env
-#   worker: internal only (http://worker:8000); every model call goes through it
+#   worker: internal only (http://worker:8000); every model call and PDF render goes through it
 #   langfuse: http://localhost:3001  (traces of every model call)
 include:
   - langfuse.compose.yaml
@@ -37,7 +37,7 @@ services:
   worker:
     build:
       context: ./api
-      target: dev
+      target: worker-dev
     command: ["uvicorn", "app.worker.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     env_file: .env
     environment:

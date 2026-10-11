@@ -1,9 +1,6 @@
 import type { Metadata } from "next";
 import { DM_Sans, Geist_Mono } from "next/font/google";
 
-import { AppSidebar } from "@/components/dashboard/app-sidebar";
-import { MoodleCourseProvider } from "@/components/dashboard/moodle-course-context";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -31,14 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${dmSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <TooltipProvider>
-          <MoodleCourseProvider>
-            <SidebarProvider>
-              <AppSidebar />
-              <SidebarInset>{children}</SidebarInset>
-            </SidebarProvider>
-          </MoodleCourseProvider>
-        </TooltipProvider>
+        <TooltipProvider>{children}</TooltipProvider>
         <Toaster theme="light" richColors position="bottom-right" />
       </body>
     </html>

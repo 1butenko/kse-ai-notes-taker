@@ -2,6 +2,7 @@
 
 from pydantic import BaseModel
 
+from app.notes import NotesRun
 from app.plan import BookMatch, Plan, Proposal
 from app.syllabus import SyllabusExtraction, Transcript
 
@@ -26,3 +27,13 @@ class MapRequest(BaseModel):
 class MapResponse(BaseModel):
     matches: list[BookMatch]
     proposals: list[Proposal]
+
+
+class NotesRequest(BaseModel):
+    course: str
+    run: str
+    plan: Plan
+    transcript: Transcript
+
+
+NotesResponse = NotesRun

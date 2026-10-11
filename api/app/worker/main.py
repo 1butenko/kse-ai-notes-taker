@@ -4,17 +4,32 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 
+from app.notes import RUN_ID
 from app.storage import sha256
 from app.syllabus import SyllabusExtraction
 from app.worker.config import WorkerSettings, get_worker_settings
 from app.worker.llm import ask
 from app.worker.mapping import proposal_summary, run_mapping
-from app.worker.openrouter import OpenRouterClient, get_openrouter_client
+from app.worker.models import NotesModels
+from app.worker.notes import ACTIVE, fail_interrupted, open_run, run_notes
+from app.worker.openrouter import (
+    Opener,
+    OpenRouterClient,
+    get_openrouter_client,
+    get_openrouter_opener,
+)
 from app.worker.tracing import course_trace, init_langfuse
 from app.worker.transcribe import EmptyDocument, build_messages, drop_bad_refs
-from app.worker_contract import MapRequest, MapResponse, TranscribeRequest, TranscribeResponse
+from app.worker_contract import (
+    MapRequest,
+    MapResponse,
+    NotesRequest,
+    NotesResponse,
+    TranscribeRequest,
+    TranscribeResponse,
+)
 
 COURSE = re.compile(r"^(local|\d+)$")
 
@@ -24,6 +39,7 @@ langfuse = init_langfuse(settings)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    fail_interrupted(settings.uploads_dir)
     yield
     langfuse.shutdown()
 
@@ -109,6 +125,34 @@ async def map_materials(
             }
         )
     return MapResponse(matches=matches, proposals=proposals)
+
+
+@app.post("/notes", status_code=status.HTTP_202_ACCEPTED)
+async def generate_notes(
+    body: NotesRequest,
+    background: BackgroundTasks,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+    opener: Annotated[Opener | None, Depends(get_openrouter_opener)],
+) -> NotesResponse:
+    """Start (or resume) a notes run; it continues after the response, see run.json."""
+    if not COURSE.match(body.course):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {body.course!r}")
+    if not RUN_ID.match(body.run):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid run: {body.run!r}")
+    if opener is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Notes are not configured")
+    if body.course in ACTIVE:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Notes are already being generated")
+
+    store = open_run(
+        settings.uploads_dir / body.course,
+        body.course,
+        body.run,
+        NotesModels.from_settings(settings),
+    )
+    ACTIVE.add(body.course)
+    background.add_task(run_notes, opener, settings, store, body.plan, body.transcript)
+    return store.run
 
 
 @app.get("/health")

@@ -6,6 +6,7 @@ os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 
 from collections.abc import AsyncIterator, Callable, Iterator  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import httpx2  # noqa: E402
@@ -17,7 +18,11 @@ from app.main import app  # noqa: E402
 from app.moodle import MoodleClient, get_moodle_client  # noqa: E402
 from app.worker.config import WorkerSettings, get_worker_settings  # noqa: E402
 from app.worker.main import app as worker_app  # noqa: E402
-from app.worker.openrouter import OpenRouterClient, get_openrouter_client  # noqa: E402
+from app.worker.openrouter import (  # noqa: E402
+    OpenRouterClient,
+    get_openrouter_client,
+    get_openrouter_opener,
+)
 from app.worker_client import WorkerClient, get_worker_client  # noqa: E402
 
 Handler = Callable[[httpx2.Request], httpx2.Response]
@@ -54,13 +59,19 @@ def mock_moodle() -> Iterator[Callable[[Handler], TestClient]]:
 @pytest.fixture
 def mock_openrouter() -> Iterator[Callable[[Handler], TestClient]]:
     def install(handler: Handler) -> TestClient:
-        async def override() -> AsyncIterator[OpenRouterClient]:
+        @asynccontextmanager
+        async def opener() -> AsyncIterator[OpenRouterClient]:
             async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http:
                 yield OpenRouterClient(
                     "https://openrouter.test/api/v1", "or-key", "test/model", http
                 )
 
+        async def override() -> AsyncIterator[OpenRouterClient]:
+            async with opener() as client:
+                yield client
+
         worker_app.dependency_overrides[get_openrouter_client] = override
+        worker_app.dependency_overrides[get_openrouter_opener] = lambda: opener
         return TestClient(app)
 
     yield install
