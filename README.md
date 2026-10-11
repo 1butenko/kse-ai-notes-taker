@@ -300,18 +300,6 @@ make down   # stop everything (Langfuse data stays in its kse-ai-notes-taker_lan
 make langfuse  # open the Langfuse UI
 ```
 
-## Demo deployment (free)
-
-The web app runs on Vercel (project `kse-notes`, root directory `web`); the API and the worker run together in one free [Render](https://render.com) web service, built from the `demo` stage of `api/Dockerfile` (`api/demo/start.sh` starts both, on `$PORT`). Vercel alone can't host the backend: notes runs take minutes in the background, need Quarto and keep files on disk.
-
-1. In Render, **New → Blueprint**, pick this repository: `render.yaml` creates the `kse-notes-api` service (free plan, from the `notes-generation-engine` branch; change `branch` after merging). Enter the `MOODLE_TOKEN` and `OPENROUTER_API_KEY` secrets when asked.
-2. The service answers at `https://kse-notes-api.onrender.com` (Render adds a suffix if the name is taken). The Vercel project's `NEXT_PUBLIC_API_URL` and `API_URL` must be that URL; `NEXT_PUBLIC_API_URL` is read at build time, so redeploy the web app after changing it.
-3. CORS allows the project's Vercel domains through `CORS_ORIGIN_REGEX`; add other origins to `CORS_ORIGINS`.
-
-The free instance has 512 MB of RAM, so the blueprint typesets one PDF at a time (`QUARTO_CONCURRENCY=1`) and writes two topics at a time (`NOTES_CONCURRENCY=2`). It sleeps after 15 minutes without requests (the first request wakes it in about a minute) and its disk is reset on every deploy or restart, so uploads and runs are lost; download what you want to keep.
-
-With a Hugging Face PRO account, `scripts/deploy-space.sh <hf-user>/<space> [<course>/<run> ...]` deploys the same image as a Docker Space (16 GB RAM) and can copy finished runs from the local uploads volume onto it, without book text. `SPACE_DRY_RUN=1` builds the image locally instead.
-
 ## Production images
 
 Each Dockerfile has a `dev` and a `prod` target:

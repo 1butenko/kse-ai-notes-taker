@@ -90,20 +90,3 @@ RUN useradd --create-home --uid 1001 app \
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "app.worker.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# Demo hosting (Render, Hugging Face Spaces): API and worker in one container on $PORT (7860).
-# The default stage, since those hosts build the last one; keep it last.
-FROM typeset AS demo
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --no-install-project --no-dev
-COPY app ./app
-COPY demo ./demo
-RUN useradd --create-home --uid 1000 user \
-    && mkdir -p /data/uploads \
-    && chown user /data/uploads
-USER user
-ENV UPLOADS_DIR=/data/uploads WORKER_URL=http://127.0.0.1:8001 ENVIRONMENT=demo
-EXPOSE 7860
-CMD ["./demo/start.sh"]

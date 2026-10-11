@@ -198,9 +198,7 @@ async def run_notes(
             try:
                 await render_pdf(qmd, settings.quarto_bin)
                 store.log("rendering", f"Typesetting {len(topic_qmds)} topic PDFs")
-                failed_pdfs = await render_pdfs(
-                    list(topic_qmds), settings.quarto_bin, settings.quarto_concurrency
-                )
+                failed_pdfs = await render_pdfs(list(topic_qmds), settings.quarto_bin)
                 for topic_qmd, error in failed_pdfs.items():
                     store.warn(f"PDF of {topic_qmds[topic_qmd]} not rendered: {error}")
             except QuartoError as error:

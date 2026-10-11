@@ -10,7 +10,6 @@ class Settings(BaseSettings):
     app_name: str = "kse-ai-notes-taker"
     environment: str = "local"
     cors_origins: list[str] = ["http://localhost:3000"]
-    cors_origin_regex: str | None = None
     uploads_dir: Path = Path("uploads")
     moodle_url: str
     moodle_token: str
