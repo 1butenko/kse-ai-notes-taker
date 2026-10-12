@@ -30,11 +30,12 @@ import {
   listCourseFiles,
   uploadFiles,
   uploadMoodleFiles,
+  uploadMoodleLinks,
   type CourseFiles,
   type PlanView,
   type SavedFile,
 } from "@/lib/api";
-import { findSyllabusFiles } from "@/lib/moodle-files";
+import { findMaterialFiles, findSyllabusFiles } from "@/lib/moodle-files";
 
 const STAGES = [
   {
@@ -91,6 +92,7 @@ export function CourseWorkflow() {
   const [syllabusFiles, setSyllabusFiles] = useState<File[]>([]);
   const [readingFiles, setReadingFiles] = useState<File[]>([]);
   const [hiddenMoodleIds, setHiddenMoodleIds] = useState<Set<string>>(new Set());
+  const [readingMoodleIds, setReadingMoodleIds] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [stored, setStored] = useState<CourseFiles>(NO_FILES);
   const [plan, setPlan] = useState<PlanView | null>(null);
@@ -118,7 +120,9 @@ export function CourseWorkflow() {
       setStored(files);
       setPlan(loadedPlan);
       setStage(
-        loadedPlan?.transcript ? "materials" : files.syllabus.length > 0 ? "syllabus" : "upload",
+        (prev) =>
+          prev ??
+          (loadedPlan?.transcript ? "materials" : files.syllabus.length > 0 ? "syllabus" : "upload"),
       );
     });
     return () => {
@@ -131,7 +135,12 @@ export function CourseWorkflow() {
     (file) => !hiddenMoodleIds.has(file.id) && !savedSyllabusNames.has(file.saveAs),
   );
   const pendingSyllabus = syllabusFiles.length + syllabusMoodleFiles.length;
-  const pending = pendingSyllabus + readingFiles.length;
+  const savedReadingNames = new Set(stored.reading.map((file) => fileName(file.path)));
+  const materialSections = imported ? findMaterialFiles(imported.sections) : null;
+  const readingMoodleFiles = (materialSections ?? [])
+    .flatMap((section) => section.files)
+    .filter((file) => readingMoodleIds.has(file.id) && !savedReadingNames.has(file.saveAs));
+  const pending = pendingSyllabus + readingFiles.length + readingMoodleFiles.length;
 
   const done: Record<StageId, boolean> = {
     upload: stored.syllabus.length > 0,
@@ -177,11 +186,21 @@ export function CourseWorkflow() {
       if (syllabusFiles.length > 0) {
         saved.push(...(await uploadFiles("syllabus", syllabusFiles, courseId)));
       }
+      const moodleFiles = readingMoodleFiles.filter((f) => f.kind === "file");
+      const moodleLinks = readingMoodleFiles.filter((f) => f.kind === "link");
+      if (moodleFiles.length > 0) {
+        const refs = moodleFiles.map((f) => ({ fileurl: f.fileurl, filename: f.saveAs }));
+        saved.push(...(await uploadMoodleFiles("reading", refs, courseId)));
+      }
+      if (moodleLinks.length > 0 && courseId) {
+        saved.push(...(await uploadMoodleLinks(courseId, moodleLinks.map((f) => f.moduleId))));
+      }
       if (readingFiles.length > 0) {
         saved.push(...(await uploadFiles("reading", readingFiles, courseId)));
       }
       setSyllabusFiles([]);
       setReadingFiles([]);
+      setReadingMoodleIds(new Set());
       setStatus({ kind: "idle" });
       toast.success("Files saved successfully", {
         description: `${saved.length} ${saved.length === 1 ? "file" : "files"} uploaded to storage.`,
@@ -256,6 +275,10 @@ export function CourseWorkflow() {
               files={readingFiles}
               onFilesChange={edit(setReadingFiles)}
               savedFiles={stored.reading}
+              moodleSections={materialSections}
+              moodleFiles={readingMoodleFiles}
+              selectedMoodleIds={readingMoodleIds}
+              onSelectMoodleFiles={edit(setReadingMoodleIds)}
             />
           </div>
 
