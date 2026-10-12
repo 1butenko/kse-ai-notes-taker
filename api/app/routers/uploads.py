@@ -2,10 +2,12 @@ import shutil
 from pathlib import Path
 from typing import Annotated, Literal
 
+import httpx2
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.links import PageTooLarge, fetch, get_web_client, html_to_text, is_video
 from app.moodle import MoodleClient, get_moodle_client
 from app.routers.courses import moodle_errors
 
@@ -84,6 +86,70 @@ async def upload_moodle_files(
         with moodle_errors():
             size = await moodle.download(settings.moodle_token, ref.fileurl, dest)
         result.append(saved(settings, dest, size))
+    return result
+
+
+class MoodleLinksRequest(BaseModel):
+    course_id: int
+    modules: list[int] = Field(min_length=1)
+
+
+@router.post("/moodle/links")
+async def upload_moodle_links(
+    body: MoodleLinksRequest,
+    moodle: Annotated[MoodleClient, Depends(get_moodle_client)],
+    web: Annotated[httpx2.AsyncClient, Depends(get_web_client)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> list[SavedFile]:
+    """Save the web pages that the course's Moodle links point to as reading materials: PDFs
+    as they are, HTML pages as text. Only links of the course itself are fetched."""
+    with moodle_errors():
+        sections = await moodle.get_course_contents(settings.moodle_token, body.course_id)
+    links = {
+        m.id: (m.name, c.fileurl)
+        for s in sections
+        for m in s.modules
+        if m.modname == "url"
+        for c in m.contents[:1]
+        if c.type == "url"
+    }
+    directory = target_dir(settings, body.course_id, "reading")
+    result = []
+    for module in body.modules:
+        if module not in links:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"No link {module} in this course")
+        name, url = links[module]
+        if not url.startswith(("http://", "https://")) or is_video(url):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"{name}: only web pages can be imported"
+            )
+        try:
+            content_type, page = await fetch(web, url)
+        except PageTooLarge as error:
+            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"{name}: over 20 MB") from error
+        except httpx2.HTTPError as error:
+            print(f"Link download failed: {url}: {error!r}")
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, f"{name}: couldn't download {url}"
+            ) from error
+
+        if "pdf" in content_type or page.startswith(b"%PDF"):
+            dest = directory / f"{safe_name(name)}.pdf"
+            dest.write_bytes(page)
+        elif "html" in content_type or "text/plain" in content_type:
+            text = page.decode(errors="replace")
+            if "html" in content_type:
+                text = html_to_text(text)
+            if not text.strip():
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{name}: no text")
+            dest = directory / f"{safe_name(name)}.md"
+            dest.write_text(f"# {name}\n\nSource: {url}\n\n{text}\n")
+        else:
+            raise HTTPException(
+                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                f"{name}: {content_type or 'unknown type'} can't be imported",
+            )
+        result.append(saved(settings, dest, dest.stat().st_size))
     return result
 
 

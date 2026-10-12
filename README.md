@@ -93,12 +93,14 @@ Both `GET` endpoints also print what they receive (the course, then its sections
 ### Importing a course in the UI
 
 1. Open the course in Moodle and copy the number after `id=` in the URL, e.g. `course/view.php?id=4510`.
-2. Click **Import from Moodle** in the sidebar, enter the ID and press **Import**.
+2. Click **From Moodle** on the **Reading materials** card, enter the ID and press **Import course**. **Change course** in the same dialog imports another one.
 3. The web app calls `GET /courses/{course_id}`, then `GET /courses/{course_id}/contents`.
 
 The **Syllabus** card is then filled with every Moodle file whose activity name or file name contains "Syllabus" or "Силабус" (any letter case). Each one shows its Moodle name, file name, size and a **Moodle** badge, with a link to open it in Moodle. The ✕ button hides it from the card only. Links, assignments and quizzes are not treated as syllabus files.
 
-The imported course is kept in the page only, so a refresh clears it. Files are listed, not downloaded yet.
+**From Moodle** on the **Reading materials** card lists the course's other files (PDF, Word, PowerPoint, text) and its links to web pages, by Moodle section. Checked items are downloaded on **Save and continue** as reading materials: files as they are, web pages (e.g. lecture slides) as Markdown text, or as a PDF when the link serves one. Links to YouTube or Vimeo are left out. Only links that belong to the course are fetched (`POST /uploads/moodle/links` with `{"course_id", "modules": [<module id>]}`); pages over 20 MB are refused.
+
+Moodle files are downloaded when you save.
 
 ### Errors
 
@@ -130,8 +132,9 @@ The Moodle user behind the token must:
 |------|---------|
 | `web/src/lib/api.ts` | API calls and the `Course` / `Section` / `Module` types |
 | `web/src/lib/moodle-files.ts` | Picks syllabus files out of the course contents (`findSyllabusFiles`) |
-| `web/src/components/dashboard/moodle-course-context.tsx` | Shares the imported course between the sidebar dialog and the cards |
-| `web/src/components/dashboard/moodle-import-dialog.tsx` | The **Import from Moodle** dialog |
+| `web/src/components/dashboard/moodle-course-context.tsx` | Shares the imported course between the import form and the cards |
+| `web/src/components/dashboard/moodle-course-form.tsx` | The course ID form that imports a Moodle course |
+| `web/src/components/dashboard/moodle-materials-dialog.tsx` | **From Moodle**: imports the course, then picks its files and web pages |
 | `web/src/components/dashboard/file-upload-card.tsx` | Upload card used by Syllabus and Reading materials; shows Moodle files and local uploads |
 | `web/src/components/dashboard/syllabus-plan.tsx` | **Syllabus plan** cards: Transcribe / Re-run, Use as course plan |
 | `web/src/components/dashboard/course-plan.tsx` | The course plan: sessions with their files, Unassigned |

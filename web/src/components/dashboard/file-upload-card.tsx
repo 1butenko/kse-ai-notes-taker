@@ -31,6 +31,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { fileName, type SavedFile } from "@/lib/api";
+import { formatSize } from "@/lib/format";
 import type { MoodleFile } from "@/lib/moodle-files";
 
 type FileUploadCardProps = {
@@ -44,13 +45,8 @@ type FileUploadCardProps = {
   moodleFiles?: MoodleFile[];
   onRemoveMoodleFile?: (id: string) => void;
   savedFiles?: SavedFile[];
+  actions?: ReactNode;
 };
-
-function formatSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 export function FileUploadCard({
   title,
@@ -63,6 +59,7 @@ export function FileUploadCard({
   moodleFiles = [],
   onRemoveMoodleFile,
   savedFiles = [],
+  actions,
 }: FileUploadCardProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const openFile = useFileViewer();
@@ -83,12 +80,15 @@ export function FileUploadCard({
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        {!isEmpty && (
-          <CardAction>
-            <Button variant="outline" size="sm" onClick={openPicker}>
-              <UploadIcon />
-              {multiple ? "Add more" : files.length > 0 ? "Replace" : "Upload"}
-            </Button>
+        {(!isEmpty || actions) && (
+          <CardAction className="flex gap-2">
+            {actions}
+            {!isEmpty && (
+              <Button variant="outline" size="sm" onClick={openPicker}>
+                <UploadIcon />
+                {multiple ? "Add more" : files.length > 0 ? "Replace" : "Upload"}
+              </Button>
+            )}
           </CardAction>
         )}
       </CardHeader>

@@ -97,6 +97,14 @@ export function uploadMoodleFiles(
   });
 }
 
+export function uploadMoodleLinks(courseId: number, modules: number[]): Promise<SavedFile[]> {
+  return request("/uploads/moodle/links", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ course_id: courseId, modules }),
+  });
+}
+
 export type Reading = {
   raw: string;
   title: string | null;

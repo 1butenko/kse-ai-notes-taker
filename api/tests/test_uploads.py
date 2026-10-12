@@ -1,6 +1,7 @@
 import httpx2
 from fastapi.testclient import TestClient
 
+from app.links import get_web_client
 from app.main import app
 
 
@@ -114,3 +115,94 @@ def test_upload_moodle_files_reports_moodle_error(mock_moodle, tmp_uploads) -> N
     )
 
     assert response.status_code == 401
+
+
+COURSE_LINKS = [
+    {
+        "id": 1,
+        "section": 0,
+        "name": "Study Materials",
+        "modules": [
+            {
+                "id": 11,
+                "name": "01 - Introduction",
+                "modname": "url",
+                "contents": [
+                    {"type": "url", "filename": "x", "fileurl": "https://slides.test/01/"}
+                ],
+            },
+            {
+                "id": 12,
+                "name": "Paper",
+                "modname": "url",
+                "contents": [{"type": "url", "filename": "x", "fileurl": "https://papers.test/p"}],
+            },
+            {
+                "id": 13,
+                "name": "Lecture video",
+                "modname": "url",
+                "contents": [
+                    {"type": "url", "filename": "x", "fileurl": "https://www.youtube.com/watch?v=1"}
+                ],
+            },
+        ],
+    }
+]
+
+SLIDES = """<html><head><title>T</title><script>var x = 1;</script></head><body>
+<nav>Table of contents</nav>
+<section><h2>Forecasting</h2><p>A model  \\(y = f(X)\\) of
+the future.</p><ul><li>one</li><li>two</li></ul></section>
+<section><h2></h2></section></body></html>"""
+
+
+def links_client(mock_moodle, pages: dict[str, httpx2.Response]):
+    async def web():
+        async with httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda request: pages[str(request.url)])
+        ) as client:
+            yield client
+
+    client = mock_moodle(lambda _: httpx2.Response(200, json=COURSE_LINKS))
+    app.dependency_overrides[get_web_client] = web
+    return client
+
+
+def test_upload_moodle_links_saves_pages_as_text_and_pdfs(mock_moodle, tmp_uploads) -> None:
+    client = links_client(
+        mock_moodle,
+        {
+            "https://slides.test/01/": httpx2.Response(
+                200, text=SLIDES, headers={"content-type": "text/html; charset=utf-8"}
+            ),
+            "https://papers.test/p": httpx2.Response(
+                200, content=b"%PDF-1.7 paper", headers={"content-type": "application/pdf"}
+            ),
+        },
+    )
+
+    response = client.post("/uploads/moodle/links", json={"course_id": 4510, "modules": [11, 12]})
+
+    assert response.status_code == 200, response.text
+    assert [f["path"] for f in response.json()] == [
+        "4510/reading/01 - Introduction.md",
+        "4510/reading/Paper.pdf",
+    ]
+    assert (tmp_uploads / "4510/reading/01 - Introduction.md").read_text() == (
+        "# 01 - Introduction\n\nSource: https://slides.test/01/\n\n"
+        "## Forecasting\n\nA model $y = f(X)$ of the future.\n\n- one\n\n- two\n"
+    )
+    assert (tmp_uploads / "4510/reading/Paper.pdf").read_bytes() == b"%PDF-1.7 paper"
+
+
+def test_upload_moodle_links_only_fetches_web_pages_of_the_course(mock_moodle, tmp_uploads) -> None:
+    client = links_client(mock_moodle, {})
+
+    video = client.post("/uploads/moodle/links", json={"course_id": 4510, "modules": [13]})
+    foreign = client.post("/uploads/moodle/links", json={"course_id": 4510, "modules": [99]})
+
+    assert video.status_code == 422
+    assert foreign.status_code == 404
+    assert not (tmp_uploads / "4510/reading").exists() or not any(
+        (tmp_uploads / "4510/reading").iterdir()
+    )
