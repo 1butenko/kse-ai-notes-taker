@@ -1,6 +1,19 @@
+import { tabSession } from "@/lib/session";
+
 export const API_URL = process.env.API_URL ?? "http://localhost:8000";
 
-export const PUBLIC_API_URL = `http://localhost:${process.env.API_PORT}`;
+export const PUBLIC_API_URL =
+  process.env.NEXT_PUBLIC_API_URL ?? `http://localhost:${process.env.API_PORT}`;
+
+const SESSION_HEADER = "x-session";
+
+function withSession(url: string, session = tabSession()): string {
+  return `${url}${url.includes("?") ? "&" : "?"}session=${encodeURIComponent(session)}`;
+}
+
+export function endTabSession() {
+  navigator.sendBeacon(withSession(`${PUBLIC_API_URL}/session/end`));
+}
 
 export type Course = {
   id: number;
@@ -55,7 +68,9 @@ export type MoodleFileRef = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${PUBLIC_API_URL}${path}`, init);
+  const headers = new Headers(init?.headers);
+  headers.set(SESSION_HEADER, tabSession());
+  const res = await fetch(`${PUBLIC_API_URL}${path}`, { ...init, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const detail = typeof body?.detail === "string" ? body.detail : `Request failed (${res.status})`;
@@ -259,7 +274,7 @@ export function fileName(path: string): string {
 }
 
 export function fileUrl(path: string, page?: number): string {
-  const url = `${PUBLIC_API_URL}/files?path=${encodeURIComponent(path)}`;
+  const url = withSession(`${PUBLIC_API_URL}/files?path=${encodeURIComponent(path)}`);
   return page ? `${url}#page=${page}` : url;
 }
 
@@ -419,24 +434,36 @@ export function generateNotes(course: string, resume?: string): Promise<NotesRun
   });
 }
 
-export function notesFileUrl(course: string, run: string, kind: "pdf" | "qmd"): string {
-  return `${PUBLIC_API_URL}/plans/${course}/notes/${run}/${kind}`;
+export function notesFileUrl(
+  course: string,
+  run: string,
+  kind: "pdf" | "qmd",
+  session?: string,
+): string {
+  return withSession(`${PUBLIC_API_URL}/plans/${course}/notes/${run}/${kind}`, session);
 }
 
-export function topicPdfUrl(course: string, run: string, topic: string): string {
-  return `${PUBLIC_API_URL}/plans/${course}/notes/${run}/topics/${encodeURIComponent(topic)}/pdf`;
+export function topicPdfUrl(course: string, run: string, topic: string, session?: string): string {
+  return withSession(
+    `${PUBLIC_API_URL}/plans/${course}/notes/${run}/topics/${encodeURIComponent(topic)}/pdf`,
+    session,
+  );
 }
 
-export function previewPath(course: string, run: string, topic?: string): string {
+export function previewPath(course: string, run: string, topic?: string, session?: string): string {
   const path = `/preview/${encodeURIComponent(course)}/${encodeURIComponent(run)}`;
-  return topic ? `${path}/${encodeURIComponent(topic)}` : path;
+  return withSession(topic ? `${path}/${encodeURIComponent(topic)}` : path, session);
 }
 
 /** Server-side read of a notes run, through the API's internal address. */
-export async function fetchNotesRun(course: string, run: string): Promise<NotesRunView | null> {
+export async function fetchNotesRun(
+  course: string,
+  run: string,
+  session: string,
+): Promise<NotesRunView | null> {
   const res = await fetch(
     `${API_URL}/plans/${encodeURIComponent(course)}/notes/${encodeURIComponent(run)}`,
-    { cache: "no-store" },
+    { cache: "no-store", headers: { [SESSION_HEADER]: session } },
   );
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(`Request failed (${res.status})`);

@@ -15,13 +15,18 @@ import { fetchNotesRun } from "@/lib/api";
 
 type Props = PageProps<"/preview/[course]/[run]/[[...topic]]">;
 
-const load = cache(async (course: string, run: string) =>
-  fetchNotesRun(course, run).catch(() => undefined),
+const load = cache(async (course: string, run: string, session: string) =>
+  fetchNotesRun(course, run, session).catch(() => undefined),
 );
+
+async function sessionOf(props: Props): Promise<string> {
+  const { session } = await props.searchParams;
+  return typeof session === "string" ? session : "";
+}
 
 export async function generateMetadata(props: Props): Promise<Metadata> {
   const { course, run, topic } = await props.params;
-  const view = await load(course, run);
+  const view = await load(course, run, await sessionOf(props));
   const document = view?.document;
   if (!document) return { title: "Lecture notes · KSE Notes" };
   const note = document.sections.flatMap((s) => s.topics).find((t) => t.topic_id === topic?.[0]);
@@ -50,7 +55,8 @@ function Message({ title, description, busy }: { title: string; description: str
 export default async function PreviewPage(props: Props) {
   const { course, run, topic } = await props.params;
   if (topic && topic.length > 1) notFound();
-  const view = await load(course, run);
+  const session = await sessionOf(props);
+  const view = await load(course, run, session);
 
   if (view === undefined) {
     return (
@@ -84,6 +90,7 @@ export default async function PreviewPage(props: Props) {
     <NotesPreview
       course={course}
       run={run}
+      session={session}
       topicId={topicId}
       document={view.document}
       pdf={view.pdf}

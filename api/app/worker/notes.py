@@ -25,7 +25,7 @@ from app.worker.sources import Retriever, build_inputs
 from app.worker.topics import generate_topic
 from app.worker.tracing import course_trace
 
-ACTIVE: set[str] = set()
+ACTIVE: set[Path] = set()
 
 
 def fail_interrupted(uploads_dir: Path) -> list[str]:
@@ -198,7 +198,9 @@ async def run_notes(
             try:
                 await render_pdf(qmd, settings.quarto_bin)
                 store.log("rendering", f"Typesetting {len(topic_qmds)} topic PDFs")
-                failed_pdfs = await render_pdfs(list(topic_qmds), settings.quarto_bin)
+                failed_pdfs = await render_pdfs(
+                    list(topic_qmds), settings.quarto_bin, settings.quarto_concurrency
+                )
                 for topic_qmd, error in failed_pdfs.items():
                     store.warn(f"PDF of {topic_qmds[topic_qmd]} not rendered: {error}")
             except QuartoError as error:
@@ -212,4 +214,4 @@ async def run_notes(
         store.run.error = str(getattr(error, "detail", None) or error)
         store.log("failed", store.run.error)
     finally:
-        ACTIVE.discard(course)
+        ACTIVE.discard(course_dir)

@@ -1,12 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import {
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  CheckIcon,
-  CircleAlertIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, CircleAlertIcon, InfoIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { CoursePlan } from "@/components/dashboard/course-plan";
@@ -87,7 +82,7 @@ function StageFooter({ onBack, children }: { onBack?: () => void; children?: Rea
 }
 
 export function CourseWorkflow() {
-  const { imported, restoring } = useMoodleCourse();
+  const { imported } = useMoodleCourse();
   const [stage, setStage] = useState<StageId | null>(null);
   const [syllabusFiles, setSyllabusFiles] = useState<File[]>([]);
   const [readingFiles, setReadingFiles] = useState<File[]>([]);
@@ -110,7 +105,6 @@ export function CourseWorkflow() {
   }, [course]);
 
   useEffect(() => {
-    if (restoring) return;
     let cancelled = false;
     Promise.all([
       listCourseFiles(course).catch(() => NO_FILES),
@@ -128,7 +122,7 @@ export function CourseWorkflow() {
     return () => {
       cancelled = true;
     };
-  }, [restoring, course]);
+  }, [course]);
 
   const savedSyllabusNames = new Set(stored.syllabus.map((file) => fileName(file.path)));
   const syllabusMoodleFiles = (imported ? findSyllabusFiles(imported.sections) : []).filter(
@@ -238,6 +232,15 @@ export function CourseWorkflow() {
         <h1 className="text-2xl font-semibold tracking-tight">{active.heading}</h1>
         <p className="text-muted-foreground">{active.summary}</p>
       </header>
+
+      <Alert>
+        <InfoIcon />
+        <AlertTitle>Demo: nothing is saved</AlertTitle>
+        <AlertDescription>
+          Your files and notes live only in this tab. Reloading or closing the page deletes them, so
+          download the PDF you want to keep.
+        </AlertDescription>
+      </Alert>
 
       <Tabs value={current} onValueChange={(value) => setStage(value as StageId)} className="gap-6">
         <TabsList

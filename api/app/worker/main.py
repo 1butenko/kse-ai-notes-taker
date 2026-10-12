@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 
 from app.notes import RUN_ID
+from app.session import SessionMiddleware
 from app.storage import sha256
 from app.syllabus import SyllabusExtraction
 from app.worker.config import WorkerSettings, get_worker_settings
@@ -45,6 +46,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="kse-ai-notes-taker-worker", lifespan=lifespan)
+app.add_middleware(SessionMiddleware, enabled=settings.sessions)
 
 
 def upload(settings: WorkerSettings, path: str) -> Path:
@@ -141,16 +143,12 @@ async def generate_notes(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid run: {body.run!r}")
     if opener is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Notes are not configured")
-    if body.course in ACTIVE:
+    course_dir = settings.uploads_dir / body.course
+    if course_dir in ACTIVE:
         raise HTTPException(status.HTTP_409_CONFLICT, "Notes are already being generated")
 
-    store = open_run(
-        settings.uploads_dir / body.course,
-        body.course,
-        body.run,
-        NotesModels.from_settings(settings),
-    )
-    ACTIVE.add(body.course)
+    store = open_run(course_dir, body.course, body.run, NotesModels.from_settings(settings))
+    ACTIVE.add(course_dir)
     background.add_task(run_notes, opener, settings, store, body.plan, body.transcript)
     return store.run
 

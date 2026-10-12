@@ -463,13 +463,13 @@ def test_generate_notes_preconditions(mock_openrouter, no_quarto: Path) -> None:
     assert client.post("/plans/1/notes").status_code == 409
 
     course(no_quarto)
-    ACTIVE.add("1")
+    ACTIVE.add(no_quarto / "1")
     try:
         response = client.post("/plans/1/notes")
         assert response.status_code == 409
         assert response.json()["detail"] == "Notes are already being generated"
     finally:
-        ACTIVE.discard("1")
+        ACTIVE.discard(no_quarto / "1")
     assert client.post("/plans/1/notes", json={"resume": "20990101-000000-abcd"}).status_code == 404
 
 

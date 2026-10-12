@@ -38,23 +38,32 @@ const FULL = "full";
 type NotesPreviewProps = {
   course: string;
   run: string;
+  session: string;
   topicId: string | null;
   document: NotesDocument;
   pdf: boolean;
   topicPdfs: string[];
 };
 
-export function NotesPreview({ course, run, topicId, document, pdf, topicPdfs }: NotesPreviewProps) {
+export function NotesPreview({
+  course,
+  run,
+  session,
+  topicId,
+  document,
+  pdf,
+  topicPdfs,
+}: NotesPreviewProps) {
   const router = useRouter();
   const withPdf = new Set(topicPdfs);
   const section = document.sections.find((s) => s.topics.some((t) => t.topic_id === topicId));
   const note = section?.topics.find((t) => t.topic_id === topicId);
   const url = note
     ? withPdf.has(note.topic_id)
-      ? topicPdfUrl(course, run, note.topic_id)
+      ? topicPdfUrl(course, run, note.topic_id, session)
       : null
     : pdf
-      ? notesFileUrl(course, run, "pdf")
+      ? notesFileUrl(course, run, "pdf", session)
       : null;
 
   const copyLink = async () => {
@@ -108,7 +117,7 @@ export function NotesPreview({ course, run, topicId, document, pdf, topicPdfs }:
           <Item
             size="sm"
             variant={note ? "default" : "muted"}
-            render={<Link href={previewPath(course, run)} />}
+            render={<Link href={previewPath(course, run, undefined, session)} />}
           >
             <ItemContent>
               <ItemTitle>Full notes</ItemTitle>
@@ -124,7 +133,7 @@ export function NotesPreview({ course, run, topicId, document, pdf, topicPdfs }:
                     size="xs"
                     variant={t.topic_id === topicId ? "muted" : "default"}
                     aria-current={t.topic_id === topicId ? "page" : undefined}
-                    render={<Link href={previewPath(course, run, t.topic_id)} />}
+                    render={<Link href={previewPath(course, run, t.topic_id, session)} />}
                   >
                     <ItemContent className="min-w-0">
                       <ItemTitle className="line-clamp-2 block w-full">
@@ -149,7 +158,7 @@ export function NotesPreview({ course, run, topicId, document, pdf, topicPdfs }:
           <Select
             value={topicId ?? FULL}
             onValueChange={(value) =>
-              value && router.push(previewPath(course, run, value === FULL ? undefined : value))
+              value && router.push(previewPath(course, run, value === FULL ? undefined : value, session))
             }
             items={items}
           >

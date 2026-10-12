@@ -6,6 +6,7 @@ from fastapi import Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
+from app.session import HEADER, current_session
 from app.worker_contract import (
     MapRequest,
     MapResponse,
@@ -37,7 +38,7 @@ class WorkerClient:
             reply = await self.http.post(
                 f"{self.base_url}{path}",
                 content=request.model_dump_json(),
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", HEADER: current_session.get() or ""},
             )
         except httpx2.TimeoutException as error:
             print(f"Worker timed out ({path}): {error!r}")

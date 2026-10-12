@@ -169,7 +169,7 @@ The first syllabus you transcribe for a course becomes its **course plan** (badg
 
 The plan is stored in `uploads/<course>/plan.json` (`<course>` is the Moodle course ID, or `local`). Sessions have stable ids. When the plan's syllabus is re-transcribed, each new session takes over the files of the old session with the same label, or else the same number. Files of sessions that no longer exist go to **Unassigned** and are never deleted.
 
-After a refresh the page re-imports the last opened Moodle course (remembered in the browser) and loads its saved files and plan.
+Nothing is remembered in the browser: a refresh starts from an empty dashboard (see [Demo deployment](#demo-deployment)).
 
 | Endpoint | What it does |
 |----------|--------------|
@@ -302,6 +302,17 @@ make logs   # follow container logs
 make down   # stop everything (Langfuse data stays in its kse-ai-notes-taker_langfuse_* volumes)
 make langfuse  # open the Langfuse UI
 ```
+
+## Demo deployment
+
+This branch (`demo`) is a throwaway demo: nothing a visitor does is kept.
+
+- Every page load makes a random session id (`web/src/lib/session.ts`). The web app sends it as the `x-session` header, and as `?session=` on file, PDF and preview links.
+- With `SESSIONS=true` the API and the worker put each session's files in its own folder, `$UPLOADS_DIR/<session>/<course>/...` (`api/app/session.py`). Requests without a valid id get a new, empty folder, so sessions never see each other.
+- Reloading or closing the tab calls `POST /session/end`, which deletes the folder. Folders idle for `SESSION_TTL_MINUTES` (120) are deleted too, and the container's disk is reset on every restart.
+- Moodle, OpenRouter and the PDFs work as usual. Download a PDF to keep it.
+
+Hosting: the web app is the Vercel project `kse-notes` (root directory `web`, `NEXT_PUBLIC_API_URL` and `API_URL` set to the API's URL). The API and the worker run together in the free Render service `kse-notes-api`, built from the `demo` stage of `api/Dockerfile` (`render.yaml`, branch `demo`, secrets `MOODLE_TOKEN` and `OPENROUTER_API_KEY`). CORS allows the project's Vercel domains through `CORS_ORIGIN_REGEX`. The free instance has 512 MB of RAM, so it typesets one PDF at a time (`QUARTO_CONCURRENCY=1`) and writes two topics at a time (`NOTES_CONCURRENCY=2`), and it sleeps after 15 idle minutes (the first request wakes it in about a minute).
 
 ## Production images
 

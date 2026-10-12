@@ -1,0 +1,25 @@
+# Demo backend on Render: API and worker in one container (the `demo` stage of api/Dockerfile).
+services:
+  - type: web
+    name: kse-notes-api
+    runtime: docker
+    plan: free
+    branch: demo
+    dockerContext: ./api
+    dockerfilePath: ./api/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: MOODLE_URL
+        value: https://teaching.kse.org.ua
+      - key: MOODLE_TOKEN
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        value: '["http://localhost:3000"]'
+      - key: CORS_ORIGIN_REGEX
+        value: ^https://kse-notes(-[a-z0-9-]*ihors-projects-21320c42)?\.vercel\.app$
+      - key: QUARTO_CONCURRENCY
+        value: "1"
+      - key: NOTES_CONCURRENCY
+        value: "2"

@@ -9,7 +9,6 @@ from pathlib import Path
 from app.notes import NoteBlock, NotesDocument, NotesSection, Source, TopicNote
 
 QUARTO_TIMEOUT = 600
-TOPIC_RENDERS = 4
 
 MATH = re.compile(r"\$\$.+?\$\$|\$[^$\n]+?\$", re.S)
 FONT_SWITCH = re.compile(r"\{\\(rm|bf|it|sf|tt|cal)\s+([^{}]*)\}")
@@ -307,9 +306,9 @@ async def render_pdf(qmd: Path, quarto: str) -> Path:
     return pdf
 
 
-async def render_pdfs(qmds: list[Path], quarto: str) -> dict[Path, QuartoError]:
-    """Typeset several documents, a few at a time; returns the ones that failed."""
-    gate = asyncio.Semaphore(TOPIC_RENDERS)
+async def render_pdfs(qmds: list[Path], quarto: str, concurrency: int) -> dict[Path, QuartoError]:
+    """Typeset several documents, `concurrency` at a time; returns the ones that failed."""
+    gate = asyncio.Semaphore(concurrency)
     failed: dict[Path, QuartoError] = {}
 
     async def one(qmd: Path) -> None:
