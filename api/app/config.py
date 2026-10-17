@@ -1,5 +1,4 @@
 from functools import lru_cache
-from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -10,10 +9,6 @@ class Settings(BaseSettings):
     app_name: str = "kse-ai-notes-taker"
     environment: str = "local"
     cors_origins: list[str] = ["http://localhost:3000"]
-    uploads_dir: Path = Path("uploads")
-    moodle_url: str
-    moodle_token: str
-    worker_url: str = "http://localhost:8001"
 
 
 @lru_cache

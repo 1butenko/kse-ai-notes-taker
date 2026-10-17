@@ -1,77 +1,13 @@
-import os
+from collections.abc import Iterator
+from pathlib import Path
 
-os.environ.setdefault("MOODLE_URL", "https://moodle.test")
-os.environ.setdefault("MOODLE_TOKEN", "test-token")
-os.environ["LANGFUSE_PUBLIC_KEY"] = ""
-os.environ["LANGFUSE_SECRET_KEY"] = ""
+import pytest
 
-from collections.abc import AsyncIterator, Callable, Iterator  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-import httpx2  # noqa: E402
-import pytest  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.config import Settings, get_settings  # noqa: E402
-from app.main import app  # noqa: E402
-from app.moodle import MoodleClient, get_moodle_client  # noqa: E402
-from app.worker.config import WorkerSettings, get_worker_settings  # noqa: E402
-from app.worker.main import app as worker_app  # noqa: E402
-from app.worker.openrouter import OpenRouterClient, get_openrouter_client  # noqa: E402
-from app.worker_client import WorkerClient, get_worker_client  # noqa: E402
-
-Handler = Callable[[httpx2.Request], httpx2.Response]
-
-
-@pytest.fixture(autouse=True)
-def in_process_worker() -> Iterator[None]:
-    """The API reaches the worker over ASGI, inside the test process."""
-
-    async def override() -> AsyncIterator[WorkerClient]:
-        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=worker_app)) as http:
-            yield WorkerClient("http://worker.test", http)
-
-    app.dependency_overrides[get_worker_client] = override
-    yield
-    app.dependency_overrides.pop(get_worker_client, None)
-    worker_app.dependency_overrides.clear()
+from app.engine import tools
 
 
 @pytest.fixture
-def mock_moodle() -> Iterator[Callable[[Handler], TestClient]]:
-    def install(handler: Handler) -> TestClient:
-        async def override() -> AsyncIterator[MoodleClient]:
-            async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http:
-                yield MoodleClient("https://moodle.test", http)
-
-        app.dependency_overrides[get_moodle_client] = override
-        return TestClient(app)
-
-    yield install
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def mock_openrouter() -> Iterator[Callable[[Handler], TestClient]]:
-    def install(handler: Handler) -> TestClient:
-        async def override() -> AsyncIterator[OpenRouterClient]:
-            async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as http:
-                yield OpenRouterClient(
-                    "https://openrouter.test/api/v1", "or-key", "test/model", http
-                )
-
-        worker_app.dependency_overrides[get_openrouter_client] = override
-        return TestClient(app)
-
-    yield install
-
-
-@pytest.fixture
-def tmp_uploads(tmp_path: Path) -> Iterator[Path]:
-    settings = Settings(uploads_dir=tmp_path)
-    worker_settings = WorkerSettings(uploads_dir=tmp_path)
-    app.dependency_overrides[get_settings] = lambda: settings
-    worker_app.dependency_overrides[get_worker_settings] = lambda: worker_settings
+def qmd_output_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """Write generated .qmd files to a temp folder instead of output/qmd/."""
+    monkeypatch.setattr(tools, "QMD_OUTPUT_DIR", tmp_path)
     yield tmp_path
-    app.dependency_overrides.pop(get_settings, None)
-    worker_app.dependency_overrides.pop(get_worker_settings, None)
