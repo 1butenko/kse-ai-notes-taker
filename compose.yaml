@@ -1,10 +1,6 @@
 # Local development. `docker compose up --build`
 #   web: http://localhost:3000
 #   api: http://localhost:${API_PORT}  (docs at /docs), port set in .env
-#   worker: internal only (http://worker:8000); every model call goes through it
-#   langfuse: http://localhost:3001  (traces of every model call)
-include:
-  - langfuse.compose.yaml
 
 services:
   api:
@@ -19,36 +15,8 @@ services:
       # macOS bind mounts don't always deliver file events; poll so --reload is reliable.
       WATCHFILES_FORCE_POLLING: "true"
       CORS_ORIGINS: '["http://localhost:3000"]'
-      UPLOADS_DIR: /data/uploads
-      WORKER_URL: http://worker:8000
     volumes:
       - ./api:/app
-      - uploads:/data/uploads
-    depends_on:
-      worker:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  # Owns OpenRouter and Langfuse: the api never calls a model itself.
-  worker:
-    build:
-      context: ./api
-      target: dev
-    command: ["uvicorn", "app.worker.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
-    env_file: .env
-    environment:
-      ENVIRONMENT: local
-      WATCHFILES_FORCE_POLLING: "true"
-      UPLOADS_DIR: /data/uploads
-      LANGFUSE_BASE_URL: http://langfuse-web:3000
-      OTEL_SERVICE_NAME: kse-ai-notes-taker-worker
-    volumes:
-      - ./api:/app
-      - uploads:/data/uploads
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -72,6 +40,3 @@ services:
     depends_on:
       api:
         condition: service_healthy
-
-volumes:
-  uploads:

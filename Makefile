@@ -1,6 +1,6 @@
-.PHONY: up down build logs test lint langfuse-env langfuse
+.PHONY: up down build logs test lint engine
 
-up: langfuse-env
+up:
 	docker compose up --build
 
 down:
@@ -16,8 +16,5 @@ lint:
 	cd api && uv run ruff check . && uv run ruff format --check .
 	cd web && npm run lint
 
-langfuse-env:
-	@./scripts/langfuse-env.sh .env
-
-langfuse:
-	open http://localhost:3001
+engine:
+	cd api && uv run python -m app.engine

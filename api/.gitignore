@@ -4,4 +4,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .env
-uploads/
+# Engine inputs (course books) and generated notes
+data/books/*.pdf
+output/

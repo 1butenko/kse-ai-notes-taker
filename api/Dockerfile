@@ -25,9 +25,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --frozen --no-install-project --no-dev
 COPY app ./app
-RUN useradd --create-home --uid 1001 app \
-    && mkdir -p /data/uploads \
-    && chown app /data/uploads
+RUN useradd --create-home --uid 1001 app
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
