@@ -848,13 +848,15 @@ def test_harmonization_preserves_reference_ids_and_citations(mock_openrouter, no
 
 
 @pytest.mark.parametrize(
-    "mutation", ["formula", "equation", "figure", "table", "citation", "locator"]
+    "mutation",
+    ["formula", "equation", "figure", "table", "citation", "locator", "narrative_locator"],
 )
 def test_harmonization_rejects_changes_to_protected_content(mock_openrouter, no_quarto, mutation):
     course(no_quarto)
     stub, _ = model_stub(lambda m, p: passed(True))
     original = (
-        "A solution satisfies $Ax=b$. See [@src-0, p. 10].\n\n$$x=1$$ {#eq-answer}\n\n"
+        "A solution satisfies $Ax=b$. See [@src-0, p. 10].\n\n"
+        "Narrative @src-0 [p. 20] explains.\n\n$$x=1$$ {#eq-answer}\n\n"
         "![Diagram](assets/diagram.png){#fig-diagram}\n\n"
         "| x | y |\n|---|---|\n| 1 | 2 |\n\n: Values {#tbl-values}"
     )
@@ -865,6 +867,7 @@ def test_harmonization_rejects_changes_to_protected_content(mock_openrouter, no_
         "table": ("tbl-values", "tbl-renamed"),
         "citation": ("[@src-0, p. 10]", ""),
         "locator": ("p. 10", "p. 999"),
+        "narrative_locator": ("p. 20", "p. 999"),
     }[mutation]
 
     def handler(request):
@@ -1082,3 +1085,25 @@ def test_proof_folding_allows_only_controlled_callout_attribute():
     ):
         with pytest.raises(QuartoError):
             validate_markdown(f":::: {{.callout-note {attributes}}}\nBody\n::::")
+
+
+@pytest.mark.parametrize(
+    "before,after,allowed",
+    [
+        ("As @src-0 [p. 10] explains.", "As @src-0 [p. 999] explains.", False),
+        ("As @src-0 [p. 10] explains.", "As @src-0 explains.", False),
+        ("As @src-0 explains.", "As @src-0 [p. 999] explains.", False),
+        ("As @src-0 [p. 10] explains.", "Following @src-0 [p. 10], we conclude.", True),
+        ("As @src-0 explains. Prose [one].", "Following @src-0 explains. Prose [two].", True),
+        ("As @src-0\n[p. 10] explains.", "As @src-0\n[p. 999] explains.", False),
+        ("As @src-0 [p.\n10] explains.", "As @src-0 [p.\n999] explains.", False),
+        ("As @src-0\r\r [p. 10] explains.", "As @src-0\r\r [p. 999] explains.", False),
+        ("As [@src-0, p. 10] explains.", "As [@src-0, p. 999] explains.", False),
+        ("$x" + "\\" + "\r" + "$ Topic T2$", "$x" + "\\" + "\r" + "$ Topic T3$", False),
+        ("$x\n\r\r\nTopic T2$", "$x\n\r\r\nTopic T3$", True),
+    ],
+)
+def test_harmonization_preserves_narrative_locators_and_cr_math(before, after, allowed):
+    from app.worker.composition import preserves_content
+
+    assert preserves_content(before, after) is allowed

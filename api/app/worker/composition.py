@@ -78,11 +78,18 @@ def preserves_content(before: str, after: str) -> bool:
 
     def protected(content: str) -> tuple:
         visible = prose(content)
+        citations = visible.replace("\r", "")
         return (
             Counter(content[start:end] for start, end in math_regions(content)),
             Counter(LABEL.findall(visible)),
             Counter(re.findall(r"\[[^\]\n]*@src-[^\]\n]+\]", visible)),
-            Counter(re.findall(r"(?<![\w/])@src-[A-Za-z0-9_.:-]+", visible)),
+            Counter(
+                re.findall(
+                    r"(?<![\w/])@src-[A-Za-z0-9_.:-]+"
+                    r"(?:[ \t]*(?:\n[ \t]*)?\[(?:(?!\n[ \t]*\n)[^\]])*\])?",
+                    citations,
+                )
+            ),
         )
 
     return protected(before) == protected(after)

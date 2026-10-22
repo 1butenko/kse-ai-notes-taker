@@ -95,11 +95,9 @@ def math_end(value: str, start: int, delimiter: str) -> int | None:
     Inline opening/closing whitespace and a digit after the closer prevent a
     match. Both forms allow line breaks but not blank lines. Backslash escapes
     consume their next character, including a literal dollar or escaped space.
+    The caller supplies Pandoc's CR-free input projection.
     """
-    cursor = start + len(delimiter)
-    while cursor < len(value) and value[cursor] == "\r":
-        cursor += 1
-    body_start = cursor
+    cursor = body_start = start + len(delimiter)
     inline = delimiter == "$"
     # Pandoc opening spaceChar: Unicode Zs plus tab/LF/VT/FF. U+2028,
     # U+2029 and NEL remain math; standalone CR is discarded by its reader.
@@ -113,20 +111,11 @@ def math_end(value: str, start: int, delimiter: str) -> int | None:
             return None
         if value.startswith(delimiter, cursor):
             end = cursor + len(delimiter)
-            following = end
-            while following < len(value) and value[following] == "\r":
-                following += 1
             if cursor == body_start or (
-                inline
-                and (
-                    trailing_space or (following < len(value) and value[following] in "0123456789")
-                )
+                inline and (trailing_space or (end < len(value) and value[end] in "0123456789"))
             ):
                 return None
             return end
-        if value[cursor] == "\r":
-            cursor += 1
-            continue
         if value[cursor] == "\\":
             cursor += 2
             trailing_space = False
@@ -136,9 +125,15 @@ def math_end(value: str, start: int, delimiter: str) -> int | None:
     return None
 
 
+def code_projection(value: str) -> tuple[str, list[int]]:
+    """Pandoc discards CR before parsing; retain raw offsets while excluding code."""
+    offsets = [index for index, char in enumerate(value) if char != "\r"]
+    return without_code(value.replace("\r", "")), offsets
+
+
 def math_regions(value: str) -> Iterator[tuple[int, int]]:
-    """Offsets of Pandoc dollar math; code is excluded without changing offsets."""
-    value = without_code(value)
+    """Raw offsets of Pandoc dollar math, after its CR removal and code parsing."""
+    value, offsets = code_projection(value)
     cursor = 0
     while cursor < len(value):
         if value[cursor] == "\\":
@@ -149,7 +144,7 @@ def math_regions(value: str) -> Iterator[tuple[int, int]]:
             if end is None:
                 end = math_end(value, cursor, "$")
             if end is not None:
-                yield cursor, end
+                yield offsets[cursor], offsets[end - 1] + 1
                 cursor = end
                 continue
         cursor += 1
@@ -157,8 +152,10 @@ def math_regions(value: str) -> Iterator[tuple[int, int]]:
 
 def prose(value: str) -> str:
     """Exclude code and Pandoc dollar math without hiding currency prose."""
-    value = without_code(value)
+    projected, offsets = code_projection(value)
     result = list(value)
+    for offset, char in zip(offsets, projected, strict=True):
+        result[offset] = char
     for start, end in math_regions(value):
         result[start:end] = mask_text(value[start:end])
     return "".join(result)

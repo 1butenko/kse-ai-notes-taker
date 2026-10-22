@@ -497,6 +497,7 @@ def test_table_caption_must_remain_adjacent_to_a_table(before):
     [
         r"$\text{Topic T2}$",
         "$\u2028Topic T2$",
+        "$x" + "\\" + "\r" + "$ Topic T2$",
         r"$\text{Cost \$5; Topic T2 @eq-example}$",
         r"$$\text{Topic T2 @eq-example [Other](#T2)}$$ {#eq-display}",
         "$$\n\\text{Topic T2 @eq-example}\n$$ {#eq-display}",
@@ -602,6 +603,10 @@ DOLLAR_CASES = [
     (r"\$Topic T2$", False),
     (r"\\$Topic T2$", True),
     (r"$x \$ Topic T2$", True),
+    ("$x" + "\\" + "\r" + "$ Topic T2$", True),
+    ("$x" + "\\" + "\r\r" + "$ Topic T2$", True),
+    ("$x\n\r\r\nTopic T2$", False),
+    ("$x\n \r\r\nTopic T2$", False),
     (r"$Topic T2\ $", True),
     ("$x$10 and Topic T2$", True),
     ("$$Topic T2$", True),
@@ -677,3 +682,34 @@ def test_dollar_masks_match_installed_pandoc():
         parsed_as_math = contains_math(json.loads(result.stdout))
         assert parsed_as_math == expected, content
         assert ("Topic T2" not in prose(content)) == parsed_as_math, content
+
+
+@pytest.mark.parametrize(
+    "content,is_math",
+    [
+        ("Before. $x" + "\\" + "\r" + "$ Topic T2$ After.", True),
+        ("Before. $x\n\r\r\nTopic T2$ After.", False),
+        ("`$x" + "\\" + "\r" + "$ Topic T2$`", False),
+    ],
+)
+def test_cr_math_keeps_original_offsets_and_code(content, is_math):
+    from app.worker.references import math_regions
+
+    regions = list(math_regions(content))
+    assert bool(regions) is is_math
+    if is_math:
+        assert [content[start:end] for start, end in regions] == [
+            "$x" + "\\" + "\r" + "$ Topic T2$"
+        ]
+
+
+def test_cr_blank_line_keeps_genuine_topic_prose_linkable():
+    from app.worker.references import DEFAULT_REFERENCE_CONTEXT, normalize_links
+
+    notes = cited_document()
+    other = notes.sections[0].topics[0].model_copy(deep=True)
+    other.topic_id, other.blocks[0].id = "T2", "T2.1"
+    notes.sections[0].topics.append(other)
+    assert normalize_links("$x\n\r\r\nTopic T2$", notes, None, DEFAULT_REFERENCE_CONTEXT) == (
+        "$x\n\r\r\n[Topic T2](#sec-T2)$"
+    )
