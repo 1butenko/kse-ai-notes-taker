@@ -496,6 +496,7 @@ def test_table_caption_must_remain_adjacent_to_a_table(before):
     "literal",
     [
         r"$\text{Topic T2}$",
+        "$\u2028Topic T2$",
         r"$\text{Cost \$5; Topic T2 @eq-example}$",
         r"$$\text{Topic T2 @eq-example [Other](#T2)}$$ {#eq-display}",
         "$$\n\\text{Topic T2 @eq-example}\n$$ {#eq-display}",
@@ -589,6 +590,10 @@ DOLLAR_CASES = [
     ("Prices are $5 and Topic T2 costs $10.", False),
     ("$ Topic T2$", False),
     ("$Topic T2 $", False),
+    ("$\r Topic T2$", False),
+    ("$Topic T2 \r$", False),
+    ("$\r\nTopic T2$", False),
+    ("$Topic T2\r\n$", False),
     ("$Topic T2$10", False),
     ("$Topic T2\n\nnext$", False),
     ("$$Topic T2\n\n$$", False),
@@ -601,6 +606,34 @@ DOLLAR_CASES = [
     ("$x$10 and Topic T2$", True),
     ("$$Topic T2$", True),
     ("$Topic T2$$", True),
+]
+
+
+# Bundled Pandoc 3.10 whitespace boundaries: Unicode separators are not all
+# Markdown spaces, and the closing predicate is narrower than the opening one.
+UNICODE_MATH_SPACES = [
+    ("\t", False, False),
+    ("\n", False, False),
+    ("\v", False, True),
+    ("\f", False, True),
+    ("\r", True, True),
+    (" ", False, False),
+    ("\u0085", True, True),
+    ("\u00a0", False, True),
+    ("\u1680", False, True),
+    ("\u2000", False, True),
+    ("\u2007", False, True),
+    ("\u200b", True, True),
+    ("\u2028", True, True),
+    ("\u2029", True, True),
+    ("\u202f", False, True),
+    ("\u205f", False, True),
+    ("\u3000", False, True),
+]
+DOLLAR_CASES += [
+    (content, expected)
+    for char, opening, closing in UNICODE_MATH_SPACES
+    for content, expected in [(f"${char}Topic T2$", opening), (f"$Topic T2{char}$", closing)]
 ]
 
 

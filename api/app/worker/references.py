@@ -1,6 +1,8 @@
 """Stable document references and bibliography without invented source metadata."""
 
 import re
+import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -94,9 +96,16 @@ def math_end(value: str, start: int, delimiter: str) -> int | None:
     match. Both forms allow line breaks but not blank lines. Backslash escapes
     consume their next character, including a literal dollar or escaped space.
     """
-    cursor = body_start = start + len(delimiter)
+    cursor = start + len(delimiter)
+    while cursor < len(value) and value[cursor] == "\r":
+        cursor += 1
+    body_start = cursor
     inline = delimiter == "$"
-    if cursor == len(value) or (inline and value[cursor].isspace()):
+    # Pandoc opening spaceChar: Unicode Zs plus tab/LF/VT/FF. U+2028,
+    # U+2029 and NEL remain math; standalone CR is discarded by its reader.
+    if cursor == len(value) or (
+        inline and (value[cursor] in "\t\n\v\f" or unicodedata.category(value[cursor]) == "Zs")
+    ):
         return None
     trailing_space = False
     while cursor < len(value):
@@ -104,24 +113,32 @@ def math_end(value: str, start: int, delimiter: str) -> int | None:
             return None
         if value.startswith(delimiter, cursor):
             end = cursor + len(delimiter)
+            following = end
+            while following < len(value) and value[following] == "\r":
+                following += 1
             if cursor == body_start or (
-                inline and (trailing_space or (end < len(value) and value[end] in "0123456789"))
+                inline
+                and (
+                    trailing_space or (following < len(value) and value[following] in "0123456789")
+                )
             ):
                 return None
             return end
+        if value[cursor] == "\r":
+            cursor += 1
+            continue
         if value[cursor] == "\\":
             cursor += 2
             trailing_space = False
         else:
-            trailing_space = value[cursor] in " \t\r\n"
+            trailing_space = value[cursor] in " \t\n"
             cursor += 1
     return None
 
 
-def prose(value: str) -> str:
-    """Exclude code and Pandoc dollar math without hiding currency prose."""
+def math_regions(value: str) -> Iterator[tuple[int, int]]:
+    """Offsets of Pandoc dollar math; code is excluded without changing offsets."""
     value = without_code(value)
-    result = list(value)
     cursor = 0
     while cursor < len(value):
         if value[cursor] == "\\":
@@ -132,10 +149,18 @@ def prose(value: str) -> str:
             if end is None:
                 end = math_end(value, cursor, "$")
             if end is not None:
-                result[cursor:end] = mask_text(value[cursor:end])
+                yield cursor, end
                 cursor = end
                 continue
         cursor += 1
+
+
+def prose(value: str) -> str:
+    """Exclude code and Pandoc dollar math without hiding currency prose."""
+    value = without_code(value)
+    result = list(value)
+    for start, end in math_regions(value):
+        result[start:end] = mask_text(value[start:end])
     return "".join(result)
 
 

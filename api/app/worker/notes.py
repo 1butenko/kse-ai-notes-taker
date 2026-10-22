@@ -111,6 +111,7 @@ async def topic_notes(
                     print(f"Topic {topic.id} failed: {error!r}")
                     done = TopicNote(
                         topic_id=topic.id,
+                        objectives=list(topic.objectives),
                         title=topic.title,
                         status="failed",
                         blocks=[],
@@ -175,7 +176,7 @@ async def run_notes(
 
                 store.log("composition", "Harmonizing notation and cross-references")
                 sections = collect(course_plan, notes)
-                edits = await harmonize(client, models.consistency, course_plan, sections)
+                edits = await harmonize(client, models, course_plan, sections)
                 store.log("composition", f"Applied {edits} consistency edits")
 
             document = NotesDocument(

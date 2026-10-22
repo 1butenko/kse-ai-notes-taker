@@ -183,6 +183,7 @@ TopicStatus = Literal["verified", "unresolved", "no_evidence", "failed"]
 
 
 class TopicNote(BaseModel):
+    objectives: list[str] = []
     topic_id: str
     title: str
     status: TopicStatus

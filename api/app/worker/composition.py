@@ -1,13 +1,17 @@
 """Global composition: collect topic notes in plan order and harmonize them with targeted edits."""
 
+import re
+from collections import Counter
+
 from langfuse import get_client
 
-from app.notes import CoursePlan, NotesSection, TopicNote
+from app.notes import CoursePlan, NotesSection, TopicNote, VerificationIssue
 from app.schemas import Strict
 from app.worker.llm import ask, chat
-from app.worker.models import ModelSpec
+from app.worker.models import NotesModels
 from app.worker.openrouter import OpenRouterClient
-from app.worker.topics import registry_text
+from app.worker.references import LABEL, math_regions, prose
+from app.worker.topics import DraftBlock, TopicDraft, add_structure_issues, registry_text, verify
 
 BATCH_TOPICS = 6
 
@@ -34,7 +38,10 @@ them:
 - add cross-references where a block uses a concept from another topic;
 - fix the order in which concepts are introduced when a block uses one before it is defined.
 Each edit gives the block id and its complete new content. Keep the mathematical meaning,
-every formula that is correct, and the language. Do not rewrite blocks that are fine; return
+every formula, every declared equation/figure/table label, every citation and source ID,
+the block IDs, and the language. Keep the intuition → definition/properties → example →
+summary teaching order when evidence supports it; do not fill evidence gaps with inventions.
+Do not rewrite blocks that are fine; return
 no edits when nothing needs changing.
 """
 
@@ -66,9 +73,84 @@ def topic_blocks(note: TopicNote) -> str:
     )
 
 
+def preserves_content(before: str, after: str) -> bool:
+    """Harmonization may change prose, but not formulas, labels or citations."""
+
+    def protected(content: str) -> tuple:
+        visible = prose(content)
+        return (
+            Counter(content[start:end] for start, end in math_regions(content)),
+            Counter(LABEL.findall(visible)),
+            Counter(re.findall(r"\[[^\]\n]*@src-[^\]\n]+\]", visible)),
+            Counter(re.findall(r"(?<![\w/])@src-[A-Za-z0-9_.:-]+", visible)),
+        )
+
+    return protected(before) == protected(after)
+
+
+async def recheck_topic(
+    client: OpenRouterClient, models: NotesModels, plan: CoursePlan, note: TopicNote
+) -> None:
+    """Verify the full displayed topic with its original evidence and saved objectives."""
+    note.status = "unresolved"
+    note.verification_stale = True
+    # Evidence/structure gaps survive an LLM pass: missing readings cannot be harmonized away.
+    retained = [i for i in note.open_issues if i.kind in ("citation", "missing_objective")]
+    try:
+        section, topic = next((s, t) for s, t in plan.topics() if t.id == note.topic_id)
+        topic = topic.model_copy(update={"objectives": list(note.objectives)})
+        evidence_ids = {item.chunk_id: i for i, item in enumerate(note.evidence)}
+        draft = TopicDraft(
+            blocks=[
+                DraftBlock(
+                    kind=b.kind,
+                    title=b.title,
+                    content=b.content,
+                    citations=[evidence_ids[c] for c in b.citations if c in evidence_ids],
+                )
+                for b in note.blocks
+            ]
+        )
+        spec = models.verifier
+        check = await verify(
+            client, spec, plan, section, topic, note.evidence, draft, "verify-harmonized-topic"
+        )
+        if check.escalate:
+            spec = models.escalation
+            check = await verify(
+                client,
+                spec,
+                plan,
+                section,
+                topic,
+                note.evidence,
+                draft,
+                "verify-harmonized-topic-escalated",
+            )
+        note.verifier = spec.model
+        note.rounds += 1
+        note.verification_stale = False
+        note.open_issues = retained + [
+            i for i in check.issues if i.severity == "major" and i not in retained
+        ]
+        note.status = "verified" if check.passed and not note.open_issues else "unresolved"
+    except Exception:
+        # The saved content remains available even if the verification service fails.
+        note.open_issues.append(
+            VerificationIssue(
+                block=None,
+                kind="clarity",
+                severity="major",
+                detail="Changed topic could not be freshly verified after harmonization.",
+                fix="Recheck this exact topic against its evidence before relying on it.",
+            )
+        )
+    add_structure_issues(note)
+
+
 async def harmonize(
     client: OpenRouterClient,
-    spec: ModelSpec,
+    models: NotesModels,
     plan: CoursePlan,
     sections: list[NotesSection],
 ) -> int:
@@ -77,6 +159,7 @@ async def harmonize(
     blocks = {b.id: b for n in notes for b in n.blocks}
     outline = outline_text(sections)
     applied = 0
+    changed: set[str] = set()
     with get_client().start_as_current_observation(
         name="compose-notes", input={"topics": len(notes)}
     ) as span:
@@ -93,12 +176,21 @@ async def harmonize(
                 ConsistencyEdits,
                 "consistency_edits",
                 step="harmonize-notes",
-                spec=spec,
+                spec=models.consistency,
             )
             allowed = {b.id for n in batch for b in n.blocks}
             for edit in result.edits:
-                if edit.block in allowed and edit.content.strip():
+                if (
+                    edit.block in allowed
+                    and edit.content.strip()
+                    and edit.content != blocks[edit.block].content
+                    and preserves_content(blocks[edit.block].content, edit.content)
+                ):
                     blocks[edit.block].content = edit.content
+                    changed.add(edit.block)
                     applied += 1
+        for note in notes:
+            if any(b.id in changed for b in note.blocks):
+                await recheck_topic(client, models, plan, note)
         span.update(output={"edits": applied})
     return applied

@@ -396,6 +396,7 @@ def test_legacy_notes_load_without_losing_ids(legacy_notes) -> None:
     assert document.schema_version == 1
     assert document.language is None
     assert document.sections[0].topics[0].verification_stale is False
+    assert document.sections[0].topics[0].objectives == []
     assert [source.model_dump() for source in document.sources] == payload["sources"]
     assert [item.model_dump() for item in document.sections[0].topics[0].evidence] == (
         payload["sections"][0]["topics"][0]["evidence"]
@@ -510,12 +511,13 @@ def test_generate_notes_runs_every_stage_with_its_model(mock_openrouter, no_quar
     assert models["consistency_edits"] == ("google/gemini-3.7-flash", {"effort": "medium"})
     names = [c[0] for c in calls]
     assert names.count("topic_draft") == 4
-    assert names.count("topic_verification") == 4
+    assert names.count("topic_verification") == 5  # includes the changed full topic
 
     document = NotesDocument.model_validate(body["document"])
     notes = document.sections[0].topics
     assert [n.topic_id for n in notes] == ["T1", "T2"]
-    assert all(n.status == "verified" and n.rounds == 2 for n in notes)
+    assert all(n.status == "verified" for n in notes)
+    assert [n.rounds for n in notes] == [3, 2]
     assert notes[0].blocks[0].content == "REVISED text"
     assert notes[0].blocks[1].content == "Harmonized summary."
     assert notes[0].blocks[0].citations == [notes[0].evidence[0].chunk_id]
@@ -604,7 +606,7 @@ def test_verifier_escalates_to_astra(mock_openrouter, no_quarto: Path) -> None:
     run = mock_openrouter(handler).post("/plans/1/notes").json()["run"]
 
     verifiers = [model for name, model, _ in calls if name == "topic_verification"]
-    assert sorted(verifiers) == ["openai/gpt-6-luna"] * 2 + ["openai/gpt-6.1-sol"] * 2
+    assert sorted(verifiers) == ["openai/gpt-6-luna"] * 3 + ["openai/gpt-6.1-sol"] * 3
     note = TopicNote.model_validate_json(
         (no_quarto / "1/notes" / run["id"] / "topics/T1/note.json").read_text()
     )
@@ -618,8 +620,8 @@ def test_unresolved_topic_is_kept_with_its_open_issues(mock_openrouter, no_quart
 
     note = NotesDocument.model_validate(body["document"]).sections[0].topics[0]
     assert note.status == "unresolved"
-    assert note.rounds == 3
-    assert note.verifier == "openai/gpt-6.1-sol"
+    assert note.rounds == 4
+    assert note.verifier == "openai/gpt-6-luna"  # fresh composition check
     assert [i.kind for i in note.open_issues] == ["unsupported_claim"]
     verifiers = [m for name, m, _ in calls if name == "topic_verification"]
     assert verifiers.count("openai/gpt-6.1-sol") == 2
@@ -756,6 +758,327 @@ def test_block_titles_keep_lists_and_single_qed() -> None:
         block = NoteBlock(id="T1.1", kind=kind, title=title, content=content, citations=[])
         return block_markdown(block, text, "")
 
-    assert render("summary", "Summary", "- one\n- two") == "**Summary.**\n\n- one\n- two"
-    assert render("proof", None, "Done. ∎") == "*Proof.* Done. ∎"
-    assert render("proof", None, "Trivial.") == "*Proof.* Trivial. $\\square$"
+    assert "## Summary\n\n- one\n- two" in render("summary", "Summary", "- one\n- two")
+    assert "## Proof\n\nDone. ∎" in render("proof", None, "Done. ∎")
+    assert "square" not in render("proof", None, "Done. ∎")
+    assert "Trivial. $\\square$" in render("proof", None, "Trivial.")
+
+
+def test_topic_without_example_reports_gap_when_objective_requires_one(legacy_notes) -> None:
+    from app.worker.topics import topic_structure_issues
+
+    directory, run, _, _ = legacy_notes
+    note = load_document(directory, run).sections[0].topics[0]
+    assert topic_structure_issues(note) == []
+    note.objectives = ["Give a worked example of a row operation"]
+    assert any("example" in issue.lower() for issue in topic_structure_issues(note))
+    assert not any("theorem" in issue.lower() for issue in topic_structure_issues(note))
+
+
+def response_with(answer: dict) -> httpx2.Response:
+    return httpx2.Response(200, json={"choices": [{"message": {"content": json.dumps(answer)}}]})
+
+
+def test_structure_does_not_invent_unsupported_definition(mock_openrouter, no_quarto) -> None:
+    import copy
+
+    course(no_quarto)
+    stub, _ = model_stub(lambda m, p: passed(True))
+    plan = copy.deepcopy(PLAN)
+    plan["sections"][0]["topics"][0]["objectives"] = ["Define row equivalence"]
+
+    def handler(request):
+        name = json.loads(request.content)["response_format"]["json_schema"]["name"]
+        if name == "course_plan":
+            return response_with(plan)
+        if name == "evidence_selection":
+            return response_with(SELECTION | {"gaps": ["No definition of row equivalence"]})
+        if name == "topic_draft":
+            return response_with(
+                {
+                    "blocks": [
+                        {
+                            "kind": "overview",
+                            "title": None,
+                            "content": "The material discusses row operations.",
+                            "citations": [0],
+                        }
+                    ]
+                }
+            )
+        return stub(request)
+
+    body = mock_openrouter(handler).post("/plans/1/notes").json()
+    note = body["document"]["sections"][0]["topics"][0]
+    assert note["objectives"] == ["Define row equivalence"]
+    assert [block["kind"] for block in note["blocks"]] == ["overview"]
+    assert note["status"] == "unresolved"
+    assert any("definition" in issue["detail"].lower() for issue in note["open_issues"])
+    assert any(
+        issue["detail"] == "No definition of row equivalence" for issue in note["open_issues"]
+    )
+
+
+def test_harmonization_preserves_reference_ids_and_citations(mock_openrouter, no_quarto) -> None:
+    from app.worker.references import reference_id
+
+    course(no_quarto)
+    stub, _ = model_stub(lambda m, p: passed(True))
+    original = "A solution satisfies $Ax=b$. See [@src-0].\n\n$$x=1$$ {#eq-answer}"
+    changed = original.replace("A solution", "Every solution")
+
+    def handler(request):
+        name = json.loads(request.content)["response_format"]["json_schema"]["name"]
+        if name == "topic_draft":
+            return response_with(draft(original))
+        if name == "consistency_edits":
+            return response_with(
+                {"edits": [{"block": "T1.1", "content": changed, "reason": "clarity"}]}
+            )
+        return stub(request)
+
+    body = mock_openrouter(handler).post("/plans/1/notes").json()
+    note = body["document"]["sections"][0]["topics"][0]
+    block = note["blocks"][0]
+    assert block["id"] == "T1.1" and block["content"] == changed
+    assert block["citations"] == [note["evidence"][0]["chunk_id"]]
+    assert reference_id(note["topic_id"], block["id"]) == "sec-T1--T1_2e_1"
+    assert note["objectives"] == ["Explain linear systems"]
+    assert note["status"] == "verified" and not note["verification_stale"]
+
+
+@pytest.mark.parametrize(
+    "mutation", ["formula", "equation", "figure", "table", "citation", "locator"]
+)
+def test_harmonization_rejects_changes_to_protected_content(mock_openrouter, no_quarto, mutation):
+    course(no_quarto)
+    stub, _ = model_stub(lambda m, p: passed(True))
+    original = (
+        "A solution satisfies $Ax=b$. See [@src-0, p. 10].\n\n$$x=1$$ {#eq-answer}\n\n"
+        "![Diagram](assets/diagram.png){#fig-diagram}\n\n"
+        "| x | y |\n|---|---|\n| 1 | 2 |\n\n: Values {#tbl-values}"
+    )
+    before, after = {
+        "formula": ("Ax=b", "Ax=0"),
+        "equation": ("eq-answer", "eq-renamed"),
+        "figure": ("fig-diagram", "fig-renamed"),
+        "table": ("tbl-values", "tbl-renamed"),
+        "citation": ("[@src-0, p. 10]", ""),
+        "locator": ("p. 10", "p. 999"),
+    }[mutation]
+
+    def handler(request):
+        name = json.loads(request.content)["response_format"]["json_schema"]["name"]
+        if name == "topic_draft":
+            return response_with(draft(original))
+        if name == "consistency_edits":
+            return response_with(
+                {
+                    "edits": [
+                        {
+                            "block": "T1.1",
+                            "content": original.replace(before, after),
+                            "reason": "rewrite",
+                        }
+                    ]
+                }
+            )
+        return stub(request)
+
+    body = mock_openrouter(handler).post("/plans/1/notes").json()
+    assert body["document"]["sections"][0]["topics"][0]["blocks"][0]["content"] == original
+
+
+@pytest.mark.parametrize("outcome", ["major", "error", "pass"])
+def test_harmonized_text_gets_fresh_full_topic_verification(mock_openrouter, no_quarto, outcome):
+    course(no_quarto)
+    stub, _ = model_stub(lambda m, p: passed(True))
+    checked = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        name = body["response_format"]["json_schema"]["name"]
+        prompt = json.dumps(body["messages"])
+        if name == "topic_verification" and "Harmonized summary." in prompt:
+            checked.append(prompt)
+            if outcome == "error":
+                return httpx2.Response(500, json={"error": {"message": "Unavailable"}})
+            return response_with(passed(outcome == "pass"))
+        return stub(request)
+
+    body = mock_openrouter(handler).post("/plans/1/notes").json()
+    note = body["document"]["sections"][0]["topics"][0]
+    assert checked, "The displayed changed topic must be checked again"
+    assert "First text" in checked[0] and "E0" in checked[0] and "Terminology" in checked[0]
+    assert note["blocks"][1]["content"] == "Harmonized summary."
+    assert note["status"] == ("verified" if outcome == "pass" else "unresolved")
+    assert note["verification_stale"] == (outcome == "error")
+    if outcome == "major":
+        assert any(i["kind"] == "unsupported_claim" for i in note["open_issues"])
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "overview",
+        "definition",
+        "theorem",
+        "proof",
+        "example",
+        "intuition",
+        "explanation",
+        "remark",
+        "summary",
+    ],
+)
+def test_every_block_kind_has_localized_callout(kind):
+    block = NoteBlock(
+        id="T1.1", kind=kind, title=None, content="Supported explanation.", citations=[]
+    )
+    for language in ("uk", "en"):
+        text = labels(language)
+        result = block_markdown(block, text, "[@src-0]", target="html")
+        assert ".callout-" in result and f"## {text[kind]}" in result
+        assert "[@src-0]" in result
+
+
+def test_long_proof_folds_only_in_html():
+    block = NoteBlock(
+        id="T1.1", kind="proof", title=None, content="A proof step. " * 150, citations=[]
+    )
+    html = block_markdown(block, labels("uk"), "", target="html")
+    pdf = block_markdown(block, labels("uk"), "", target="pdf")
+    assert 'collapse="true"' in html and 'collapse="true"' not in pdf
+    assert block.content.strip() in html and block.content.strip() in pdf
+
+
+def test_fresh_harmonization_check_keeps_structure_and_evidence_gaps(mock_openrouter, no_quarto):
+    import copy
+
+    course(no_quarto)
+    stub, _ = model_stub(lambda m, p: passed(True))
+    plan = copy.deepcopy(PLAN)
+    plan["sections"][0]["topics"][0]["objectives"] = ["Give a worked example"]
+
+    def handler(request):
+        name = json.loads(request.content)["response_format"]["json_schema"]["name"]
+        if name == "course_plan":
+            return response_with(plan)
+        if name == "evidence_selection":
+            return response_with(SELECTION | {"gaps": ["No supported worked example"]})
+        return stub(request)
+
+    client = mock_openrouter(handler)
+    body = client.post("/plans/1/notes").json()
+    note = body["document"]["sections"][0]["topics"][0]
+    assert note["blocks"][1]["content"] == "Harmonized summary."
+    assert note["status"] == "unresolved" and not note["verification_stale"]
+    assert {i["kind"] for i in note["open_issues"]} == {"citation", "missing_objective"}
+    # Reading a saved note must not inherit a later plan's objectives.
+    path = no_quarto / "1/notes" / body["run"]["id"] / "plan.json"
+    path.write_text(json.dumps(PLAN))
+    reloaded = client.get(f"/plans/1/notes/{body['run']['id']}").json()
+    assert reloaded["document"]["sections"][0]["topics"][0]["objectives"] == [
+        "Give a worked example"
+    ]
+
+
+def study_note_document(language):
+    from app.notes import VerificationIssue
+    from tests.test_notes_references import cited_document
+
+    document = cited_document()
+    document.language = language
+    document.title = "Лінійна алгебра" if language == "uk" else "Linear algebra"
+    document.sections[0].title = "Основи" if language == "uk" else "Foundations"
+    note = document.sections[0].topics[0]
+    note.title = "Розв'язки систем" if language == "uk" else "Solutions of systems"
+    note.objectives = ["Define a solution and give an example"]
+    note.blocks = [
+        NoteBlock(id=f"T1.{index}", kind=kind, title=None, content=content, citations=["c1"])
+        for index, (kind, content) in enumerate(
+            [
+                ("intuition", "We seek a value that makes both sides equal."),
+                ("definition", "A solution of $x+1=3$ is a value satisfying the equality."),
+                ("example", "Substitute $x=2$: $2+1=3$."),
+                ("summary", "Check a solution by substitution."),
+                ("proof", "Subtracting one preserves equality. " * 60 + "Therefore $x=2$."),
+            ],
+            1,
+        )
+    ]
+    note.status = "unresolved"
+    note.open_issues = [
+        VerificationIssue(
+            block=2,
+            kind="citation",
+            severity="major",
+            detail="Further examples need course evidence.",
+            fix="Add a supporting reading.",
+        )
+    ]
+    return document
+
+
+@pytest.mark.parametrize("language", ["en", "uk"])
+def test_native_study_topic_html_pdf_with_sources(tmp_path, monkeypatch, language):
+    import asyncio
+    import os
+    import re
+    from unittest.mock import AsyncMock
+
+    from pypdf import PdfReader
+
+    from app.worker.openrouter import OpenRouterClient
+    from app.worker.quarto import render_document
+    from app.worker.render import topic_to_quarto
+
+    binary = os.environ.get("QUARTO_TEST_BIN")
+    if not binary:
+        pytest.skip("Set QUARTO_TEST_BIN for native study-topic HTML/PDF controls")
+    llm = AsyncMock(side_effect=AssertionError("Rendering must not call an LLM"))
+    monkeypatch.setattr(OpenRouterClient, "complete_json", llm)
+    document = study_note_document(language)
+    section = document.sections[0]
+    sources = {}
+    for target in ("html", "pdf"):
+        source = tmp_path / target / "study.qmd"
+        source.parent.mkdir()
+        source.write_text(topic_to_quarto(document, section, section.topics[0], "en", target))
+        assert source.read_text().count("[@src-1, p. 10]") == 5
+        sources[target] = source
+    output = tmp_path / "output"
+    result = asyncio.run(render_document(sources, output, 0, binary))
+    assert all(a.status == "ready" for a in result), [a.model_dump() for a in result]
+    html = (output / "study.html").read_text()
+    pdf_text = " ".join(page.extract_text() for page in PdfReader(output / "study.pdf").pages)
+    main = re.search(r"<main[\s\S]*?</main>", html)[0]
+    html_text = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", "", main))
+    assert not any(0xE000 <= ord(char) <= 0xF8FF for char in pdf_text)
+    pdf_text = re.sub(r"(?<=[A-Za-z])\s*-\s*(?=[A-Za-z])", "", pdf_text)
+    pdf_text = re.sub(r"\s+", " ", pdf_text)
+    for text in (html_text, pdf_text):
+        assert all(
+            labels(language)[kind] in text for kind in ("definition", "example", "summary", "proof")
+        )
+        assert labels(language)["unverified"] in text
+        assert "Further examples need course evidence." in text
+        assert "Check a solution by substitution." in text
+        assert text.count("Subtracting one preserves equality.") == 60
+        assert "known textbook" in text.lower()
+        assert re.search(r"known textbook.{0,30}, (?:p\. )?10\)", text, re.I)
+    assert "callout-collapse collapse" in html
+    assert not llm.called
+
+
+def test_proof_folding_allows_only_controlled_callout_attribute():
+    from app.worker.quarto import QuartoError, validate_markdown
+
+    validate_markdown(':::: {.callout-note collapse="true"}\n## Proof\n\nBody.\n::::')
+    for attributes in (
+        'collapse="false"',
+        'collapse="true" onclick="alert(1)"',
+        'style="color:red"',
+    ):
+        with pytest.raises(QuartoError):
+            validate_markdown(f":::: {{.callout-note {attributes}}}\nBody\n::::")

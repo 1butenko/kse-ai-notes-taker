@@ -358,6 +358,7 @@ export type NoteBlock = {
 export type TopicStatus = "verified" | "unresolved" | "no_evidence" | "failed";
 
 export type TopicNote = {
+  objectives: string[];
   topic_id: string;
   title: string;
   status: TopicStatus;

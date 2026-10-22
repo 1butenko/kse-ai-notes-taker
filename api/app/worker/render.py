@@ -62,7 +62,6 @@ def clean_math(formula: str) -> str:
     return separate_scripts(BARE_SCRIPT.sub(r"\1{\2}", formula))
 
 
-STARTS_BLOCK = re.compile(r"\s*(?:[-*+] |\d+[.)] |\$\$|>|\|)")
 QED = re.compile(r"(∎|□|■|\\square|\\blacksquare|\\qed|\\Box)\$?\s*$")
 
 
@@ -71,6 +70,10 @@ def typst_safe(text: str) -> str:
 
 
 CALLOUTS = {
+    "overview": "note",
+    "explanation": "note",
+    "summary": "important",
+    "proof": "note",
     "definition": "note",
     "theorem": "important",
     "example": "tip",
@@ -80,6 +83,8 @@ CALLOUTS = {
 
 LABELS = {
     "en": {
+        "overview": "Overview",
+        "explanation": "Explanation",
         "definition": "Definition",
         "theorem": "Theorem",
         "proof": "Proof",
@@ -97,6 +102,8 @@ LABELS = {
         "meaning": "Meaning",
     },
     "uk": {
+        "overview": "Огляд",
+        "explanation": "Пояснення",
         "definition": "Означення",
         "theorem": "Теорема",
         "proof": "Доведення",
@@ -139,19 +146,19 @@ def block_markdown(
     title = transform(block.title) if block.title else text.get(block.kind)
     body = transform(block.content.strip())
     footer = f"\n\n{cite}" if cite else ""
-    callout = CALLOUTS.get(block.kind)
-    if callout:
-        name = text.get(block.kind, "")
-        heading = f"{name}: {title}" if block.title and name else (title or "")
-        return f"{fence} {{.callout-{callout}}}\n## {heading}\n\n{body}{footer}\n{fence}"
-    lead = (title or "") + "." if title and block.kind != "overview" else ""
-    separator = "\n\n" if STARTS_BLOCK.match(body) else " "
-    if block.kind == "proof":
-        end = "" if QED.search(body) else " $\\square$"
-        return f"*{lead}*{separator}{body}{end}{footer}"
-    if lead:
-        return f"**{lead}**{separator}{body}{footer}"
-    return f"{body}{footer}"
+    if block.kind == "proof" and not QED.search(body):
+        body += " $\\square$"
+    name = text[block.kind]
+    heading = f"{name}: {title}" if block.title and block.title != name else name
+    collapse = (
+        ' collapse="true"'
+        if target == "html" and block.kind == "proof" and len(body) > 1600
+        else ""
+    )
+    return (
+        f"{fence} {{.callout-{CALLOUTS[block.kind]}{collapse}}}\n"
+        f"## {heading}\n\n{body}{footer}\n{fence}"
+    )
 
 
 def front_matter(
@@ -175,6 +182,7 @@ def front_matter(
             "    mainfont: DejaVu Serif",
             "    fontsize: 11pt",
             "    keep-typ: true",
+            "    callout-icon: false",
         ],
         "html": [
             "    html-math-method: mathjax",
@@ -231,13 +239,13 @@ def topic_body(
     context: ReferenceContext = DEFAULT_REFERENCE_CONTEXT,
 ) -> list[str]:
     transform = typst_safe if target == "pdf" else str
-    if note.status == "no_evidence":
-        return [f"*{text['no_evidence']}*\n"]
     body = []
-    if note.status != "verified":
+    if note.status != "verified" or note.verification_stale or note.open_issues:
         body.append(f"::: {{.callout-caution}}\n## {text['unverified']}\n")
         body += [f"- {transform(i.detail)}" for i in note.open_issues] or ["-"]
         body.append(":::\n")
+    if note.status == "no_evidence":
+        body.append(f"*{text['no_evidence']}*\n")
     for block in note.blocks:
         content = normalize_links(block.content, document, current_topic, context)
         prepared = block.model_copy(update={"content": content})

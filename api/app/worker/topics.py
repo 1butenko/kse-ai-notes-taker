@@ -1,6 +1,7 @@
 """Topic generation: select evidence, synthesize a note, verify it and revise with feedback."""
 
 import json
+import re
 from typing import Literal
 
 from langfuse import get_client
@@ -156,9 +157,11 @@ WRITER_PROMPT = """\
 You write one topic of a university course's lecture notes from the selected evidence.
 
 Combine the readings into one clear explanation; do not summarise them one by one.
-- Blocks, in teaching order: overview, then definitions, theorems (with every assumption),
-  proofs or proof sketches when the evidence has them, intuition, worked examples,
-  explanation and remarks as needed, and a short summary.
+- Teach intuition first (overview or intuition), then definitions/properties, a worked example,
+  and a short summary when the evidence supports them and the objectives need them.
+  Include theorems (with every assumption) or proofs only when relevant to the objectives
+  and supported by evidence. No topic must contain a theorem. Never invent a definition,
+  example, fact, source, author, year or page to fill a template; leave unsupported gaps clear.
 - content is Pandoc Markdown. Mathematics in standard LaTeX: $...$ inline, $$...$$ for
   display; \\mathrm{...} rather than {\\rm ...}, no custom macros. Put a blank line before
   lists. Do not use headings (#) inside content; the block title is the heading.
@@ -262,7 +265,10 @@ Check every block (B0, B1, ...):
 - Equations, derivations and worked examples are mathematically correct (math_error).
 - Theorems state all their assumptions (assumption).
 - Notation and terms follow the shared registry (notation).
-- Every objective and success criterion is met (missing_objective; block null).
+- Every objective and success criterion is met (missing_objective; block null). Evaluate
+  intuition, definitions/properties, worked examples and summary against the objectives and
+  available evidence; do not require a theorem in every topic. Missing evidence is a visible
+  gap, never a reason to invent material to complete a template.
 - The explanation is clear enough for a student (clarity).
 For each problem give the block number, what is wrong and the exact fix. severity "major"
 when a student would learn something false or miss an objective; "minor" otherwise.
@@ -303,6 +309,60 @@ async def verify(
     return check
 
 
+# Explicit objective cues only: legacy/unknown objectives impose no template.
+STRUCTURE_CUES = {
+    "definition": r"\bdefin(?:e|ition|itions)\b|означенн|визначенн|визначити",
+    "example": r"\bexamples?\b|приклад",
+    "intuition": r"\bintuition\b|інтуї",
+    "proof": r"\b(?:prove|proof)\b|довести|доведенн",
+    "summary": r"\b(?:summary|summari[sz]e)\b|підсум",
+}
+
+
+def topic_structure_issues(note: TopicNote) -> list[str]:
+    """Report objective-dependent teaching gaps without inventing missing content."""
+    issues = []
+    objectives = " ".join(note.objectives).lower()
+    evidence = {item.chunk_id for item in note.evidence}
+    for kind, cue in STRUCTURE_CUES.items():
+        if not re.search(cue, objectives):
+            continue
+        blocks = [block for block in note.blocks if block.kind == kind and block.content.strip()]
+        if not blocks:
+            issues.append(f"Objective requires a {kind} block; supporting material may be missing.")
+        elif not any(evidence.intersection(block.citations) for block in blocks):
+            issues.append(f"The required {kind} has no cited supporting evidence.")
+    return issues
+
+
+def evidence_gap(detail: str) -> VerificationIssue:
+    return VerificationIssue(
+        block=None,
+        kind="citation",
+        severity="major",
+        detail=detail,
+        fix="Add supporting course evidence; do not invent missing content.",
+    )
+
+
+def add_structure_issues(note: TopicNote) -> None:
+    """Use the existing open issues/status for deterministic learning gaps."""
+    existing = {issue.detail for issue in note.open_issues}
+    for detail in topic_structure_issues(note):
+        if detail not in existing:
+            note.open_issues.append(
+                VerificationIssue(
+                    block=None,
+                    kind="missing_objective",
+                    severity="major",
+                    detail=detail,
+                    fix="Add supporting course evidence before completing this objective.",
+                )
+            )
+    if note.open_issues and note.status == "verified":
+        note.status = "unresolved"
+
+
 def to_note(
     topic: PlannedTopic,
     draft: TopicDraft,
@@ -328,6 +388,7 @@ def to_note(
     ]
     return TopicNote(
         topic_id=topic.id,
+        objectives=list(topic.objectives),
         title=topic.title,
         status=status,
         blocks=blocks,
@@ -369,13 +430,14 @@ async def generate_topic(
             span.update(level="WARNING", status_message="No evidence")
             return TopicNote(
                 topic_id=topic.id,
+                objectives=list(topic.objectives),
                 title=topic.title,
                 status="no_evidence",
                 blocks=[],
                 evidence=[],
                 rounds=0,
                 verifier=None,
-                open_issues=[],
+                open_issues=[evidence_gap(gap) for gap in gaps],
             )
 
         store.log("topics", f"{topic.id}: writing from {len(evidence)} excerpts")
@@ -427,6 +489,7 @@ async def generate_topic(
 
         assert check is not None
         open_issues = [i for i in check.issues if i.severity == "major"]
+        open_issues += [evidence_gap(gap) for gap in gaps]
         note = to_note(
             topic,
             draft,
@@ -436,6 +499,7 @@ async def generate_topic(
             spec.model,
             open_issues,
         )
+        add_structure_issues(note)
         span.update(
             output={"status": note.status, "blocks": len(note.blocks), "rounds": round},
             level="DEFAULT" if check.passed else "WARNING",

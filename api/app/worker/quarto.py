@@ -74,6 +74,9 @@ def validate_markdown(value: str, assets: set[str] | None = None) -> None:
     prose = re.sub(r"\$\$.+?\$\$|\$[^$\n]+?\$", "", value, flags=re.S)
     if re.search(r"<\s*(?:/?[A-Za-z][^>\n]*>|!|\?)", prose):
         raise QuartoError("Unsafe Markdown: raw HTML is not supported")
+    # Only this fixed, inert presentation attribute is emitted for long proofs.
+    # Remove it from the validation view, never from the saved/rendered source.
+    prose = re.sub(r'(?m)^:{3,} \{\.callout-note collapse="true"\}$', "", prose)
     if re.search(r"\\[A-Za-z]+|\{[^{}]*=", prose):
         raise QuartoError("Unsafe Markdown: raw TeX and custom attributes are not supported")
 
