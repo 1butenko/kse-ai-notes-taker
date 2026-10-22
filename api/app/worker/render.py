@@ -5,8 +5,17 @@ import json
 import re
 from pathlib import Path
 
-from app.notes import NoteBlock, NotesDocument, NotesSection, RenderFormat, Source, TopicNote
+from app.notes import NoteBlock, NotesDocument, NotesSection, RenderFormat, TopicNote
 from app.worker.quarto import QuartoError, render_document, validate_markdown
+from app.worker.references import (
+    DEFAULT_REFERENCE_CONTEXT,
+    ReferenceContext,
+    build_reference_data,
+    citation_markdown,
+    normalize_links,
+    reference_id,
+    validate_references,
+)
 
 MATH = re.compile(r"\$\$.+?\$\$|\$[^$\n]+?\$", re.S)
 FONT_SWITCH = re.compile(r"\{\\(rm|bf|it|sf|tt|cal)\s+([^{}]*)\}")
@@ -115,31 +124,21 @@ def yaml(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def source_ref(source: Source) -> str:
-    pages = (
-        f"PDF pp. {source.pdf_start}–{source.pdf_end}"
-        if source.pdf_start and source.pdf_end and source.pdf_start != source.pdf_end
-        else f"PDF p. {source.pdf_start}"
-        if source.pdf_start
-        else None
-    )
-    return ", ".join(p for p in (source.title, source.label, pages) if p)
-
-
 def block_markdown(
     block: NoteBlock,
     text: dict[str, str],
     cite: str,
     fence: str = "::::",
     target: RenderFormat = "pdf",
+    assets: set[str] | None = None,
 ) -> str:
-    validate_markdown(block.content)
+    validate_markdown(block.content, assets)
     if block.title:
         validate_markdown(block.title)
     transform = typst_safe if target == "pdf" else str
     title = transform(block.title) if block.title else text.get(block.kind)
     body = transform(block.content.strip())
-    footer = f"\n\n*{text['sources']}: {cite}*" if cite else ""
+    footer = f"\n\n{cite}" if cite else ""
     callout = CALLOUTS.get(block.kind)
     if callout:
         name = text.get(block.kind, "")
@@ -155,45 +154,6 @@ def block_markdown(
     return f"{body}{footer}"
 
 
-class Citations:
-    """Numbers sources in order of first citation and lists them as references."""
-
-    def __init__(self, document: NotesDocument, text: dict[str, str]) -> None:
-        self.text = text
-        self.sources = {s.id: s for s in document.sources}
-        self.chunks = {
-            e.chunk_id: e
-            for section in document.sections
-            for note in section.topics
-            for e in note.evidence
-        }
-        self.numbers: dict[int, int] = {}
-
-    def __call__(self, block: NoteBlock) -> str:
-        pages: dict[int, list[str]] = {}
-        for chunk_id in block.citations:
-            item = self.chunks.get(chunk_id)
-            if item is None:
-                continue
-            number = self.numbers.setdefault(item.source, len(self.numbers) + 1)
-            listed = pages.setdefault(number, [])
-            if item.page and item.page not in listed:
-                listed.append(item.page)
-        return "; ".join(
-            f"[{n}{', ' + ', '.join(p) if p else ''}]" for n, p in sorted(pages.items())
-        )
-
-    def references(self) -> list[str]:
-        if not self.numbers:
-            return []
-        ordered = sorted(self.numbers.items(), key=lambda n: n[1])
-        return [
-            f"# {self.text['references']} {{.unnumbered}}\n",
-            *(f"{number}. {source_ref(self.sources[source])}" for source, number in ordered),
-            "",
-        ]
-
-
 def front_matter(
     title: str,
     date: str,
@@ -201,6 +161,7 @@ def front_matter(
     subtitle: str | None = None,
     outline: bool = True,
     target: RenderFormat = "pdf",
+    references: list[dict] | None = None,
 ) -> str:
     if target not in ("html", "pdf", "docx"):
         raise ValueError(f"Unsupported render format: {target}")
@@ -234,14 +195,21 @@ def front_matter(
             f"date: {yaml(date[:10])}",
             f"lang: {yaml(language if language in ('uk', 'en') else 'en')}",
             f"toc-title: {yaml('Зміст' if language == 'uk' else 'Table of contents')}",
+            "language:",
+            f"  title-block-published: {yaml(created_label)}",
+            f"  section-title-references: {yaml(labels(language)['references'])}",
             *(
                 [
-                    "language:",
-                    f"  title-block-published: {yaml(created_label)}",
+                    '  crossref-fig-title: "Рисунок"',
+                    '  crossref-tbl-title: "Таблиця"',
+                    '  crossref-sec-prefix: "Розділ"',
+                    '  crossref-eq-prefix: "Рівняння"',
                 ]
-                if target == "html"
+                if language == "uk"
                 else []
             ),
+            "citeproc: true",
+            "references: " + json.dumps(references or [], ensure_ascii=False),
             "execute:",
             "  enabled: false",
             "format:",
@@ -255,7 +223,12 @@ def front_matter(
 
 
 def topic_body(
-    note: TopicNote, text: dict[str, str], cite: Citations, target: RenderFormat = "pdf"
+    note: TopicNote,
+    text: dict[str, str],
+    document: NotesDocument,
+    target: RenderFormat = "pdf",
+    current_topic: str | None = None,
+    context: ReferenceContext = DEFAULT_REFERENCE_CONTEXT,
 ) -> list[str]:
     transform = typst_safe if target == "pdf" else str
     if note.status == "no_evidence":
@@ -265,10 +238,35 @@ def topic_body(
         body.append(f"::: {{.callout-caution}}\n## {text['unverified']}\n")
         body += [f"- {transform(i.detail)}" for i in note.open_issues] or ["-"]
         body.append(":::\n")
-    body += [
-        block_markdown(block, text, cite(block), target=target) + "\n" for block in note.blocks
-    ]
+    for block in note.blocks:
+        content = normalize_links(block.content, document, current_topic, context)
+        prepared = block.model_copy(update={"content": content})
+        body.append(
+            f"::::: {{#{reference_id(note.topic_id, block.id)}}}\n\n"
+            + block_markdown(
+                prepared,
+                text,
+                citation_markdown(note, block),
+                target=target,
+                assets={asset.path for asset in document.assets},
+            )
+            + "\n\n:::::\n"
+        )
     return body
+
+
+def checked_references(document: NotesDocument) -> list[dict]:
+    issues = validate_references(document)
+    if issues:
+        raise QuartoError("Invalid references: " + "; ".join(issues))
+    references = build_reference_data(document)
+    for item in references:
+        validate_markdown(item["title"])
+    return references
+
+
+def bibliography(text: dict[str, str]) -> list[str]:
+    return [f"# {text['references']} {{.unnumbered}}\n", "::: {#refs}\n:::\n"]
 
 
 def footer(document: NotesDocument, text: dict[str, str]) -> str:
@@ -276,11 +274,16 @@ def footer(document: NotesDocument, text: dict[str, str]) -> str:
     return f"\n*{text['generated']}: {document.created_at} · {models}*\n"
 
 
-def to_quarto(document: NotesDocument, language: str | None, target: RenderFormat = "pdf") -> str:
+def to_quarto(
+    document: NotesDocument,
+    language: str | None,
+    target: RenderFormat = "pdf",
+    context: ReferenceContext = DEFAULT_REFERENCE_CONTEXT,
+) -> str:
     language = document.language or language
     transform = typst_safe if target == "pdf" else str
     text = labels(language)
-    cite = Citations(document, text)
+    references = checked_references(document)
     body = []
     if document.notation:
         body.append(f"# {text['notation']} {{.unnumbered}}\n")
@@ -295,13 +298,18 @@ def to_quarto(document: NotesDocument, language: str | None, target: RenderForma
     for section in document.sections:
         body.append(f"# {section.title}\n")
         for note in section.topics:
-            body.append(f"## {note.title}\n")
-            body += topic_body(note, text, cite, target)
+            body.append(f"## {note.title} {{#{reference_id(note.topic_id)}}}\n")
+            body += topic_body(note, text, document, target, context=context)
 
-    body += cite.references()
+    if references:
+        body += bibliography(text)
     body.append(footer(document, text))
-    header = front_matter(document.title, document.created_at, language, target=target)
-    return checked_document(header, body, document.title)
+    header = front_matter(
+        document.title, document.created_at, language, target=target, references=references
+    )
+    return checked_document(
+        header, body, document.title, assets={asset.path for asset in document.assets}
+    )
 
 
 def topic_to_quarto(
@@ -310,12 +318,17 @@ def topic_to_quarto(
     note: TopicNote,
     language: str | None,
     target: RenderFormat = "pdf",
+    context: ReferenceContext = DEFAULT_REFERENCE_CONTEXT,
 ) -> str:
     """One topic as a standalone document: its blocks and only the sources it cites."""
     language = document.language or language
     text = labels(language)
-    cite = Citations(document, text)
-    body = topic_body(note, text, cite, target) + cite.references() + [footer(document, text)]
+    references = checked_references(document)
+    body = [f"# {note.title} {{#{reference_id(note.topic_id)}}}\n"]
+    body += topic_body(note, text, document, target, note.topic_id, context)
+    if references:
+        body += bibliography(text)
+    body.append(footer(document, text))
     header = front_matter(
         note.title,
         document.created_at,
@@ -323,15 +336,25 @@ def topic_to_quarto(
         subtitle=f"{section.title} · {document.title}",
         outline=False,
         target=target,
+        references=references,
     )
-    return checked_document(header, body, note.title, section.title, document.title)
+    return checked_document(
+        header,
+        body,
+        note.title,
+        section.title,
+        document.title,
+        assets={asset.path for asset in document.assets},
+    )
 
 
-def checked_document(header: str, body: list[str], *titles: str) -> str:
+def checked_document(
+    header: str, body: list[str], *titles: str, assets: set[str] | None = None
+) -> str:
     for title in titles:
         validate_markdown(title)
     markdown = "\n".join(body)
-    validate_markdown(markdown)
+    validate_markdown(markdown, assets)
     return header + "\n\n" + markdown
 
 

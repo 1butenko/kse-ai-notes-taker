@@ -214,7 +214,18 @@ class NotesSection(BaseModel):
     topics: list[TopicNote]
 
 
+class NoteAsset(BaseModel):
+    id: str
+    name: str
+    path: str
+    media_type: Literal["image/png", "image/jpeg"]
+    sha256: str
+    width: int
+    height: int
+
+
 class NotesDocument(BaseModel):
+    assets: list[NoteAsset] = []
     schema_version: int = 1
     language: Literal["uk", "en"] | None = None
     course: str

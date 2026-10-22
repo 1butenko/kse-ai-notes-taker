@@ -8,6 +8,7 @@ dependencies = [
     "httpx2>=2.13.1",
     "langfuse>=4.16.0",
     "mammoth>=1.13.0",
+    "pillow>=12.0.0",
     "pydantic-settings>=2.15.0",
     "pypdf>=6.19.0",
     "python-multipart>=0.0.32",

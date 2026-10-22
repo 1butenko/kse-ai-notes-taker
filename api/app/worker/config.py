@@ -3,10 +3,13 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.config import PublicAPIURL
+
 
 class WorkerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=("../.env", ".env"), extra="ignore")
 
+    public_api_url: PublicAPIURL = "http://localhost:8000"
     environment: str = "local"
     uploads_dir: Path = Path("uploads")
     openrouter_url: str = "https://openrouter.ai/api/v1"

@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from app.note_assets import asset_resources
 from app.notes import (
     CoursePlan,
     Inputs,
@@ -24,6 +25,7 @@ from app.worker.models import NotesModels
 from app.worker.openrouter import Opener, OpenRouterClient
 from app.worker.planning import plan_course
 from app.worker.quarto import QuartoError, render_document
+from app.worker.references import ReferenceContext
 from app.worker.render import to_quarto, topic_to_quarto
 from app.worker.sources import Retriever, build_inputs
 from app.worker.topics import generate_topic
@@ -220,21 +222,24 @@ async def render_notes_outputs(
         prefix = f"topics/{note.topic_id}/" if note else ""
         stem = "note" if note else "notes"
         prepared = {}
+        resources = {}
+        context = ReferenceContext(public_api_url=settings.public_api_url)
         results = []
         for target in ("html", "pdf"):
             try:
                 source = (
-                    topic_to_quarto(document, section, note, document.language, target)
+                    topic_to_quarto(document, section, note, document.language, target, context)
                     if note
-                    else to_quarto(document, document.language, target)
+                    else to_quarto(document, document.language, target, context)
                 )
+                resources.update(asset_resources(store.directory, document.assets, source))
                 name = (
                     f"{prefix}{stem}.qmd"
                     if target == "pdf"
                     else (f"{prefix}sources/html/{stem}.qmd")
                 )
                 prepared[target] = store.write(name, source)
-            except (QuartoError, OSError) as error:
+            except (QuartoError, OSError, ValueError) as error:
                 results.append(
                     RenderedArtifact(
                         format=target,
@@ -246,7 +251,7 @@ async def render_notes_outputs(
                 )
         async with gate:
             results += await render_document(
-                prepared, store.directory / prefix, 0, settings.quarto_bin
+                prepared, store.directory / prefix, 0, settings.quarto_bin, resources=resources
             )
         for artifact in results:
             artifact.path = prefix + artifact.path

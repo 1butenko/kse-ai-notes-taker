@@ -539,15 +539,19 @@ def test_generate_notes_runs_every_stage_with_its_model(mock_openrouter, no_quar
     assert "  typst:" in qmd
     assert "# Foundations" in qmd and "## Linear systems" in qmd
     assert ":::: {.callout-note}\n## Definition: Key idea" in qmd
-    assert "*Sources: [1, PDF p. 1]*" in qmd
-    assert "1. Hefferon. Linear Algebra., Ch. 1, PDF pp. 1–2" in qmd
+    assert "citeproc: true" in qmd and "[@src-0, PDF p. 1]" in qmd
+    references = json.loads(
+        next(line[12:] for line in qmd.splitlines() if line.startswith("references: "))
+    )
+    assert {"id": "src-0", "type": "document", "title": "Hefferon. Linear Algebra."} in references
+    assert "*Sources:" not in qmd
 
     topic_qmd = (folder / "topics/T2/note.qmd").read_text()
     assert 'title: "Vector spaces"' in topic_qmd
     assert 'subtitle: "Foundations · Linear Algebra"' in topic_qmd
     assert "toc: false" in topic_qmd and "# Foundations" not in topic_qmd
     assert "Linear systems" not in topic_qmd and "Notation" not in topic_qmd
-    assert "*Sources: [1]*" in topic_qmd and "1. handout.md" in topic_qmd
+    assert "[@src-1]" in topic_qmd and '"title": "handout.md"' in topic_qmd
 
     listed = client.get("/plans/1/notes").json()
     assert [r["id"] for r in listed] == [run["id"]]

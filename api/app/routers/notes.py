@@ -1,11 +1,14 @@
+import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, TypeAdapter
 
 from app.config import Settings, get_settings
+from app.note_assets import MAX_UPLOAD_BYTES, import_asset, load_asset, validated_asset_path
 from app.notes import (
+    NoteAsset,
     NotesDocument,
     NotesRun,
     RenderedArtifact,
@@ -119,6 +122,60 @@ def get_run(
     course: str, run: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> NotesRunView:
     return view(settings, course, find_run(settings, course, run))
+
+
+class NoteAssetUpload(BaseModel):
+    asset: NoteAsset
+    markdown_path: str
+
+
+@router.post("/{course}/notes/{run}/assets", status_code=status.HTTP_201_CREATED)
+async def upload_note_asset(
+    course: str,
+    run: str,
+    file: UploadFile,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> NoteAssetUpload:
+    """Import a resource without changing the saved note content or its revision."""
+    find_run(settings, course, run)
+    try:
+        data = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Image exceeds 10 MiB")
+        asset = await asyncio.to_thread(
+            import_asset,
+            run_dir(course_dir(settings, course), run),
+            data,
+            file.filename or "image",
+        )
+    except ValueError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    finally:
+        await file.close()
+    return NoteAssetUpload(asset=asset, markdown_path=asset.path)
+
+
+@router.get("/{course}/notes/{run}/assets/{asset_id}")
+def download_note_asset(
+    course: str,
+    run: str,
+    asset_id: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> FileResponse:
+    find_run(settings, course, run)
+    directory = run_dir(course_dir(settings, course), run)
+    try:
+        asset = load_asset(directory, asset_id)
+        path = validated_asset_path(directory, asset)
+    except (ValueError, OSError) as error:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Note asset not found") from error
+    return FileResponse(
+        path,
+        media_type=asset.media_type,
+        filename=asset.name,
+        content_disposition_type="inline",
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.get("/{course}/notes/{run}/{kind}")
