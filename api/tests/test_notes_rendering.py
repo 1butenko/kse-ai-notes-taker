@@ -337,3 +337,22 @@ def test_ordinary_prose_can_name_data_and_files():
 
     content = "Data: a vector. Source file: lecture.pdf."
     assert content in to_quarto(document(content), "en", "html")
+
+
+def test_separate_mathematical_inequalities_are_not_raw_html():
+    from app.worker.render import to_quarto
+
+    content = "Two inequalities: $a<b$ and $c>d$."
+    for target in ("html", "pdf", "docx"):
+        assert content in to_quarto(document(content), "en", target)
+
+
+def test_math_spans_still_reject_external_resource_commands():
+    import pytest
+
+    from app.worker.quarto import QuartoError
+    from app.worker.render import to_quarto
+
+    for target in ("html", "pdf", "docx"):
+        with pytest.raises(QuartoError, match="external TeX resources"):
+            to_quarto(document(r"$\input{/etc/passwd}$"), "en", target)
