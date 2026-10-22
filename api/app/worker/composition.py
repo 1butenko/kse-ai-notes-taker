@@ -10,7 +10,7 @@ from app.schemas import Strict
 from app.worker.llm import ask, chat
 from app.worker.models import NotesModels
 from app.worker.openrouter import OpenRouterClient
-from app.worker.references import LABEL, math_regions, prose
+from app.worker.references import BLANK_LINE, LABEL, math_regions, prose
 from app.worker.topics import DraftBlock, TopicDraft, add_structure_issues, registry_text, verify
 
 BATCH_TOPICS = 6
@@ -73,23 +73,43 @@ def topic_blocks(note: TopicNote) -> str:
     )
 
 
+def source_citations(content: str) -> list[str]:
+    """Keep the complete attached citation suffix, including nested/escaped brackets."""
+    visible = prose(content).replace("\r", "")
+    offsets = [index for index, char in enumerate(content) if char != "\r"]
+    citations = []
+    for match in re.finditer(r"(?<![\w/])@src-[A-Za-z0-9_.:-]+", visible):
+        end = match.end()
+        space = re.match(r"[ \t]*(?:\n[ \t]*)?", visible[end:])
+        cursor = end + space.end()
+        if visible[cursor : cursor + 1] == "[":
+            depth = 0
+            while cursor < len(visible):
+                if BLANK_LINE.match(visible, cursor):
+                    break
+                char = visible[cursor]
+                if char == "\\":
+                    cursor += 2
+                    continue
+                depth += {"[": 1, "]": -1}.get(char, 0)
+                cursor += 1
+                if depth == 0:
+                    end = cursor
+                    break
+        citations.append(content[offsets[match.start()] : offsets[end - 1] + 1])
+    return citations
+
+
 def preserves_content(before: str, after: str) -> bool:
     """Harmonization may change prose, but not formulas, labels or citations."""
 
     def protected(content: str) -> tuple:
         visible = prose(content)
-        citations = visible.replace("\r", "")
         return (
             Counter(content[start:end] for start, end in math_regions(content)),
             Counter(LABEL.findall(visible)),
             Counter(re.findall(r"\[[^\]\n]*@src-[^\]\n]+\]", visible)),
-            Counter(
-                re.findall(
-                    r"(?<![\w/])@src-[A-Za-z0-9_.:-]+"
-                    r"(?:[ \t]*(?:\n[ \t]*)?\[(?:(?!\n[ \t]*\n)[^\]])*\])?",
-                    citations,
-                )
-            ),
+            Counter(source_citations(content)),
         )
 
     return protected(before) == protected(after)

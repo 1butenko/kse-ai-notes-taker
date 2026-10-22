@@ -1107,3 +1107,52 @@ def test_harmonization_preserves_narrative_locators_and_cr_math(before, after, a
     from app.worker.composition import preserves_content
 
     assert preserves_content(before, after) is allowed
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "[see [discussion], p. 10]",
+        r"[see \] discussion, p. 10]",
+        "[see [outer [discussion]], p. 10]",
+        r"[see \[discussion\], p. 10]",
+        "[see `discussion`, p. 10]",
+        "[see `]` discussion, p. 10]",
+    ],
+)
+def test_complete_narrative_suffix_is_preserved(suffix):
+    from app.worker.composition import preserves_content
+
+    before = f"As @src-0 {suffix} explains."
+    assert not preserves_content(before, before.replace("p. 10", "p. 999"))
+    assert preserves_content(before, f"Following @src-0 {suffix}, we conclude.")
+    # Even text inside a code span belongs to the associated citation suffix.
+    assert not preserves_content(before, before.replace("discussion", "exposition"))
+
+
+@pytest.mark.parametrize("suffix", ["[see [discussion], p. 10]", r"[see \] discussion, p. 10]"])
+def test_harmonization_rejects_nested_narrative_page_mutation(mock_openrouter, no_quarto, suffix):
+    course(no_quarto)
+    stub, _ = model_stub(lambda m, p: passed(True))
+    original = f"As @src-0 {suffix} explains."
+
+    def handler(request):
+        name = json.loads(request.content)["response_format"]["json_schema"]["name"]
+        if name == "topic_draft":
+            return response_with(draft(original))
+        if name == "consistency_edits":
+            return response_with(
+                {
+                    "edits": [
+                        {
+                            "block": "T1.1",
+                            "content": original.replace("p. 10", "p. 999"),
+                            "reason": "rewrite",
+                        }
+                    ]
+                }
+            )
+        return stub(request)
+
+    body = mock_openrouter(handler).post("/plans/1/notes").json()
+    assert body["document"]["sections"][0]["topics"][0]["blocks"][0]["content"] == original
