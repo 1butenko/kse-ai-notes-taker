@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ExternalLinkIcon, FileTextIcon, LinkIcon } from "lucide-react";
@@ -29,8 +30,9 @@ import { Separator } from "@/components/ui/separator";
 import {
   notesFileUrl,
   previewPath,
-  topicPdfUrl,
+  topicNotesUrl,
   type NotesDocument,
+  type RenderedArtifact,
 } from "@/lib/api";
 
 const FULL = "full";
@@ -42,20 +44,30 @@ type NotesPreviewProps = {
   document: NotesDocument;
   pdf: boolean;
   topicPdfs: string[];
+  artifacts: RenderedArtifact[];
 };
 
-export function NotesPreview({ course, run, topicId, document, pdf, topicPdfs }: NotesPreviewProps) {
+export function NotesPreview({
+  course, run, topicId, document, pdf, topicPdfs, artifacts,
+}: NotesPreviewProps) {
   const router = useRouter();
+  const [preferredFormat, setPreferredFormat] = useState<"html" | "pdf">("html");
   const withPdf = new Set(topicPdfs);
   const section = document.sections.find((s) => s.topics.some((t) => t.topic_id === topicId));
   const note = section?.topics.find((t) => t.topic_id === topicId);
-  const url = note
-    ? withPdf.has(note.topic_id)
-      ? topicPdfUrl(course, run, note.topic_id)
-      : null
-    : pdf
-      ? notesFileUrl(course, run, "pdf")
-      : null;
+  const available = artifacts.filter(
+    (a) => (a.topic_id ?? null) === topicId && a.status === "ready",
+  );
+  const html = available.find((a) => a.format === "html");
+  const hasPdf = note ? withPdf.has(note.topic_id) : pdf;
+  const format = preferredFormat === "html" && html ? "html" : hasPdf ? "pdf" : "html";
+  const artifact = available.find((a) => a.format === format);
+  const url = (format === "html" ? html : hasPdf)
+    ? note
+      ? topicNotesUrl(course, run, note.topic_id, format)
+      : notesFileUrl(course, run, format)
+    : null;
+  const textRevision = document.revision ?? 0;
 
   const copyLink = async () => {
     try {
@@ -80,13 +92,13 @@ export function NotesPreview({ course, run, topicId, document, pdf, topicPdfs }:
           KSE Notes
         </Link>
         <Separator orientation="vertical" className="hidden h-6 sm:block" />
-        <div className="min-w-0 flex-1">
+        <div className="order-3 min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-auto">
           <h1 className="truncate font-medium">{note ? note.title : document.title}</h1>
           <p className="truncate text-sm text-muted-foreground">
             {note && section ? `${section.title} · ${document.title}` : "Full lecture notes"}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="ml-auto flex flex-wrap gap-2">
           <Button variant="outline" onClick={copyLink}>
             <LinkIcon />
             Copy link
@@ -94,7 +106,7 @@ export function NotesPreview({ course, run, topicId, document, pdf, topicPdfs }:
           {url && (
             <a href={url} target="_blank" rel="noreferrer" className={buttonVariants()}>
               <ExternalLinkIcon />
-              Open PDF
+              Open {format.toUpperCase()}
             </a>
           )}
         </div>
@@ -171,11 +183,45 @@ export function NotesPreview({ course, run, topicId, document, pdf, topicPdfs }:
             </SelectContent>
           </Select>
 
+          <div className="flex flex-wrap items-center gap-2">
+            <div role="group" aria-label="Preview format" className="flex gap-1">
+              <Button
+                size="sm"
+                variant={format === "html" ? "default" : "outline"}
+                disabled={!html}
+                aria-pressed={format === "html"}
+                onClick={() => setPreferredFormat("html")}
+              >
+                HTML
+              </Button>
+              <Button
+                size="sm"
+                variant={format === "pdf" ? "default" : "outline"}
+                disabled={!hasPdf}
+                aria-pressed={format === "pdf"}
+                onClick={() => setPreferredFormat("pdf")}
+              >
+                PDF · Print
+              </Button>
+            </div>
+            <span className="text-xs text-muted-foreground">
+              Text revision {textRevision} · {format.toUpperCase()} revision {artifact?.revision ?? 0}
+              {artifact && artifact.revision !== textRevision && " · Older artifact"}
+            </span>
+            {note && note.status !== "verified" && (
+              <Badge className={TOPIC_STATUS[note.status].className}>
+                {TOPIC_STATUS[note.status].label}
+              </Badge>
+            )}
+          </div>
+
           {url ? (
             <iframe
               key={url}
               src={url}
               title={note ? note.title : document.title}
+              sandbox={format === "html" ? "allow-scripts" : undefined}
+              referrerPolicy="no-referrer"
               className="min-h-0 w-full flex-1 rounded-lg border"
             />
           ) : (
@@ -184,13 +230,13 @@ export function NotesPreview({ course, run, topicId, document, pdf, topicPdfs }:
                 <EmptyMedia variant="icon">
                   <FileTextIcon />
                 </EmptyMedia>
-                <EmptyTitle>No PDF for this {note ? "topic" : "run"}</EmptyTitle>
+                <EmptyTitle>No preview for this {note ? "topic" : "run"}</EmptyTitle>
                 <EmptyDescription>
                   {note?.status === "no_evidence"
                     ? "None of the session materials covered this topic, so it has no notes."
                     : note?.status === "failed"
                       ? "Writing this topic failed. Resume the run to retry it."
-                      : "The PDF wasn't typeset for this run."}
+                      : "The notes weren't rendered for this run."}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>

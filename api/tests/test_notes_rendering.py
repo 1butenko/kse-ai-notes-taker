@@ -10,6 +10,117 @@ from app.worker.openrouter import OpenRouterClient
 from app.worker.quarto import render_document
 
 
+def test_html_download_and_unknown_topic(tmp_uploads):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.notes import NotesRun
+
+    run = "20261022-120000-abcd"
+    root = tmp_uploads / "1/notes" / run
+    (root / "topics/T1").mkdir(parents=True)
+    metadata = NotesRun(
+        id=run,
+        course="1",
+        status="done",
+        stage="done",
+        created_at="2026-10-22",
+        updated_at="2026-10-22",
+        models={},
+    )
+    (root / "run.json").write_text(metadata.model_dump_json())
+    (root / "notes.json").write_text(document().model_dump_json())
+    (root / "notes.html").write_text("<h1>Notes</h1>")
+    (root / "topics/T1/note.html").write_text("<h1>Topic</h1>")
+    (root / "notes.pdf").write_bytes(b"%PDF-legacy")
+    (root / "topics/T1/note.pdf").write_bytes(b"%PDF-topic")
+    (root / "notes.qmd").write_text("# Legacy source")
+    (root / "artifacts.json").write_text(
+        json.dumps(
+            [
+                {"format": "html", "path": "notes.html", "revision": 0, "status": "ready"},
+                {
+                    "format": "html",
+                    "path": "topics/T1/note.html",
+                    "revision": 0,
+                    "status": "ready",
+                    "topic_id": "T1",
+                },
+            ]
+        )
+    )
+    client = TestClient(app)
+    base = f"/plans/1/notes/{run}"
+    for path in ("html", "topics/T1/html"):
+        response = client.get(f"{base}/{path}")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        csp = response.headers["content-security-policy"]
+        assert "sandbox allow-scripts;" in csp and "allow-same-origin" not in csp
+        assert "connect-src 'none'" in csp and "base-uri 'none'" in csp
+        assert response.headers["x-content-type-options"] == "nosniff"
+    assert client.get(f"{base}/topics/T9/html").status_code == 404
+    assert client.get(f"{base}/topics/..%2F..%2Frun.json/html").status_code == 404
+    assert client.get(f"{base}/pdf").content == b"%PDF-legacy"
+    assert client.get(f"{base}/topics/T1/pdf").status_code == 200
+    assert client.get(f"{base}/qmd").text == "# Legacy source"
+    assert len(client.get(base).json()["artifacts"]) == 2
+    (root / "artifacts.json").unlink()
+    assert client.get(base).json()["artifacts"] == []
+
+
+def test_html_does_not_include_source_text_outside_notes(tmp_path):
+    from app.notes import EvidenceItem, Source
+    from app.worker.render import to_quarto
+
+    notes = document("A selected explanation.")
+    notes.sources = [
+        Source(
+            id=1,
+            file="private-book.pdf",
+            title="Textbook",
+            label=None,
+            pdf_start=None,
+            pdf_end=None,
+            sessions=[],
+            outline=[],
+            chunk_ids=[],
+        )
+    ]
+    # Evidence and nearby original text are private working inputs, not notes content.
+    notes.sections[0].topics[0].evidence = [
+        EvidenceItem.model_validate(
+            {
+                "chunk_id": "c1",
+                "source": 1,
+                "title": "Textbook",
+                "page": "1",
+                "role": "definition",
+                "relevance": 1,
+                "reason": "Relevant",
+                "text": "PRIVATE EVIDENCE EXCERPT",
+            }
+        )
+    ]
+    (tmp_path / "private-book.pdf").write_text("FULL PRIVATE TEXTBOOK")
+    source = tmp_path / "notes.qmd"
+    source.write_text(to_quarto(notes, "uk", "html"))
+    cli = fake_cli(
+        tmp_path,
+        """
+import pathlib, sys
+args = sys.argv[1:]
+pathlib.Path(args[args.index("--output") + 1]).write_text(pathlib.Path(args[1]).read_text())
+""",
+    )
+    artifacts = asyncio.run(render_document({"html": source}, tmp_path / "output", 0, cli))
+    assert artifacts[0].status == "ready"
+    html = (tmp_path / "output/notes.html").read_text()
+    assert "A selected explanation." in html
+    assert "FULL PRIVATE TEXTBOOK" not in html
+    assert "PRIVATE EVIDENCE EXCERPT" not in html
+
+
 def fake_cli(tmp_path: Path, body: str) -> str:
     executable = tmp_path / "fake-quarto"
     executable.write_text(f"#!{sys.executable}\n" + body)
@@ -308,6 +419,9 @@ print("<script>displayed code</script>")
     assert "Лінійна алгебра" in html and 'lang="uk"' in html
     assert 'id="toc-title">Зміст' in html
     assert "MathJax" in html and r"(a)^T x" in html
+    assert "--notes-ink" in html and "overflow-x: auto" in html
+    assert "__quarto_storage_probe__" in html
+    assert "Створено" in html
     assert "&lt;script&gt;" in html
     assert "<script>displayed code</script>" not in html
     assert "Матриці" in " ".join(

@@ -204,6 +204,7 @@ def front_matter(
 ) -> str:
     if target not in ("html", "pdf", "docx"):
         raise ValueError(f"Unsupported render format: {target}")
+    created_label = "Створено" if language == "uk" else "Created"
     options = {
         "pdf": [
             "    papersize: a4",
@@ -214,7 +215,13 @@ def front_matter(
             "    fontsize: 11pt",
             "    keep-typ: true",
         ],
-        "html": ["    html-math-method: mathjax", "    embed-resources: true"],
+        "html": [
+            "    html-math-method: mathjax",
+            "    embed-resources: true",
+            "    css: notes.css",
+            "    include-in-header: notes-head.html",
+            "    toc-location: body",
+        ],
         "docx": [],
     }
     return "\n".join(
@@ -227,6 +234,14 @@ def front_matter(
             f"date: {yaml(date[:10])}",
             f"lang: {yaml(language if language in ('uk', 'en') else 'en')}",
             f"toc-title: {yaml('Зміст' if language == 'uk' else 'Table of contents')}",
+            *(
+                [
+                    "language:",
+                    f"  title-block-published: {yaml(created_label)}",
+                ]
+                if target == "html"
+                else []
+            ),
             "execute:",
             "  enabled: false",
             "format:",

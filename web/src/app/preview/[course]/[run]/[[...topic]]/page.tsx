@@ -88,6 +88,7 @@ export default async function PreviewPage(props: Props) {
       document={view.document}
       pdf={view.pdf}
       topicPdfs={view.topic_pdfs}
+      artifacts={view.artifacts ?? []}
     />
   );
 }

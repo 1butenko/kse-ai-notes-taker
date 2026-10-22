@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   CircleAlertIcon,
   ExternalLinkIcon,
@@ -74,7 +75,7 @@ const STAGE_LABELS: Record<string, string> = {
   planning: "Planning topics and checking coverage",
   topics: "Writing and verifying topics",
   composition: "Harmonizing notation and cross-references",
-  rendering: "Typesetting the PDF",
+  rendering: "Rendering HTML and PDF",
 };
 
 const STAGE_NAMES: Record<string, string> = {
@@ -273,6 +274,7 @@ type NotesStageProps = {
 };
 
 export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStageProps) {
+  const router = useRouter();
   const openFile = useFileViewer();
   const [runs, setRuns] = useState<NotesRun[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -355,7 +357,7 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
         <CardTitle>Lecture notes</CardTitle>
         <CardDescription>
           Topics are planned from the syllabus, written from all of their readings, checked
-          against the sources, and typeset as a PDF.
+          against the sources, and rendered for reading and printing.
         </CardDescription>
         {runs.length > 0 && (
           <CardAction>
@@ -434,7 +436,12 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
 
                 {run.status === "done" && (
                   <div className="flex flex-wrap gap-2">
+                    <Link href={previewPath(course, run.id)} className={buttonVariants()}>
+                      <ExternalLinkIcon />
+                      Read notes
+                    </Link>
                     <Button
+                      variant="outline"
                       disabled={!view?.pdf}
                       onClick={() =>
                         openFile({
@@ -447,14 +454,6 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
                       <FileTextIcon />
                       Open PDF
                     </Button>
-                    <Link
-                      href={previewPath(course, run.id)}
-                      target="_blank"
-                      className={buttonVariants({ variant: "outline" })}
-                    >
-                      <ExternalLinkIcon />
-                      Preview page
-                    </Link>
                     <a
                       href={notesFileUrl(course, run.id, "qmd")}
                       download
@@ -496,14 +495,18 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
                   <DocumentOutline
                     document={view.document}
                     onOpenTopic={(note) =>
-                      view.topic_pdfs.includes(note.topic_id)
-                        ? () =>
-                            openFile({
-                              path: `${note.topic_id}.pdf`,
-                              title: note.title,
-                              url: topicPdfUrl(course, run.id, note.topic_id),
-                            })
-                        : undefined
+                      view.artifacts?.some(
+                        (a) => a.topic_id === note.topic_id && a.format === "html" && a.status === "ready",
+                      )
+                        ? () => router.push(previewPath(course, run.id, note.topic_id))
+                        : view.topic_pdfs.includes(note.topic_id)
+                          ? () =>
+                              openFile({
+                                path: `${note.topic_id}.pdf`,
+                                title: note.title,
+                                url: topicPdfUrl(course, run.id, note.topic_id),
+                              })
+                          : undefined
                     }
                   />
                 )}

@@ -390,6 +390,18 @@ export type NotesDocument = {
   sections: { title: string; topics: TopicNote[] }[];
   sources: NotesSource[];
   models: Record<string, string>;
+  revision?: number;
+};
+
+export type RenderFormat = "html" | "pdf" | "docx";
+
+export type RenderedArtifact = {
+  format: RenderFormat;
+  path: string;
+  revision: number;
+  status: "ready" | "failed";
+  error: string | null;
+  topic_id: string | null;
 };
 
 export type NotesRunView = {
@@ -397,6 +409,7 @@ export type NotesRunView = {
   document: NotesDocument | null;
   pdf: boolean;
   topic_pdfs: string[];
+  artifacts: RenderedArtifact[];
 };
 
 export function listNotesRuns(course: string): Promise<NotesRun[]> {
@@ -415,12 +428,16 @@ export function generateNotes(course: string, resume?: string): Promise<NotesRun
   });
 }
 
-export function notesFileUrl(course: string, run: string, kind: "pdf" | "qmd"): string {
+export function notesFileUrl(course: string, run: string, kind: RenderFormat | "qmd"): string {
   return `${PUBLIC_API_URL}/plans/${course}/notes/${run}/${kind}`;
 }
 
 export function topicPdfUrl(course: string, run: string, topic: string): string {
-  return `${PUBLIC_API_URL}/plans/${course}/notes/${run}/topics/${encodeURIComponent(topic)}/pdf`;
+  return topicNotesUrl(course, run, topic, "pdf");
+}
+
+export function topicNotesUrl(course: string, run: string, topic: string, kind: "html" | "pdf"): string {
+  return `${PUBLIC_API_URL}/plans/${course}/notes/${run}/topics/${encodeURIComponent(topic)}/${kind}`;
 }
 
 export function previewPath(course: string, run: string, topic?: string): string {

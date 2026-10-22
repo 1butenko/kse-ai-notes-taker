@@ -129,6 +129,9 @@ async def render_document(
                 (stage / "_quarto.yml").write_text("project:\n  type: default\n")
                 staged_source = stage / source.name
                 staged_source.write_text(prepared)
+                if target == "html":
+                    for asset in ("notes.css", "notes-head.html"):
+                        shutil.copyfile(Path(__file__).parent / "templates" / asset, stage / asset)
                 process = await asyncio.create_subprocess_exec(
                     binary,
                     "render",

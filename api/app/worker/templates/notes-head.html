@@ -1,0 +1,21 @@
+<script>
+// Quarto preferences use document-local memory when the sandbox denies storage.
+// This never exposes parent or origin storage, including on a direct HTML open.
+(() => {
+  try {
+    window.localStorage.getItem("__quarto_storage_probe__");
+  } catch (error) {
+    if (error.name !== "SecurityError") throw error;
+    const values = new Map();
+    const storage = Object.freeze({
+      get length() { return values.size; },
+      key(index) { return [...values.keys()][index] ?? null; },
+      getItem(key) { return values.get(String(key)) ?? null; },
+      setItem(key, value) { values.set(String(key), String(value)); },
+      removeItem(key) { values.delete(String(key)); },
+      clear() { values.clear(); }
+    });
+    Object.defineProperty(window, "localStorage", { value: storage });
+  }
+})();
+</script>

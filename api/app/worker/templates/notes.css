@@ -1,0 +1,36 @@
+/* Embedded by Quarto from the server-owned template directory. */
+:root { --notes-ink: #1f2937; --notes-link: #185e91; }
+html { scroll-behavior: smooth; scroll-padding-top: 1.5rem; }
+body { color: var(--notes-ink); font-size: 1.05rem; line-height: 1.75; }
+body.quarto-light { background: #fff; }
+#quarto-content { display: block; padding: 0; }
+main.content { width: min(100% - 3rem, 76ch); margin: 2rem auto 4rem; }
+h1, h2, h3, h4 { line-height: 1.3; overflow-wrap: anywhere; scroll-margin-top: 1.5rem; }
+h1 { margin-top: 2.2rem; }
+a { color: var(--notes-link); overflow-wrap: anywhere; }
+#TOC { border: 1px solid #dce3e9; border-radius: .6rem; padding: 1rem 1.4rem;
+  margin: 1.8rem 0 2.5rem; background: #f7f9fb; }
+/* Quarto's runtime hides its regular TOC on narrow screens. Keep this body TOC. */
+main.content > nav#TOC[role="doc-toc"] { display: block !important; }
+#TOC ul { padding-left: 1.2rem; }
+#TOC a { text-decoration: none; }
+#TOC a:hover { text-decoration: underline; }
+.callout { min-width: 0; }
+.callout-body { overflow-wrap: anywhere; }
+.quarto-table-container, .cell-output-display { max-width: 100%; overflow-x: auto; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; }
+th, td { min-width: 7rem; padding: .55rem .75rem; }
+pre { max-width: 100%; overflow-x: auto; }
+img, svg { max-width: 100%; }
+/* Keep long display equations readable without widening the page. */
+.math.display { display: block; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+mjx-container[display="true"] { max-width: 100%; overflow-x: auto; overflow-y: hidden;
+  padding: .3rem 0; }
+@media (max-width: 600px) {
+  body { font-size: 1rem; }
+  main.content { width: calc(100% - 2rem); margin-top: 1.25rem; }
+  h1.title { font-size: 1.85rem; }
+  h1 { font-size: 1.65rem; }
+  h2 { font-size: 1.4rem; }
+  #TOC { padding: .8rem 1rem; }
+}
