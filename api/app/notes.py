@@ -6,9 +6,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
+from app.plan import load_plan
 from app.schemas import Strict
+from app.syllabus import Transcript
 
 RUN_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 
@@ -190,6 +192,7 @@ class TopicNote(BaseModel):
     verifier: str | None
     open_issues: list[VerificationIssue]
     error: str | None = None
+    verification_stale: bool = False
 
 
 # The finished document.
@@ -201,6 +204,8 @@ class NotesSection(BaseModel):
 
 
 class NotesDocument(BaseModel):
+    schema_version: int = 1
+    language: Literal["uk", "en"] | None = None
     course: str
     run: str
     title: str
@@ -277,4 +282,22 @@ def load_document(course_dir: Path, run: str) -> NotesDocument | None:
     target = run_dir(course_dir, run) / "notes.json"
     if not RUN_ID.match(run) or not target.is_file():
         return None
-    return NotesDocument.model_validate_json(target.read_text())
+    document = NotesDocument.model_validate_json(target.read_text())
+    if document.schema_version == 1 and document.language is None:
+        document.language = legacy_language(course_dir)
+    return document
+
+
+def legacy_language(course_dir: Path) -> Literal["uk", "en"] | None:
+    """Read-only fallback: the current primary transcript is not historical provenance."""
+    try:
+        primary = load_plan(course_dir).primary
+        if primary is None:
+            return None
+        target = (course_dir.parent / f"{primary}.transcript.json").resolve()
+        if target.parent != course_dir.resolve() / "syllabus" or not target.is_file():
+            return None
+        transcript = Transcript.model_validate_json(target.read_text())
+    except (OSError, ValidationError):
+        return None
+    return transcript.language if transcript.language in ("uk", "en") else None

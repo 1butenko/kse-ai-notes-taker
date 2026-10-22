@@ -173,6 +173,8 @@ async def run_notes(
                 store.log("composition", f"Applied {edits} consistency edits")
 
             document = NotesDocument(
+                schema_version=2,
+                language=transcript.language if transcript.language in ("uk", "en") else None,
                 course=course,
                 run=store.run.id,
                 title=course_plan.title,
@@ -184,11 +186,11 @@ async def run_notes(
                 models=store.run.models,
             )
             store.write("notes.json", document)
-            qmd = store.write("notes.qmd", to_quarto(document, transcript.language))
+            qmd = store.write("notes.qmd", to_quarto(document, document.language))
             topic_qmds = {
                 store.write(
                     f"topics/{note.topic_id}/note.qmd",
-                    topic_to_quarto(document, section, note, transcript.language),
+                    topic_to_quarto(document, section, note, document.language),
                 ): note.topic_id
                 for section in sections
                 for note in section.topics

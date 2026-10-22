@@ -367,6 +367,7 @@ export type TopicNote = {
   verifier: string | null;
   open_issues: VerificationIssue[];
   error: string | null;
+  verification_stale: boolean;
 };
 
 export type NotesSource = {
@@ -380,6 +381,8 @@ export type NotesSource = {
 };
 
 export type NotesDocument = {
+  schema_version: number;
+  language: "uk" | "en" | null;
   course: string;
   run: string;
   title: string;

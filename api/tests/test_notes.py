@@ -7,7 +7,7 @@ import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from app.notes import Chunk, NoteBlock, NotesDocument, TopicNote
+from app.notes import Chunk, NoteBlock, NotesDocument, TopicNote, load_document
 from app.plan import BookMatch, Plan, PlanSession, Proposal
 from app.syllabus import Session, Transcript
 from app.worker.config import WorkerSettings, get_worker_settings
@@ -298,6 +298,192 @@ def test_build_inputs_reads_excerpt_pages_from_the_book(tmp_path: Path) -> None:
 
 
 # The run
+
+
+@pytest.fixture
+def legacy_notes(tmp_path: Path):
+    run = "20261001-000000-abcd"
+    payload = {
+        "course": "1",
+        "run": run,
+        "title": "Linear Algebra",
+        "created_at": "2026-10-01T00:00:00+00:00",
+        "sections": [
+            {
+                "title": "Foundations",
+                "topics": [
+                    {
+                        "topic_id": "T1",
+                        "title": "Linear systems",
+                        "status": "verified",
+                        "blocks": [
+                            {
+                                "id": "T1.1",
+                                "kind": "definition",
+                                "title": None,
+                                "content": "Row operations preserve solutions.",
+                                "citations": ["book-p1-0", "book-p2-0"],
+                            },
+                            {
+                                "id": "T1.2",
+                                "kind": "summary",
+                                "title": None,
+                                "content": "Use elimination.",
+                                "citations": [],
+                            },
+                        ],
+                        "evidence": [
+                            {
+                                "chunk_id": "book-p1-0",
+                                "source": 0,
+                                "title": "Linear Algebra",
+                                "page": "10",
+                                "role": "definition",
+                                "relevance": 5,
+                                "reason": "Defines the row operation",
+                                "text": "Row operations preserve solutions.",
+                            }
+                        ],
+                        "rounds": 1,
+                        "verifier": "test/model",
+                        "open_issues": [],
+                    }
+                ],
+            }
+        ],
+        "sources": [
+            {
+                "id": 0,
+                "file": "1/reading/book.pdf",
+                "title": "Linear Algebra",
+                "label": "Ch. 1",
+                "pdf_start": 1,
+                "pdf_end": 2,
+                "sessions": [0],
+                "outline": ["Linear systems"],
+                "chunk_ids": ["book-p1-0", "book-p2-0"],
+            }
+        ],
+        "notation": [],
+        "terminology": [],
+        "models": {"generator": "test/model"},
+    }
+    target = tmp_path / "1/notes" / run / "notes.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(payload))
+    return tmp_path / "1", run, target, payload
+
+
+def test_legacy_notes_load_without_losing_ids(legacy_notes) -> None:
+    directory, run, target, payload = legacy_notes
+    before = target.read_bytes()
+    expected = [
+        (topic["topic_id"], block["id"], block["citations"])
+        for section in payload["sections"]
+        for topic in section["topics"]
+        for block in topic["blocks"]
+    ]
+
+    document = load_document(directory, run)
+
+    assert document is not None
+    assert [
+        (topic.topic_id, block.id, block.citations)
+        for section in document.sections
+        for topic in section.topics
+        for block in topic.blocks
+    ] == expected
+    assert document.schema_version == 1
+    assert document.language is None
+    assert document.sections[0].topics[0].verification_stale is False
+    assert [source.model_dump() for source in document.sources] == payload["sources"]
+    assert [item.model_dump() for item in document.sections[0].topics[0].evidence] == (
+        payload["sections"][0]["topics"][0]["evidence"]
+    )
+    assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize("language", ["uk", "en"])
+def test_legacy_notes_recover_language_from_primary_transcript(legacy_notes, language) -> None:
+    directory, run, target, _ = legacy_notes
+    course(directory.parent)
+    path = directory / "syllabus/s.pdf.transcript.json"
+    transcript = Transcript.model_validate_json(path.read_text())
+    put_transcript(directory.parent, transcript.model_copy(update={"language": language}))
+    before = target.read_bytes()
+
+    document = load_document(directory, run)
+
+    assert document is not None
+    assert document.language == language
+    assert document.schema_version == 1
+    assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "case", ["missing", "invalid", "unsupported", "invalid_plan", "other_course", "traversal"]
+)
+def test_legacy_notes_keep_unknown_language_when_transcript_unavailable(legacy_notes, case) -> None:
+    directory, run, target, _ = legacy_notes
+    course(directory.parent)
+    transcript_path = directory / "syllabus/s.pdf.transcript.json"
+    if case == "missing":
+        transcript_path.unlink()
+    elif case == "invalid":
+        transcript_path.write_text("not JSON")
+    elif case == "unsupported":
+        transcript = Transcript.model_validate_json(transcript_path.read_text())
+        put_transcript(directory.parent, transcript.model_copy(update={"language": "fr"}))
+    elif case == "invalid_plan":
+        (directory / "plan.json").write_text("not JSON")
+    else:
+        primary = "2/syllabus/s.pdf" if case == "other_course" else "1/syllabus/../../s.pdf"
+        external = directory.parent / f"{primary}.transcript.json"
+        external.parent.mkdir(parents=True, exist_ok=True)
+        external.write_bytes(transcript_path.read_bytes())
+        put_plan(directory.parent, "1", Plan(primary=primary))
+    before = target.read_bytes()
+
+    document = load_document(directory, run)
+
+    assert document is not None
+    assert document.language is None
+    assert target.read_bytes() == before
+
+
+def test_version_two_unknown_language_does_not_inherit_current_transcript(legacy_notes) -> None:
+    directory, run, target, payload = legacy_notes
+    course(directory.parent)
+    target.write_text(json.dumps(payload | {"schema_version": 2, "language": None}))
+
+    document = load_document(directory, run)
+
+    assert document is not None
+    assert document.language is None
+
+
+def test_generated_notes_persist_language(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    transcript_path = no_quarto / "1/syllabus/s.pdf.transcript.json"
+    transcript = Transcript.model_validate_json(transcript_path.read_text())
+    put_transcript(no_quarto, transcript.model_copy(update={"language": "uk"}))
+    handler, _ = model_stub()
+    client = mock_openrouter(handler)
+
+    response = client.post("/plans/1/notes")
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["run"]["status"] == "done"
+    assert body["document"]["language"] == "uk"
+    assert body["document"]["schema_version"] == 2
+    saved = json.loads((no_quarto / "1/notes" / body["run"]["id"] / "notes.json").read_text())
+    assert saved["language"] == "uk"
+    assert saved["schema_version"] == 2
+    # Once persisted, the document language does not follow a changed course transcript.
+    put_transcript(no_quarto, transcript)
+    reloaded = client.get(f"/plans/1/notes/{body['run']['id']}").json()["document"]
+    assert reloaded["language"] == "uk"
 
 
 def test_generate_notes_runs_every_stage_with_its_model(mock_openrouter, no_quarto: Path) -> None:
