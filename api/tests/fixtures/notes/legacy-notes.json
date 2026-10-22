@@ -1,0 +1,239 @@
+{
+  "course": "local",
+  "run": "20261001-000000-0001",
+  "title": "Лінійна алгебра: синтетичний E2E-курс",
+  "created_at": "2026-10-01T00:00:00+00:00",
+  "sections": [
+    {
+      "title": "Матриці та спектр",
+      "topics": [
+        {
+          "topic_id": "T1",
+          "title": "Системи лінійних рівнянь",
+          "status": "verified",
+          "blocks": [
+            {
+              "id": "T1.1",
+              "kind": "overview",
+              "title": "Навіщо матрична форма",
+              "content": "Система з $m$ лінійних рівнянь і $n$ невідомих записується як $A\\mathbf{x} = \\mathbf{b}$, де $A = (a_{ij})$ — матриця коефіцієнтів.\n\n*In English:* a linear system asks which combination of the columns of $A$ produces $\\mathbf{b}$.",
+              "citations": [
+                "6d546d06-0"
+              ]
+            },
+            {
+              "id": "T1.2",
+              "kind": "definition",
+              "title": "Розширена матриця",
+              "content": "Розширена матриця містить коефіцієнти та праві частини:\n\n$$[A \\mid \\mathbf{b}] = \\begin{pmatrix} a_{11} & a_{12} & \\cdots & a_{1n} & b_1 \\\\ a_{21} & a_{22} & \\cdots & a_{2n} & b_2 \\\\ \\vdots & \\vdots & \\ddots & \\vdots & \\vdots \\\\ a_{m1} & a_{m2} & \\cdots & a_{mn} & b_m \\end{pmatrix}.$$ {#eq-t1-augmented}",
+              "citations": [
+                "6d546d06-0"
+              ]
+            },
+            {
+              "id": "T1.3",
+              "kind": "theorem",
+              "title": "Елементарні перетворення",
+              "content": "Елементарні перетворення рядків матриці @eq-t1-augmented не змінюють множину розв'язків системи. Їх перелічено в @tbl-t1-row-operations.\n\n| Перетворення | Позначення | Обернене |\n|---|---|---|\n| Перестановка | $R_i \\leftrightarrow R_j$ | $R_i \\leftrightarrow R_j$ |\n| Множення | $R_i \\leftarrow c R_i$, $c \\ne 0$ | $R_i \\leftarrow c^{-1} R_i$ |\n| Додавання | $R_i \\leftarrow R_i + c R_j$ | $R_i \\leftarrow R_i - c R_j$ |\n\n: Елементарні перетворення рядків {#tbl-t1-row-operations}",
+              "citations": [
+                "6d546d06-0"
+              ]
+            },
+            {
+              "id": "T1.4",
+              "kind": "proof",
+              "title": "Доведення",
+              "content": "Кожне перетворення з @tbl-t1-row-operations має обернене того самого типу. Тому кожен розв'язок нової системи є розв'язком початкової, і навпаки; множини розв'язків збігаються. ∎",
+              "citations": [
+                "6d546d06-0"
+              ]
+            },
+            {
+              "id": "T1.5",
+              "kind": "example",
+              "title": "Визначник порядку 3",
+              "content": "Для матриці порядку 3 правило Саррюса дає довгу формулу:\n\n$$\\det A = a_{11}a_{22}a_{33} + a_{12}a_{23}a_{31} + a_{13}a_{21}a_{32} - a_{13}a_{22}a_{31} - a_{11}a_{23}a_{32} - a_{12}a_{21}a_{33}.$$ {#eq-t1-sarrus}\n\nЯкщо $\\det A \\ne 0$, метод Гаусса зводить $[A \\mid \\mathbf{b}]$ до східчастого вигляду з $n$ ведучими елементами, і розв'язок єдиний.",
+              "citations": [
+                "6d546d06-0"
+              ]
+            },
+            {
+              "id": "T1.6",
+              "kind": "summary",
+              "title": null,
+              "content": "Матрична форма, розширена матриця @eq-t1-augmented і оборотні перетворення рядків — основа методу Гаусса.",
+              "citations": []
+            }
+          ],
+          "evidence": [
+            {
+              "chunk_id": "6d546d06-0",
+              "source": 0,
+              "title": "linear-systems.md",
+              "page": null,
+              "role": "definition",
+              "relevance": 5,
+              "reason": "Синтетичне джерело для контрольного фрагмента",
+              "text": "# Системи лінійних рівнянь\nСинтетичний конспект для E2E-тестів; не є реальним підручником.\nСистема з $m$ лінійних рівнянь і $n$ невідомих записується як $A\\mathbf{x} = \\mathbf{b}$, де $A = (a_{ij})$ — матриця коефіцієнтів. Розширена матриця $[A \\mid \\mathbf{b}]$ містить коефіцієнти та праві частини.\nЕлементарні перетворення рядків: перестановка двох рядків, множення рядка на ненульове число, додавання до рядка кратного іншого рядка. Кожне перетворення оборотне, тому множина розв'язків системи не змінюється.\nМетод Гаусса зводить розширену матрицю до східчастого вигляду, після чого невідомі знаходять зворотною підстановкою.\nДля матриці порядку 3 визначник обчислюють за правилом Саррюса: $\\det A = a_{11}a_{22}a_{33} + a_{12}a_{23}a_{31} + a_{13}a_{21}a_{32} - a_{13}a_{22}a_{31} - a_{11}a_{23}a_{32} - a_{12}a_{21}a_{33}$.\nIn English: Gaussian elimination uses invertible row operations, so the solution set of the linear system is preserved."
+            }
+          ],
+          "rounds": 1,
+          "verifier": "e2e/verifier",
+          "open_issues": []
+        },
+        {
+          "topic_id": "T2",
+          "title": "Власні значення та власні вектори",
+          "status": "unresolved",
+          "blocks": [
+            {
+              "id": "T2.1",
+              "kind": "intuition",
+              "title": "Напрям, що зберігається",
+              "content": "Власний вектор — це напрям, який матриця лише розтягує. *In English:* an eigenvector keeps its direction under $A$. Матричну форму див. у Topic T1.",
+              "citations": [
+                "13a5987e-0"
+              ]
+            },
+            {
+              "id": "T2.2",
+              "kind": "definition",
+              "title": "Власне значення",
+              "content": "Число $\\lambda$ є власним значенням матриці $A \\in \\mathbb{R}^{n \\times n}$, якщо існує ненульовий вектор $\\mathbf{v}$ такий, що\n\n$$A\\mathbf{v} = \\lambda \\mathbf{v}.$$ {#eq-t2-eigen}",
+              "citations": [
+                "13a5987e-0"
+              ]
+            },
+            {
+              "id": "T2.3",
+              "kind": "theorem",
+              "title": "Характеристичне рівняння",
+              "content": "Рівність @eq-t2-eigen рівносильна $(A - \\lambda I)\\mathbf{v} = \\mathbf{0}$. Ненульовий розв'язок існує тоді й лише тоді, коли\n\n$$\\det(A - \\lambda I) = 0.$$ {#eq-t2-characteristic}\n\nДля $n = 3$ ліву частину обчислюють за @eq-t1-sarrus.",
+              "citations": [
+                "13a5987e-0",
+                "6d546d06-0"
+              ]
+            },
+            {
+              "id": "T2.4",
+              "kind": "example",
+              "title": "Матриця 2×2",
+              "content": "Нехай $A = \\begin{pmatrix} 2 & 1 \\\\ 1 & 2 \\end{pmatrix}$. Тоді $\\det(A - \\lambda I) = (2 - \\lambda)^2 - 1 = 0$, отже $\\lambda_1 = 3$, $\\lambda_2 = 1$, а $\\mathbf{v}_1 = (1, 1)^T$.",
+              "citations": [
+                "13a5987e-0"
+              ]
+            },
+            {
+              "id": "T2.6",
+              "kind": "remark",
+              "title": "Неперевірене твердження",
+              "content": "Кожна симетрична матриця діагоналізується ортогональною матрицею.",
+              "citations": []
+            },
+            {
+              "id": "T2.7",
+              "kind": "summary",
+              "title": null,
+              "content": "Власні значення — корені характеристичного рівняння @eq-t2-characteristic.",
+              "citations": []
+            }
+          ],
+          "evidence": [
+            {
+              "chunk_id": "13a5987e-0",
+              "source": 1,
+              "title": "eigenvalues.md",
+              "page": null,
+              "role": "definition",
+              "relevance": 5,
+              "reason": "Синтетичне джерело для контрольного фрагмента",
+              "text": "# Власні значення та власні вектори\nСинтетичний конспект для E2E-тестів; не є реальним підручником.\nЧисло $\\lambda$ є власним значенням квадратної матриці $A$, якщо існує ненульовий вектор $\\mathbf{v}$ такий, що $A\\mathbf{v} = \\lambda\\mathbf{v}$. Такий вектор називають власним вектором.\nРівність $A\\mathbf{v} = \\lambda\\mathbf{v}$ рівносильна $(A - \\lambda I)\\mathbf{v} = \\mathbf{0}$; ненульовий розв'язок існує тоді й лише тоді, коли $\\det(A - \\lambda I) = 0$. Це характеристичне рівняння.\nПриклад: для матриці $A$ з рядками $(2, 1)$ та $(1, 2)$ характеристичне рівняння $(2 - \\lambda)^2 - 1 = 0$ має корені $\\lambda_1 = 3$ і $\\lambda_2 = 1$; власний вектор для $\\lambda_1$ дорівнює $(1, 1)^T$.\nIn English: an eigenvector keeps its direction under the linear map; only its length is scaled by the eigenvalue."
+            },
+            {
+              "chunk_id": "6d546d06-0",
+              "source": 0,
+              "title": "linear-systems.md",
+              "page": null,
+              "role": "definition",
+              "relevance": 5,
+              "reason": "Синтетичне джерело для контрольного фрагмента",
+              "text": "# Системи лінійних рівнянь\nСинтетичний конспект для E2E-тестів; не є реальним підручником.\nСистема з $m$ лінійних рівнянь і $n$ невідомих записується як $A\\mathbf{x} = \\mathbf{b}$, де $A = (a_{ij})$ — матриця коефіцієнтів. Розширена матриця $[A \\mid \\mathbf{b}]$ містить коефіцієнти та праві частини.\nЕлементарні перетворення рядків: перестановка двох рядків, множення рядка на ненульове число, додавання до рядка кратного іншого рядка. Кожне перетворення оборотне, тому множина розв'язків системи не змінюється.\nМетод Гаусса зводить розширену матрицю до східчастого вигляду, після чого невідомі знаходять зворотною підстановкою.\nДля матриці порядку 3 визначник обчислюють за правилом Саррюса: $\\det A = a_{11}a_{22}a_{33} + a_{12}a_{23}a_{31} + a_{13}a_{21}a_{32} - a_{13}a_{22}a_{31} - a_{11}a_{23}a_{32} - a_{12}a_{21}a_{33}$.\nIn English: Gaussian elimination uses invertible row operations, so the solution set of the linear system is preserved."
+            }
+          ],
+          "rounds": 3,
+          "verifier": "e2e/escalation",
+          "open_issues": [
+            {
+              "block": 4,
+              "kind": "unsupported_claim",
+              "severity": "major",
+              "detail": "Синтетичні джерела не містять спектральної теореми.",
+              "fix": "Додати джерело з доведенням або прибрати твердження."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": 0,
+      "file": "local/reading/linear-systems.md",
+      "title": "linear-systems.md",
+      "label": null,
+      "pdf_start": null,
+      "pdf_end": null,
+      "sessions": [
+        0
+      ],
+      "outline": [],
+      "chunk_ids": [
+        "6d546d06-0"
+      ]
+    },
+    {
+      "id": 1,
+      "file": "local/reading/eigenvalues.md",
+      "title": "eigenvalues.md",
+      "label": null,
+      "pdf_start": null,
+      "pdf_end": null,
+      "sessions": [
+        1
+      ],
+      "outline": [],
+      "chunk_ids": [
+        "13a5987e-0"
+      ]
+    }
+  ],
+  "notation": [
+    {
+      "symbol": "$A = (a_{ij})$",
+      "meaning": "матриця коефіцієнтів"
+    },
+    {
+      "symbol": "$\\mathbf{x}$, $\\mathbf{v}$",
+      "meaning": "вектори-стовпці"
+    },
+    {
+      "symbol": "$I$",
+      "meaning": "одинична матриця"
+    }
+  ],
+  "terminology": [
+    {
+      "term": "розширена матриця",
+      "definition": "матриця коефіцієнтів разом із правими частинами"
+    },
+    {
+      "term": "eigenvector / власний вектор",
+      "definition": "ненульовий вектор, напрям якого зберігає матриця"
+    }
+  ],
+  "models": {
+    "planner": "e2e/planner",
+    "writer": "e2e/writer",
+    "verifier": "e2e/verifier"
+  }
+}
