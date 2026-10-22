@@ -129,3 +129,29 @@ landed contracts again before writing the bodies.
 
 Visual QA stays manual, per the Task 12 brief: HTML at 390 px and on desktop, every page of
 the control PDF, DOCX through the office QA compose, and the book with search.
+
+## Maintaining
+
+- **Fixtures.** There is no generator script, so edit the JSON directly. `api/tests/test_notes_fixtures.py`
+  checks it: a valid `NotesDocument` with no reference issues, the asset entry equal to
+  `import_asset(figure.png)`, and sources/evidence equal to `build_inputs` over the seeded readings.
+  Editing a reading changes its chunk ID (`<sha256[:8]>-0`), so update the `control.json`
+  sources, evidence and citations to match. Replacing `figure.png` changes the asset digest
+  and path.
+- **New LLM steps.** When the worker gains a response schema (suggestions, re-verification
+  steps), add it to `answer()` and `SCHEMAS` in `api/tests/e2e/synthetic.py`. The smoke
+  asserts the exact set of schemas it sees, so update both together. An unknown schema
+  fails the run on purpose.
+- **Pipeline changes.** If topic structure or verification rules change, expected statuses
+  (T1 verified, T2 unresolved) or call counts may shift. Adjust the fixture or mock when the
+  product behaviour is intended, not the assertions on real artifacts.
+- **Lockfile.** npm 11 `npm install` strips every `"libc"` field from `package-lock.json`,
+  which changes how Linux/musl optional native packages resolve. When adding or upgrading
+  test dependencies, keep the lockfile diff limited to the packages you change.
+- **Known defect (strict xfail).** `test_control_cross_references_resolve_in_every_format`:
+  a non-callout block that starts with a figure gets its bold title inlined into the image
+  paragraph (`block_markdown` in `api/app/worker/render.py`). There is then no figure and
+  `?@fig-…` is printed. Once it is fixed, the test XPASSes and fails; remove the marker.
+- **Turning `fixme` into tests.** Check the landed routes and models first, then replace
+  the body and drop `fixme`. Placing the control figure into a saved revision through the
+  revision interface also covers the defect above in the browser.
