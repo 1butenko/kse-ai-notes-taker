@@ -1,14 +1,12 @@
-"""Format writer: render the validated notes into a Quarto document and typeset it with Typst."""
+"""Prepare validated notes for HTML, Typst PDF and Word, with legacy PDF helpers."""
 
 import asyncio
 import json
 import re
-import shutil
 from pathlib import Path
 
-from app.notes import NoteBlock, NotesDocument, NotesSection, Source, TopicNote
-
-QUARTO_TIMEOUT = 600
+from app.notes import NoteBlock, NotesDocument, NotesSection, RenderFormat, Source, TopicNote
+from app.worker.quarto import QuartoError, render_document, validate_markdown
 
 MATH = re.compile(r"\$\$.+?\$\$|\$[^$\n]+?\$", re.S)
 FONT_SWITCH = re.compile(r"\{\\(rm|bf|it|sf|tt|cal)\s+([^{}]*)\}")
@@ -128,9 +126,19 @@ def source_ref(source: Source) -> str:
     return ", ".join(p for p in (source.title, source.label, pages) if p)
 
 
-def block_markdown(block: NoteBlock, text: dict[str, str], cite: str, fence: str = "::::") -> str:
-    title = typst_safe(block.title) if block.title else text.get(block.kind)
-    body = typst_safe(block.content.strip())
+def block_markdown(
+    block: NoteBlock,
+    text: dict[str, str],
+    cite: str,
+    fence: str = "::::",
+    target: RenderFormat = "pdf",
+) -> str:
+    validate_markdown(block.content)
+    if block.title:
+        validate_markdown(block.title)
+    transform = typst_safe if target == "pdf" else str
+    title = transform(block.title) if block.title else text.get(block.kind)
+    body = transform(block.content.strip())
     footer = f"\n\n*{text['sources']}: {cite}*" if cite else ""
     callout = CALLOUTS.get(block.kind)
     if callout:
@@ -187,20 +195,17 @@ class Citations:
 
 
 def front_matter(
-    title: str, date: str, language: str | None, subtitle: str | None = None, outline: bool = True
+    title: str,
+    date: str,
+    language: str | None,
+    subtitle: str | None = None,
+    outline: bool = True,
+    target: RenderFormat = "pdf",
 ) -> str:
-    return "\n".join(
-        [
-            "---",
-            "from: markdown+lists_without_preceding_blankline",
-            f"title: {yaml(title)}",
-            *([f"subtitle: {yaml(subtitle)}"] if subtitle else []),
-            f"date: {yaml(date[:10])}",
-            f"lang: {yaml(language or 'en')}",
-            "format:",
-            "  typst:",
-            f"    toc: {str(outline).lower()}",
-            f"    number-sections: {str(outline).lower()}",
+    if target not in ("html", "pdf", "docx"):
+        raise ValueError(f"Unsupported render format: {target}")
+    options = {
+        "pdf": [
             "    papersize: a4",
             "    margin:",
             "      x: 2.5cm",
@@ -208,20 +213,46 @@ def front_matter(
             "    mainfont: DejaVu Serif",
             "    fontsize: 11pt",
             "    keep-typ: true",
+        ],
+        "html": ["    html-math-method: mathjax", "    embed-resources: true"],
+        "docx": [],
+    }
+    return "\n".join(
+        [
+            "---",
+            "from: markdown+lists_without_preceding_blankline-raw_html-raw_tex-raw_attribute"
+            "-yaml_metadata_block",
+            f"title: {yaml(title)}",
+            *([f"subtitle: {yaml(subtitle)}"] if subtitle else []),
+            f"date: {yaml(date[:10])}",
+            f"lang: {yaml(language if language in ('uk', 'en') else 'en')}",
+            f"toc-title: {yaml('Зміст' if language == 'uk' else 'Table of contents')}",
+            "execute:",
+            "  enabled: false",
+            "format:",
+            f"  {'typst' if target == 'pdf' else target}:",
+            f"    toc: {str(outline).lower()}",
+            f"    number-sections: {str(outline).lower()}",
+            *options[target],
             "---",
         ]
     )
 
 
-def topic_body(note: TopicNote, text: dict[str, str], cite: Citations) -> list[str]:
+def topic_body(
+    note: TopicNote, text: dict[str, str], cite: Citations, target: RenderFormat = "pdf"
+) -> list[str]:
+    transform = typst_safe if target == "pdf" else str
     if note.status == "no_evidence":
         return [f"*{text['no_evidence']}*\n"]
     body = []
     if note.status != "verified":
         body.append(f"::: {{.callout-caution}}\n## {text['unverified']}\n")
-        body += [f"- {typst_safe(i.detail)}" for i in note.open_issues] or ["-"]
+        body += [f"- {transform(i.detail)}" for i in note.open_issues] or ["-"]
         body.append(":::\n")
-    body += [block_markdown(block, text, cite(block)) + "\n" for block in note.blocks]
+    body += [
+        block_markdown(block, text, cite(block), target=target) + "\n" for block in note.blocks
+    ]
     return body
 
 
@@ -230,7 +261,9 @@ def footer(document: NotesDocument, text: dict[str, str]) -> str:
     return f"\n*{text['generated']}: {document.created_at} · {models}*\n"
 
 
-def to_quarto(document: NotesDocument, language: str | None) -> str:
+def to_quarto(document: NotesDocument, language: str | None, target: RenderFormat = "pdf") -> str:
+    language = document.language or language
+    transform = typst_safe if target == "pdf" else str
     text = labels(language)
     cite = Citations(document, text)
     body = []
@@ -238,8 +271,8 @@ def to_quarto(document: NotesDocument, language: str | None) -> str:
         body.append(f"# {text['notation']} {{.unnumbered}}\n")
         body.append(f"| {text['symbol']} | {text['meaning']} |\n|---|---|")
         body += [
-            f"| {typst_safe(n.symbol).replace('|', '\\|')} | "
-            f"{typst_safe(n.meaning).replace('|', '\\|')} |"
+            f"| {transform(n.symbol).replace('|', '\\|')} | "
+            f"{transform(n.meaning).replace('|', '\\|')} |"
             for n in document.notation
         ]
         body.append("")
@@ -248,62 +281,51 @@ def to_quarto(document: NotesDocument, language: str | None) -> str:
         body.append(f"# {section.title}\n")
         for note in section.topics:
             body.append(f"## {note.title}\n")
-            body += topic_body(note, text, cite)
+            body += topic_body(note, text, cite, target)
 
     body += cite.references()
     body.append(footer(document, text))
-    header = front_matter(document.title, document.created_at, language)
-    return header + "\n\n" + "\n".join(body)
+    header = front_matter(document.title, document.created_at, language, target=target)
+    return checked_document(header, body, document.title)
 
 
 def topic_to_quarto(
-    document: NotesDocument, section: NotesSection, note: TopicNote, language: str | None
+    document: NotesDocument,
+    section: NotesSection,
+    note: TopicNote,
+    language: str | None,
+    target: RenderFormat = "pdf",
 ) -> str:
     """One topic as a standalone document: its blocks and only the sources it cites."""
+    language = document.language or language
     text = labels(language)
     cite = Citations(document, text)
-    body = topic_body(note, text, cite) + cite.references() + [footer(document, text)]
+    body = topic_body(note, text, cite, target) + cite.references() + [footer(document, text)]
     header = front_matter(
         note.title,
         document.created_at,
         language,
         subtitle=f"{section.title} · {document.title}",
         outline=False,
+        target=target,
     )
-    return header + "\n\n" + "\n".join(body)
+    return checked_document(header, body, note.title, section.title, document.title)
 
 
-class QuartoError(Exception):
-    pass
+def checked_document(header: str, body: list[str], *titles: str) -> str:
+    for title in titles:
+        validate_markdown(title)
+    markdown = "\n".join(body)
+    validate_markdown(markdown)
+    return header + "\n\n" + markdown
 
 
 async def render_pdf(qmd: Path, quarto: str) -> Path:
-    """Typeset a .qmd next to itself with Quarto; returns the PDF path."""
-    binary = shutil.which(quarto)
-    if binary is None:
-        raise QuartoError(f"Quarto is not installed ({quarto!r} not found)")
-    process = await asyncio.create_subprocess_exec(
-        binary,
-        "render",
-        qmd.name,
-        "--to",
-        "typst",
-        cwd=qmd.parent,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    try:
-        output, _ = await asyncio.wait_for(process.communicate(), QUARTO_TIMEOUT)
-    except TimeoutError as error:
-        process.kill()
-        raise QuartoError(f"Quarto took longer than {QUARTO_TIMEOUT} s") from error
-    log = output.decode(errors="replace")
-    (qmd.parent / "quarto.log").write_text(log)
-    pdf = qmd.with_suffix(".pdf")
-    if process.returncode != 0 or not pdf.is_file():
-        tail = re.sub(r"\s+", " ", log[-600:]).strip()
-        raise QuartoError(f"Quarto failed (exit {process.returncode}): {tail}")
-    return pdf
+    """Compatibility wrapper: publish a PDF next to its prepared QMD."""
+    (artifact,) = await render_document({"pdf": qmd}, qmd.parent, 0, quarto)
+    if artifact.status == "failed":
+        raise QuartoError(artifact.error)
+    return qmd.parent / artifact.path
 
 
 async def render_pdfs(qmds: list[Path], quarto: str, concurrency: int) -> dict[Path, QuartoError]:

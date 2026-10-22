@@ -46,7 +46,13 @@ COPY <<'EOF' /tmp/warmup/warmup.qmd
 ---
 title: "Прогрів"
 lang: uk
+toc-title: "Зміст"
+execute:
+  enabled: false
 format:
+  html:
+    html-math-method: mathjax
+    embed-resources: true
   typst:
     toc: true
     number-sections: true
@@ -65,9 +71,14 @@ format:
 :::: {.callout-note}
 ## Означення
 Нехай $A \in \mathbb{R}^{m \times n}$. Тоді $$\operatorname{rank} A + \dim \ker A = n.$$
+
+$$A = \begin{pmatrix}1 & 2 \\ 3 & 4\end{pmatrix}.$$
 ::::
 EOF
-RUN cd /tmp/warmup && quarto render warmup.qmd --to typst && test -f warmup.pdf && rm -rf /tmp/warmup
+RUN cd /tmp/warmup \
+    && quarto render warmup.qmd --to html --no-execute && test -s warmup.html \
+    && quarto render warmup.qmd --to typst --no-execute && test -s warmup.pdf \
+    && rm -rf /tmp/warmup
 
 FROM typeset AS worker-dev
 RUN --mount=type=cache,target=/root/.cache/uv \

@@ -231,7 +231,7 @@ def fake_quarto(tmp_uploads: Path, tmp_path_factory: pytest.TempPathFactory):
     script = tmp_path_factory.mktemp("bin") / "quarto"
     script.write_text(
         "#!/bin/sh\n"
-        'case "$PWD" in */T2) echo "typst error" && exit 1;; esac\n'
+        'case "$PWD" in */T2/*) echo "typst error" && exit 1;; esac\n'
         'printf "%%PDF-1.4 %s" "$2" > "${2%.qmd}.pdf"\n'
     )
     script.chmod(0o755)
@@ -574,6 +574,17 @@ def test_each_topic_gets_its_own_pdf(mock_openrouter, fake_quarto: Path) -> None
     assert pdf.headers["content-type"] == "application/pdf"
     assert 'inline; filename="notes-T1.pdf"' in pdf.headers["content-disposition"]
     assert pdf.content == b"%PDF-1.4 note.qmd"
+    folder = fake_quarto / "1/notes" / run
+    artifacts = json.loads((folder / "artifacts.json").read_text())
+    assert len(artifacts) == 6
+    assert all(a["revision"] == 0 for a in artifacts)
+    assert {(a["format"], a["topic_id"]) for a in artifacts if a["status"] == "ready"} == {
+        ("pdf", None),
+        ("pdf", "T1"),
+    }
+    assert all(not a["path"].startswith("/") for a in artifacts)
+    assert any(a["path"] == "topics/T1/note.pdf" for a in artifacts)
+    assert (folder / "sources/html/notes.qmd").is_file()
     assert client.get(f"/plans/1/notes/{run}/topics/T2/pdf").status_code == 404
     assert client.get(f"/plans/1/notes/{run}/topics/T9/pdf").status_code == 404
     assert client.get(f"/plans/1/notes/{run}/topics/..%2F..%2Frun.json/pdf").status_code == 404

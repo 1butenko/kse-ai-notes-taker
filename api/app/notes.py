@@ -197,6 +197,17 @@ class TopicNote(BaseModel):
 
 # The finished document.
 
+RenderFormat = Literal["html", "pdf", "docx"]
+
+
+class RenderedArtifact(BaseModel):
+    format: RenderFormat
+    path: str
+    revision: int
+    status: Literal["ready", "failed"]
+    error: str | None = None
+    topic_id: str | None = None
+
 
 class NotesSection(BaseModel):
     title: str

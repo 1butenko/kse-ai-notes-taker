@@ -1,6 +1,7 @@
 """Notes generation: plan globally, synthesize each topic across sources, verify, compose."""
 
 import asyncio
+import json
 from pathlib import Path
 
 from app.notes import (
@@ -8,6 +9,8 @@ from app.notes import (
     Inputs,
     NotesDocument,
     NotesRun,
+    NotesSection,
+    RenderedArtifact,
     TopicNote,
     now,
     run_dir,
@@ -20,7 +23,8 @@ from app.worker.config import WorkerSettings
 from app.worker.models import NotesModels
 from app.worker.openrouter import Opener, OpenRouterClient
 from app.worker.planning import plan_course
-from app.worker.render import QuartoError, render_pdf, render_pdfs, to_quarto, topic_to_quarto
+from app.worker.quarto import QuartoError, render_document
+from app.worker.render import to_quarto, topic_to_quarto
 from app.worker.sources import Retriever, build_inputs
 from app.worker.topics import generate_topic
 from app.worker.tracing import course_trace
@@ -186,27 +190,7 @@ async def run_notes(
                 models=store.run.models,
             )
             store.write("notes.json", document)
-            qmd = store.write("notes.qmd", to_quarto(document, document.language))
-            topic_qmds = {
-                store.write(
-                    f"topics/{note.topic_id}/note.qmd",
-                    topic_to_quarto(document, section, note, document.language),
-                ): note.topic_id
-                for section in sections
-                for note in section.topics
-                if note.status in ("verified", "unresolved")
-            }
-            store.log("rendering", "Typesetting the PDF with Quarto")
-            try:
-                await render_pdf(qmd, settings.quarto_bin)
-                store.log("rendering", f"Typesetting {len(topic_qmds)} topic PDFs")
-                failed_pdfs = await render_pdfs(
-                    list(topic_qmds), settings.quarto_bin, settings.quarto_concurrency
-                )
-                for topic_qmd, error in failed_pdfs.items():
-                    store.warn(f"PDF of {topic_qmds[topic_qmd]} not rendered: {error}")
-            except QuartoError as error:
-                store.warn(f"PDF not rendered: {error}")
+            await render_notes_outputs(document, store, settings)
             store.run.status = "done"
             store.log("done", "Notes are ready")
             span.update(output={"topics": len(notes), "failed": failed, "edits": edits})
@@ -217,3 +201,69 @@ async def run_notes(
         store.log("failed", store.run.error)
     finally:
         ACTIVE.discard(course)
+
+
+async def render_notes_outputs(
+    document: NotesDocument, store: RunStore, settings: WorkerSettings
+) -> list[RenderedArtifact]:
+    """Save format sources and a manifest even when individual renders fail.
+
+    The run directory is the artifacts root. Revision zero keeps the established
+    notes.pdf/notes.qmd and topics/<id>/note.pdf download locations.
+    """
+    artifacts: list[RenderedArtifact] = []
+    gate = asyncio.Semaphore(settings.quarto_concurrency)
+    store.log("rendering", "Rendering HTML and PDF with Quarto")
+    store.write("artifacts.json", "[]")
+
+    async def one(section: NotesSection | None = None, note: TopicNote | None = None):
+        prefix = f"topics/{note.topic_id}/" if note else ""
+        stem = "note" if note else "notes"
+        prepared = {}
+        results = []
+        for target in ("html", "pdf"):
+            try:
+                source = (
+                    topic_to_quarto(document, section, note, document.language, target)
+                    if note
+                    else to_quarto(document, document.language, target)
+                )
+                name = (
+                    f"{prefix}{stem}.qmd"
+                    if target == "pdf"
+                    else (f"{prefix}sources/html/{stem}.qmd")
+                )
+                prepared[target] = store.write(name, source)
+            except (QuartoError, OSError) as error:
+                results.append(
+                    RenderedArtifact(
+                        format=target,
+                        path=f"{stem}.{target}",
+                        revision=0,
+                        status="failed",
+                        error=str(error),
+                    )
+                )
+        async with gate:
+            results += await render_document(
+                prepared, store.directory / prefix, 0, settings.quarto_bin
+            )
+        for artifact in results:
+            artifact.path = prefix + artifact.path
+            artifact.topic_id = note.topic_id if note else None
+            if artifact.status == "failed":
+                label = artifact.format.upper() + (f" of {note.topic_id}" if note else "")
+                store.warn(f"{label} not rendered: {artifact.error}")
+        artifacts.extend(results)
+        store.write("artifacts.json", json.dumps([a.model_dump() for a in artifacts], indent=2))
+
+    await one()
+    await asyncio.gather(
+        *(
+            one(section, note)
+            for section in document.sections
+            for note in section.topics
+            if note.status in ("verified", "unresolved")
+        )
+    )
+    return artifacts
