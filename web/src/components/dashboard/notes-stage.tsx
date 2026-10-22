@@ -465,14 +465,10 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
                     {view?.document?.sections.some((s) =>
                       s.topics.some((t) => t.status === "failed"),
                     ) && (
-                      <Button
-                        variant="outline"
-                        disabled={!canStart}
-                        onClick={() => start(run.id)}
-                      >
-                        <RotateCwIcon />
-                        Retry failed topics
-                      </Button>
+                      <p className="basis-full text-sm text-muted-foreground">
+                        Some topics failed. A completed run keeps its saved notes, so generate
+                        again to retry them in a new run.
+                      </p>
                     )}
                   </div>
                 )}

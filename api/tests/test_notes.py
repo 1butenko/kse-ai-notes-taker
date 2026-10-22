@@ -422,7 +422,17 @@ def test_legacy_notes_recover_language_from_primary_transcript(legacy_notes, lan
 
 
 @pytest.mark.parametrize(
-    "case", ["missing", "invalid", "unsupported", "invalid_plan", "other_course", "traversal"]
+    "case",
+    [
+        "missing",
+        "invalid",
+        "invalid_utf8",
+        "unsupported",
+        "invalid_plan",
+        "invalid_utf8_plan",
+        "other_course",
+        "traversal",
+    ],
 )
 def test_legacy_notes_keep_unknown_language_when_transcript_unavailable(legacy_notes, case) -> None:
     directory, run, target, _ = legacy_notes
@@ -432,6 +442,10 @@ def test_legacy_notes_keep_unknown_language_when_transcript_unavailable(legacy_n
         transcript_path.unlink()
     elif case == "invalid":
         transcript_path.write_text("not JSON")
+    elif case == "invalid_utf8":
+        transcript_path.write_bytes(b'{"language": "\xff\xfe"}')
+    elif case == "invalid_utf8_plan":
+        (directory / "plan.json").write_bytes(b'{"primary": "\xff\xfe"}')
     elif case == "unsupported":
         transcript = Transcript.model_validate_json(transcript_path.read_text())
         put_transcript(directory.parent, transcript.model_copy(update={"language": "fr"}))
@@ -633,6 +647,17 @@ def test_resume_reuses_the_plan_and_finished_topics(mock_openrouter, no_quarto: 
     client = mock_openrouter(handler)
     run = client.post("/plans/1/notes").json()["run"]
     folder = no_quarto / "1/notes" / run["id"]
+    published = (folder / "notes.json").read_bytes()
+
+    # A completed run's published notes are never regenerated in place.
+    completed = client.post("/plans/1/notes", json={"resume": run["id"]})
+    assert completed.status_code == 409
+    assert "new run" in completed.json()["detail"]
+    assert (folder / "notes.json").read_bytes() == published
+
+    # A failed run that never published its notes stays resumable.
+    failed = json.loads((folder / "run.json").read_text()) | {"status": "failed"}
+    (folder / "run.json").write_text(json.dumps(failed))
     (folder / "topics/T2/note.json").unlink()
     calls.clear()
 

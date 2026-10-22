@@ -19,9 +19,17 @@ from app.notes import (
     run_dir,
     topic_pdf,
 )
+from app.notes_revisions import (
+    EditResult,
+    RevisionInfo,
+    RevisionNotFound,
+    RevisionStore,
+    RevisionView,
+    TopicPatch,
+)
 from app.routers.plans import course_dir, current
 from app.worker_client import WorkerClient, get_worker_client
-from app.worker_contract import NotesRequest
+from app.worker_contract import NotesRequest, RestoreRequest, ReviseRequest
 
 router = APIRouter(prefix="/plans", tags=["notes"])
 
@@ -56,7 +64,9 @@ class NotesRunRequest(BaseModel):
 
 class NotesRunView(BaseModel):
     run: NotesRun
+    # The current (HEAD) revision's document; artifacts carry the revision they show.
     document: NotesDocument | None
+    current_revision: int = 0
     pdf: bool
     topic_pdfs: list[str]
     artifacts: list[RenderedArtifact] = Field(default_factory=list)
@@ -71,12 +81,17 @@ def find_run(settings: Settings, course: str, run: str) -> NotesRun:
 
 def view(settings: Settings, course: str, run: NotesRun) -> NotesRunView:
     directory = course_dir(settings, course)
-    document = load_document(directory, run.id) if run.status == "done" else None
+    try:
+        head = RevisionStore(run_dir(directory, run.id)).current() if run.status == "done" else None
+    except RevisionNotFound:
+        head = None
+    document = head.document if head else None
     topics = [t.topic_id for s in document.sections for t in s.topics] if document else []
     manifest = run_dir(directory, run.id) / "artifacts.json"
     return NotesRunView(
         run=run,
         document=document,
+        current_revision=head.info.revision if head else 0,
         pdf=(run_dir(directory, run.id) / "notes.pdf").is_file(),
         topic_pdfs=[t for t in topics if topic_pdf(directory, run.id, t).is_file()],
         artifacts=(
@@ -122,6 +137,69 @@ def get_run(
     course: str, run: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> NotesRunView:
     return view(settings, course, find_run(settings, course, run))
+
+
+def revision_store(settings: Settings, course: str, run: str) -> RevisionStore:
+    """The committed history of a completed run; reading it never writes."""
+    if find_run(settings, course, run).status != "done":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Notes are not ready")
+    return RevisionStore(run_dir(course_dir(settings, course), run))
+
+
+@router.get("/{course}/notes/{run}/revisions")
+def get_revisions(
+    course: str, run: str, settings: Annotated[Settings, Depends(get_settings)]
+) -> list[RevisionInfo]:
+    try:
+        return revision_store(settings, course, run).list()
+    except RevisionNotFound as error:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
+
+
+@router.get("/{course}/notes/{run}/revisions/{revision}")
+def get_revision(
+    course: str, run: str, revision: int, settings: Annotated[Settings, Depends(get_settings)]
+) -> RevisionView:
+    try:
+        return revision_store(settings, course, run).read(revision)
+    except RevisionNotFound as error:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
+
+
+@router.patch("/{course}/notes/{run}/topics/{topic}")
+async def save_topic(
+    course: str,
+    run: str,
+    topic: str,
+    patch: TopicPatch,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> EditResult:
+    """Save one topic's complete block list as a new revision of the notes."""
+    find_run(settings, course, run)
+    return await worker.revise_notes(
+        ReviseRequest(course=course, run=run, topic=topic, patch=patch)
+    )
+
+
+class RestoreBody(BaseModel):
+    base_revision: int = Field(ge=0)
+
+
+@router.post("/{course}/notes/{run}/revisions/{revision}/restore")
+async def restore_revision(
+    course: str,
+    run: str,
+    revision: int,
+    body: RestoreBody,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> EditResult:
+    """Copy an earlier revision's content into a new revision; the history is kept."""
+    find_run(settings, course, run)
+    return await worker.restore_notes(
+        RestoreRequest(course=course, run=run, revision=revision, base_revision=body.base_revision)
+    )
 
 
 class NoteAssetUpload(BaseModel):

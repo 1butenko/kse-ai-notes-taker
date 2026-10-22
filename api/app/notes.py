@@ -321,6 +321,6 @@ def legacy_language(course_dir: Path) -> Literal["uk", "en"] | None:
         if target.parent != course_dir.resolve() / "syllabus" or not target.is_file():
             return None
         transcript = Transcript.model_validate_json(target.read_text())
-    except (OSError, ValidationError):
+    except (OSError, UnicodeError, ValidationError):
         return None
     return transcript.language if transcript.language in ("uk", "en") else None

@@ -3,6 +3,7 @@
 from pydantic import BaseModel
 
 from app.notes import NotesRun
+from app.notes_revisions import TopicPatch
 from app.plan import BookMatch, Plan, Proposal
 from app.syllabus import SyllabusExtraction, Transcript
 
@@ -37,3 +38,17 @@ class NotesRequest(BaseModel):
 
 
 NotesResponse = NotesRun
+
+
+class ReviseRequest(BaseModel):
+    course: str
+    run: str
+    topic: str
+    patch: TopicPatch
+
+
+class RestoreRequest(BaseModel):
+    course: str
+    run: str
+    revision: int
+    base_revision: int

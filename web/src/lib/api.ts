@@ -391,7 +391,6 @@ export type NotesDocument = {
   sections: { title: string; topics: TopicNote[] }[];
   sources: NotesSource[];
   models: Record<string, string>;
-  revision?: number;
 };
 
 export type RenderFormat = "html" | "pdf" | "docx";
@@ -407,10 +406,46 @@ export type RenderedArtifact = {
 
 export type NotesRunView = {
   run: NotesRun;
+  /** The current revision's document; each artifact names the revision it shows. */
   document: NotesDocument | null;
+  current_revision: number;
   pdf: boolean;
   topic_pdfs: string[];
   artifacts: RenderedArtifact[];
+};
+
+export type RevisionInfo = {
+  revision: number;
+  parent: number | null;
+  created_at: string;
+  origin: "generation" | "manual" | "restore" | "ai";
+  changed_topics: string[];
+  restored_from: number | null;
+};
+
+export type RevisionView = {
+  info: RevisionInfo;
+  document: NotesDocument;
+};
+
+/** A topic's complete new block order; a block with an empty id is new. */
+export type TopicPatch = {
+  base_revision: number;
+  blocks: NoteBlock[];
+  language?: "uk" | "en" | null;
+};
+
+export type RenderJob = {
+  id: string;
+  revision: number;
+  status: "queued" | "running" | "done" | "failed";
+  formats: RenderFormat[];
+  errors: string[];
+};
+
+export type EditResult = {
+  revision: RevisionInfo;
+  render: RenderJob | null;
 };
 
 export function listNotesRuns(course: string): Promise<NotesRun[]> {

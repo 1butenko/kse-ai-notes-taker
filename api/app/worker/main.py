@@ -1,3 +1,4 @@
+import asyncio
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -6,9 +7,11 @@ from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 
-from app.notes import RUN_ID
+from app.notes import RUN_ID, run_dir
+from app.notes_revisions import EditResult, RevisionConflict
 from app.storage import sha256
 from app.syllabus import SyllabusExtraction
+from app.worker import revisions
 from app.worker.config import WorkerSettings, get_worker_settings
 from app.worker.llm import ask
 from app.worker.mapping import proposal_summary, run_mapping
@@ -27,6 +30,8 @@ from app.worker_contract import (
     MapResponse,
     NotesRequest,
     NotesResponse,
+    RestoreRequest,
+    ReviseRequest,
     TranscribeRequest,
     TranscribeResponse,
 )
@@ -144,15 +149,51 @@ async def generate_notes(
     if body.course in ACTIVE:
         raise HTTPException(status.HTTP_409_CONFLICT, "Notes are already being generated")
 
-    store = open_run(
-        settings.uploads_dir / body.course,
-        body.course,
-        body.run,
-        NotesModels.from_settings(settings),
-    )
-    ACTIVE.add(body.course)
+    ACTIVE.add(body.course)  # Reserved before admission waits for the run lock off the loop.
+    try:
+        store = await asyncio.to_thread(
+            open_run,
+            settings.uploads_dir / body.course,
+            body.course,
+            body.run,
+            NotesModels.from_settings(settings),
+        )
+    except RevisionConflict as error:
+        ACTIVE.discard(body.course)
+        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+    except BaseException:
+        ACTIVE.discard(body.course)
+        raise
     background.add_task(run_notes, opener, settings, store, body.plan, body.transcript)
     return store.run
+
+
+def run_directory(settings: WorkerSettings, course: str, run: str) -> Path:
+    if not COURSE.match(course):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {course!r}")
+    if not RUN_ID.match(run):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid run: {run!r}")
+    return run_dir(settings.uploads_dir / course, run)
+
+
+@app.post("/notes/revise")
+async def revise_notes(
+    body: ReviseRequest,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+) -> EditResult:
+    """Save one topic's blocks as a new immutable revision, without a model."""
+    directory = run_directory(settings, body.course, body.run)
+    return await revisions.revise(directory, body.topic, body.patch)
+
+
+@app.post("/notes/restore")
+async def restore_notes(
+    body: RestoreRequest,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+) -> EditResult:
+    """Copy an earlier revision's content into a new revision, without a model."""
+    directory = run_directory(settings, body.course, body.run)
+    return await revisions.restore(directory, body.revision, body.base_revision)
 
 
 @app.get("/health")

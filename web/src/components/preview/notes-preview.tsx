@@ -42,13 +42,14 @@ type NotesPreviewProps = {
   run: string;
   topicId: string | null;
   document: NotesDocument;
+  textRevision: number;
   pdf: boolean;
   topicPdfs: string[];
   artifacts: RenderedArtifact[];
 };
 
 export function NotesPreview({
-  course, run, topicId, document, pdf, topicPdfs, artifacts,
+  course, run, topicId, document, textRevision, pdf, topicPdfs, artifacts,
 }: NotesPreviewProps) {
   const router = useRouter();
   const [preferredFormat, setPreferredFormat] = useState<"html" | "pdf">("html");
@@ -67,7 +68,8 @@ export function NotesPreview({
       ? topicNotesUrl(course, run, note.topic_id, format)
       : notesFileUrl(course, run, format)
     : null;
-  const textRevision = document.revision ?? 0;
+  // Files without a manifest entry are the original generation's outputs.
+  const artifactRevision = artifact?.revision ?? 0;
 
   const copyLink = async () => {
     try {
@@ -205,8 +207,8 @@ export function NotesPreview({
               </Button>
             </div>
             <span className="text-xs text-muted-foreground">
-              Text revision {textRevision} · {format.toUpperCase()} revision {artifact?.revision ?? 0}
-              {artifact && artifact.revision !== textRevision && " · Older artifact"}
+              Text revision {textRevision} · {format.toUpperCase()} revision {artifactRevision}
+              {url && artifactRevision !== textRevision && " · Older artifact"}
             </span>
             {note && note.status !== "verified" && (
               <Badge className={TOPIC_STATUS[note.status].className}>
@@ -235,7 +237,7 @@ export function NotesPreview({
                   {note?.status === "no_evidence"
                     ? "None of the session materials covered this topic, so it has no notes."
                     : note?.status === "failed"
-                      ? "Writing this topic failed. Resume the run to retry it."
+                      ? "Writing this topic failed. Generate a new run to retry it."
                       : "The notes weren't rendered for this run."}
                 </EmptyDescription>
               </EmptyHeader>

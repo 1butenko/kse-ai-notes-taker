@@ -16,6 +16,7 @@ from app.notes import (
     now,
     run_dir,
 )
+from app.notes_revisions import RevisionConflict, run_lock
 from app.plan import Plan
 from app.syllabus import Transcript
 from app.worker.artifacts import RunStore
@@ -32,6 +33,10 @@ from app.worker.topics import generate_topic
 from app.worker.tracing import course_trace
 
 ACTIVE: set[str] = set()
+COMPLETED_RUN = (
+    "This notes run is complete, and resuming it would overwrite its published notes. "
+    "Start a new run to regenerate them, or rerender this run to rebuild its outputs."
+)
 
 
 def fail_interrupted(uploads_dir: Path) -> list[str]:
@@ -50,25 +55,33 @@ def fail_interrupted(uploads_dir: Path) -> list[str]:
 
 
 def open_run(course_dir: Path, course: str, run_id: str, models: NotesModels) -> RunStore:
-    """The store of a new run, or of an earlier run being resumed."""
+    """The store of a new run, or of an earlier unpublished run being resumed.
+
+    Admission takes the run lock that edits use: a completed run's notes are published
+    (and may be edited), so resuming it would silently replace them.
+    """
     directory = run_dir(course_dir, run_id)
-    previous = directory / "run.json"
-    if previous.is_file():
-        run = NotesRun.model_validate_json(previous.read_text())
-        run.status, run.error, run.warnings = "queued", None, []
-    else:
-        stamp = now()
-        run = NotesRun(
-            id=run_id,
-            course=course,
-            status="queued",
-            stage="queued",
-            created_at=stamp,
-            updated_at=stamp,
-            models=models.summary(),
-        )
-    store = RunStore(directory, run)
-    store.save()
+    directory.mkdir(parents=True, exist_ok=True)
+    with run_lock(directory):
+        previous = directory / "run.json"
+        if previous.is_file():
+            run = NotesRun.model_validate_json(previous.read_text())
+            if run.status == "done" or (directory / "revisions").exists():
+                raise RevisionConflict(COMPLETED_RUN)
+            run.status, run.error, run.warnings = "queued", None, []
+        else:
+            stamp = now()
+            run = NotesRun(
+                id=run_id,
+                course=course,
+                status="queued",
+                stage="queued",
+                created_at=stamp,
+                updated_at=stamp,
+                models=models.summary(),
+            )
+        store = RunStore(directory, run)
+        store.save()
     return store
 
 

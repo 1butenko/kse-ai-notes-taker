@@ -86,6 +86,7 @@ export default async function PreviewPage(props: Props) {
       run={run}
       topicId={topicId}
       document={view.document}
+      textRevision={view.current_revision}
       pdf={view.pdf}
       topicPdfs={view.topic_pdfs}
       artifacts={view.artifacts ?? []}
