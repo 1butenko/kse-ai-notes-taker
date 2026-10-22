@@ -490,3 +490,57 @@ def test_table_caption_must_remain_adjacent_to_a_table(before):
     notes = document(content)
     assert validate_references(notes) == []
     to_quarto(notes, "en", "html")
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        r"$\text{Topic T2}$",
+        r"$\text{Cost \$5; Topic T2 @eq-example}$",
+        r"$$\text{Topic T2 @eq-example [Other](#T2)}$$ {#eq-display}",
+        "$$\n\\text{Topic T2 @eq-example}\n$$ {#eq-display}",
+        "````text\nTopic T2 @eq-example [Other](#T2)\n`````",
+        "~~~text\nTopic T2 @eq-example [Other](#T2)\n~~~~",
+        "   ```text\nTopic T2 @eq-example [Other](#T2)\n   ````",
+        "    Topic T2 @eq-example [Other](#T2)\n    More code",
+        "\tTopic T2 @eq-example [Other](#T2)",
+        "``Topic T2 ` @eq-example [Other](#T2)``",
+        "`Topic T2\n@eq-example [Other](#T2)`",
+    ],
+)
+def test_reference_normalization_preserves_math_and_code(literal):
+    from app.worker.references import ReferenceContext, normalize_links
+
+    notes = cited_document()
+    section = notes.sections[0]
+    other = section.topics[0].model_copy(deep=True)
+    other.topic_id, other.blocks[0].id = "T2", "T2.1"
+    other.blocks[0].content = "Target topic."
+    section.topics.append(other)
+    section.topics[0].blocks[
+        0
+    ].content = f"Intro.\n\n{literal}\n\nGenuine Topic T2, @sec-T2 and [Other](#T2)."
+    assert validate_references(notes) == []
+    assert normalize_links(literal, notes, "T1", ReferenceContext()) == literal
+    for target in ("html", "pdf", "docx"):
+        standalone = topic_to_quarto(notes, section, section.topics[0], "en", target)
+        assert literal in standalone
+        assert (
+            "Genuine [Topic T2](http://localhost:8000/plans/1/notes/run/html#sec-T2)" in standalone
+        )
+        assert "[Other](http://localhost:8000/plans/1/notes/run/html#sec-T2)" in standalone
+        full = to_quarto(notes, "en", target)
+        assert literal in full
+        assert "Genuine [Topic T2](#sec-T2), @sec-T2 and [Other](#sec-T2)." in full
+
+
+def test_masked_math_still_checks_equation_labels_and_unsafe_resources():
+    from app.worker.quarto import QuartoError
+
+    notes = document("$$x=1$$ {#eq-known}\n\nSee @eq-known.")
+    assert validate_references(notes) == []
+    notes.sections[0].topics[0].blocks[0].content += "\n\n$$y=2$$ {#eq-known}"
+    assert any("Duplicate" in issue for issue in validate_references(notes))
+    for content in (r"$\input{/etc/passwd}$", r"$$\input{/etc/passwd}$$"):
+        with pytest.raises(QuartoError, match="external TeX resources"):
+            to_quarto(document(content), "en", "html")

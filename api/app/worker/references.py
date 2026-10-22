@@ -34,10 +34,65 @@ def build_reference_data(document: NotesDocument) -> list[dict]:
     ]
 
 
+def mask_text(value: str) -> str:
+    """Keep offsets and line boundaries when excluding literal regions from scans."""
+    return re.sub(r"[^\r\n]", " ", value)
+
+
+def without_code(value: str) -> str:
+    """Exclude fenced/indented blocks and exact-delimiter inline code spans.
+
+    Fences can have up to three leading spaces; a closer uses the same marker
+    and at least the opener's length. Indented code starts after a blank line
+    (or at the beginning), so ordinary indented paragraph continuations remain
+    prose. This mask never replaces the independent unsafe-Markdown validator.
+    """
+    lines = []
+    fence: str | None = None
+    indented = False
+    previous_blank = True
+    for line in value.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*)", line)
+        blank = not line.strip()
+        if fence is not None:
+            lines.append(mask_text(line))
+            if (
+                marker
+                and marker[1][0] == fence[0]
+                and len(marker[1]) >= len(fence)
+                and not marker[2].strip()
+            ):
+                fence = None
+        elif marker:
+            fence = marker[1]
+            indented = False
+            lines.append(mask_text(line))
+        elif re.match(r"^(?: {4}| {0,3}\t)", line) and (indented or previous_blank):
+            indented = True
+            lines.append(mask_text(line))
+        else:
+            if not blank:
+                indented = False
+            lines.append(line)
+        previous_blank = blank
+    value = "".join(lines)
+    # Delimiter boundaries prevent a shorter run inside a code span from closing
+    # it. Code spans may cross line breaks but not a paragraph boundary.
+    return re.sub(
+        r"(?<![\\`])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)",
+        lambda match: mask_text(match[0]),
+        value,
+    )
+
+
 def prose(value: str) -> str:
-    """Mask displayed code for reference handling, retaining positions in the source."""
-    value = re.sub(r"(?m)^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1\s*$", lambda m: " " * len(m[0]), value)
-    return re.sub(r"(`+)[^`\n]*\1", lambda m: " " * len(m[0]), value)
+    """Exclude code and dollar math from prose references, preserving offsets."""
+    return re.sub(
+        r"(?<!\\)\$\$[\s\S]+?(?<!\\)\$\$|"
+        r"(?<![\\$])\$(?!\$)(?:\\[^\n]|[^$\\\n])+?\$(?!\$)",
+        lambda match: mask_text(match[0]),
+        without_code(value),
+    )
 
 
 def reference_targets(document: NotesDocument) -> dict[str, tuple[TopicNote, str]]:
@@ -85,9 +140,10 @@ def validate_references(document: NotesDocument) -> list[str]:
             evidence = {item.chunk_id: item for item in note.evidence}
             for block in note.blocks:
                 anchors.append(reference_id(note.topic_id, block.id))
-                content = prose(block.content)
-                declared = LABEL.findall(content)
-                for attributes in re.findall(r"\{[^{}]*#[^{}]*\}", content):
+                content = without_code(block.content)
+                visible = prose(block.content)
+                declared = LABEL.findall(visible)
+                for attributes in re.findall(r"\{[^{}]*#[^{}]*\}", visible):
                     if not LABEL.fullmatch(attributes):
                         issues.append(f"Invalid reference label attributes: {attributes}")
                 for label in declared:
@@ -124,11 +180,11 @@ def validate_references(document: NotesDocument) -> list[str]:
                     for section in document.sections
                     for topic in section.topics
                 }
-                for _, fragment in FRAGMENT_LINK.findall(content):
+                for _, fragment in FRAGMENT_LINK.findall(visible):
                     if aliases.get(fragment, fragment) not in targets:
                         issues.append(f"Unknown reference: {fragment}")
                 # A final period is punctuation, not part of the identifier.
-                for token in REFERENCE.findall(content):
+                for token in REFERENCE.findall(visible):
                     token = token.rstrip(".:")
                     if token not in sources and token not in targets:
                         issues.append(f"Unknown reference: {token}")
