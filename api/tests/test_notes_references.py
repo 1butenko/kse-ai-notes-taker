@@ -544,3 +544,103 @@ def test_masked_math_still_checks_equation_labels_and_unsafe_resources():
     for content in (r"$\input{/etc/passwd}$", r"$$\input{/etc/passwd}$$"):
         with pytest.raises(QuartoError, match="external TeX resources"):
             to_quarto(document(content), "en", "html")
+
+
+def test_multiline_inline_math_remains_literal():
+    from app.worker.references import ReferenceContext, normalize_links
+
+    notes = cited_document()
+    other = notes.sections[0].topics[0].model_copy(deep=True)
+    other.topic_id, other.blocks[0].id = "T2", "T2.1"
+    notes.sections[0].topics.append(other)
+    content = "$x +\nTopic T2$\n\nSee Topic T2."
+    notes.sections[0].topics[0].blocks[0].content = content
+    normalized = normalize_links(content, notes, "T1", ReferenceContext())
+    assert "$x +\nTopic T2$" in normalized
+    assert "See [Topic T2](http://localhost:8000/plans/1/notes/run/html#sec-T2)." in normalized
+    for target in ("html", "pdf", "docx"):
+        assert "$x +\nTopic T2$" in to_quarto(notes, "en", target)
+
+
+def test_currency_does_not_hide_prose_references():
+    from app.worker.quarto import QuartoError
+    from app.worker.references import ReferenceContext, normalize_links
+
+    notes = cited_document()
+    other = notes.sections[0].topics[0].model_copy(deep=True)
+    other.topic_id, other.blocks[0].id = "T2", "T2.1"
+    notes.sections[0].topics.append(other)
+    content = "Prices are $5 and Topic T2 costs $10."
+    normalized = normalize_links(content, notes, "T1", ReferenceContext())
+    assert normalized == (
+        "Prices are $5 and [Topic T2]"
+        "(http://localhost:8000/plans/1/notes/run/html#sec-T2) costs $10."
+    )
+    notes.sections[0].topics[0].blocks[0].content = "Cost $5. Unknown @eq-unknown. Then $10."
+    assert "Unknown reference: eq-unknown" in validate_references(notes)
+    with pytest.raises(QuartoError, match="eq-unknown"):
+        to_quarto(notes, "en", "html")
+
+
+DOLLAR_CASES = [
+    ("$x +\nTopic T2$", True),
+    ("$x +\r\nTopic T2$", True),
+    ("$x +\n  Topic T2$", True),
+    ("Prices are $5 and Topic T2 costs $10.", False),
+    ("$ Topic T2$", False),
+    ("$Topic T2 $", False),
+    ("$Topic T2$10", False),
+    ("$Topic T2\n\nnext$", False),
+    ("$$Topic T2\n\n$$", False),
+    ("$$\nTopic T2\n$$", True),
+    ("$$Topic T2$$10", True),
+    (r"\$Topic T2$", False),
+    (r"\\$Topic T2$", True),
+    (r"$x \$ Topic T2$", True),
+    (r"$Topic T2\ $", True),
+    ("$x$10 and Topic T2$", True),
+    ("$$Topic T2$", True),
+    ("$Topic T2$$", True),
+]
+
+
+@pytest.mark.parametrize("content,is_math", DOLLAR_CASES)
+def test_dollar_delimiters_keep_math_distinct_from_prose(content, is_math):
+    from app.worker.references import prose
+
+    assert ("Topic T2" not in prose(content)) == is_math
+    assert len(prose(content)) == len(content)
+
+
+def test_dollar_masks_match_installed_pandoc():
+    """Optional parser differential test; no application path invokes Pandoc."""
+    import json
+    import os
+    import subprocess
+
+    from app.worker.references import prose
+
+    binary = os.environ.get("PANDOC_TEST_BIN")
+    if not binary:
+        pytest.skip("Set PANDOC_TEST_BIN to compare against the installed Markdown parser")
+
+    def contains_math(value):
+        if isinstance(value, dict):
+            if value.get("t") == "Math" and "Topic T2" in value["c"][1]:
+                return True
+            return any(contains_math(child) for child in value.values())
+        if isinstance(value, list):
+            return any(contains_math(child) for child in value)
+        return False
+
+    for content, expected in DOLLAR_CASES:
+        result = subprocess.run(
+            [binary, "--from", "markdown", "--to", "json"],
+            input=content,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        parsed_as_math = contains_math(json.loads(result.stdout))
+        assert parsed_as_math == expected, content
+        assert ("Topic T2" not in prose(content)) == parsed_as_math, content

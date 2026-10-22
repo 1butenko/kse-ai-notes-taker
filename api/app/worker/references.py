@@ -12,6 +12,7 @@ LABEL = re.compile(r"\{#([^{}\s]+)\}")
 REFERENCE = re.compile(r"(?<![\w/])@([A-Za-z0-9][A-Za-z0-9_.:-]*[A-Za-z0-9]|[A-Za-z0-9])")
 FRAGMENT_LINK = re.compile(r"(?<!!)\[([^\[\]\n]+)\]\(#([^\s)]+)\)")
 MARKDOWN_LINK = re.compile(r"!?\[[^\[\]\n]*\]\([^\n)]*\)")
+BLANK_LINE = re.compile(r"\r?\n[ \t]*\r?\n")
 VALID_LABEL = re.compile(r"(?:eq|fig|tbl)-[a-zA-Z0-9][a-zA-Z0-9_.-]*\Z")
 
 
@@ -85,14 +86,57 @@ def without_code(value: str) -> str:
     )
 
 
+def math_end(value: str, start: int, delimiter: str) -> int | None:
+    """Find a dollar-math closer using Pandoc's tex_math_dollars boundaries.
+
+    https://pandoc.org/MANUAL.html#extension-tex_math_dollars
+    Inline opening/closing whitespace and a digit after the closer prevent a
+    match. Both forms allow line breaks but not blank lines. Backslash escapes
+    consume their next character, including a literal dollar or escaped space.
+    """
+    cursor = body_start = start + len(delimiter)
+    inline = delimiter == "$"
+    if cursor == len(value) or (inline and value[cursor].isspace()):
+        return None
+    trailing_space = False
+    while cursor < len(value):
+        if BLANK_LINE.match(value, cursor):
+            return None
+        if value.startswith(delimiter, cursor):
+            end = cursor + len(delimiter)
+            if cursor == body_start or (
+                inline and (trailing_space or (end < len(value) and value[end] in "0123456789"))
+            ):
+                return None
+            return end
+        if value[cursor] == "\\":
+            cursor += 2
+            trailing_space = False
+        else:
+            trailing_space = value[cursor] in " \t\r\n"
+            cursor += 1
+    return None
+
+
 def prose(value: str) -> str:
-    """Exclude code and dollar math from prose references, preserving offsets."""
-    return re.sub(
-        r"(?<!\\)\$\$[\s\S]+?(?<!\\)\$\$|"
-        r"(?<![\\$])\$(?!\$)(?:\\[^\n]|[^$\\\n])+?\$(?!\$)",
-        lambda match: mask_text(match[0]),
-        without_code(value),
-    )
+    """Exclude code and Pandoc dollar math without hiding currency prose."""
+    value = without_code(value)
+    result = list(value)
+    cursor = 0
+    while cursor < len(value):
+        if value[cursor] == "\\":
+            cursor += 2
+            continue
+        if value[cursor] == "$":
+            end = math_end(value, cursor, "$$") if value.startswith("$$", cursor) else None
+            if end is None:
+                end = math_end(value, cursor, "$")
+            if end is not None:
+                result[cursor:end] = mask_text(value[cursor:end])
+                cursor = end
+                continue
+        cursor += 1
+    return "".join(result)
 
 
 def reference_targets(document: NotesDocument) -> dict[str, tuple[TopicNote, str]]:
