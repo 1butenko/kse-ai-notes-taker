@@ -41,7 +41,15 @@ export type Section = {
   modules: Module[];
 };
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  /** The HTTP status, or 0 when the server sent none. */
+  readonly status: number;
+
+  constructor(message: string, status = 0) {
+    super(message);
+    this.status = status;
+  }
+}
 
 export type UploadCategory = "syllabus" | "reading";
 
@@ -60,7 +68,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const detail = typeof body?.detail === "string" ? body.detail : `Request failed (${res.status})`;
-    throw new ApiError(detail);
+    throw new ApiError(detail, res.status);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -381,7 +389,19 @@ export type NotesSource = {
   sessions: number[];
 };
 
+export type NoteAsset = {
+  id: string;
+  name: string;
+  path: string;
+  media_type: "image/png" | "image/jpeg";
+  sha256: string;
+  width: number;
+  height: number;
+};
+
 export type NotesDocument = {
+  /** Images that saved revisions reference; uploads alone are not listed. */
+  assets: NoteAsset[];
   schema_version: number;
   language: "uk" | "en" | null;
   course: string;
@@ -448,6 +468,63 @@ export type EditResult = {
   render: RenderJob | null;
 };
 
+function notesPath(course: string, run: string): string {
+  return `/plans/${encodeURIComponent(course)}/notes/${encodeURIComponent(run)}`;
+}
+
+function sendJson(method: string, body: unknown): RequestInit {
+  return { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+}
+
+/** The committed history, oldest first; uncommitted snapshots never appear. */
+export function listNotesRevisions(course: string, run: string): Promise<RevisionInfo[]> {
+  return request(`${notesPath(course, run)}/revisions`);
+}
+
+export function getNotesRevision(
+  course: string,
+  run: string,
+  revision: number,
+): Promise<RevisionView> {
+  return request(`${notesPath(course, run)}/revisions/${revision}`);
+}
+
+/** Saves one topic as a new revision; HTTP 409 means `base_revision` is no longer current. */
+export function saveNotesTopic(
+  course: string,
+  run: string,
+  topic: string,
+  patch: TopicPatch,
+): Promise<EditResult> {
+  return request(`${notesPath(course, run)}/topics/${encodeURIComponent(topic)}`, sendJson("PATCH", patch));
+}
+
+/** Copies an earlier revision's text into a new revision on top of `baseRevision`. */
+export function restoreNotesRevision(
+  course: string,
+  run: string,
+  revision: number,
+  baseRevision: number,
+): Promise<EditResult> {
+  return request(
+    `${notesPath(course, run)}/revisions/${revision}/restore`,
+    sendJson("POST", { base_revision: baseRevision }),
+  );
+}
+
+export type NoteAssetUpload = {
+  asset: NoteAsset;
+  /** The relative path a figure's Markdown uses, e.g. `assets/<sha256>.png`. */
+  markdown_path: string;
+};
+
+/** Imports a PNG/JPEG into the run's catalog; no revision changes until one references it. */
+export function uploadNoteAsset(course: string, run: string, file: File): Promise<NoteAssetUpload> {
+  const form = new FormData();
+  form.append("file", file);
+  return request(`${notesPath(course, run)}/assets`, { method: "POST", body: form });
+}
+
 export function listNotesRuns(course: string): Promise<NotesRun[]> {
   return request(`/plans/${course}/notes`);
 }
@@ -488,6 +565,6 @@ export async function fetchNotesRun(course: string, run: string): Promise<NotesR
     { cache: "no-store" },
   );
   if (res.status === 404) return null;
-  if (!res.ok) throw new ApiError(`Request failed (${res.status})`);
+  if (!res.ok) throw new ApiError(`Request failed (${res.status})`, res.status);
   return res.json();
 }

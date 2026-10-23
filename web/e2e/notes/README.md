@@ -103,19 +103,42 @@ with a figure loses the figure, and `@fig-…` renders as `?@fig-…` in HTML, P
 8. The preview renders MathJax in the sandboxed frame on desktop and on T2 (with the
    Unresolved badge). At 390 px, neither the page nor the notes body scrolls horizontally.
 
+## Editing workflow (`notes-workflow.spec.ts`)
+
+This file generates its own run, so the smoke run keeps revision 0. Revision numbers are
+relative to the run's HEAD when each test starts.
+
+1. **Edit, 409 and draft recovery.** Tab A edits the T1 Sarrus formula, adds a `remark`
+   block and moves it up, ticks a citation from T1's evidence list, and saves. The API then
+   has the next revision (`manual`, `changed_topics == ["T1"]`), a `b-<hex>` ID for the new
+   block, T1 `unresolved` with `verification_stale`, T2 unchanged, and no new mock LLM
+   calls. Tab B started a draft on the old base: a focus refresh shows the newer revision
+   and keeps the draft; Save gets the 409. After a reload the draft is found under its old
+   base (sessionStorage key `…/T1@<base>`), shows what changed since that base, and saves
+   only after an explicit transfer.
+2. **History and restore.** An API edit of T2 is listed in History with a block diff (old
+   and new text, added citation). Restoring the earlier revision creates a `restore`
+   revision with `restored_from`; a new tab shows the same text revision and history.
+3. **Leaving with a draft.** Topic links and the home link ask first ("Stay" keeps the
+   text), closing the tab raises `beforeunload`, and after leaving the draft is offered
+   again on return.
+4. **Figure into the draft.** "Insert image" shows the upload validation error for a
+   non-image, then puts the uploaded `figure.png` Markdown (`{#fig-t1-1}`) into the draft
+   only; HEAD is unchanged until Save, after which `document.assets` lists the image.
+5. **Unknown language.** A run written by the test with `language: null` needs an
+   explicit uk/en choice before Save; saving unchanged blocks makes a metadata revision.
+
 ## Planned scenarios (`notes-workflow.spec.ts`, currently `fixme`)
 
 These follow the Task 12 plan. Each one is skipped until its interfaces land; check the
 landed contracts again before writing the bodies.
 
-1. **Edit and history.** Depends on Task 6 (revisions API), Task 7 (editor, diff, restore
-   UI) and Task 8 (revision render jobs and artifact routes).
-   Open HTML preview → edit a T1 block → save with `base_revision` → the text revision becomes 1
-   → poll the render job until revision 1 HTML/PDF are `ready` → the preview shows "Text
-   revision 1" with no "Older artifact" note → history lists 0 and 1 → restore 0 → this
-   creates revision 2 with the old text, `verification_stale` and a fresh render. A second
-   save with the old base gets HTTP 409. A forced render failure (for example, an invalid
-   label in a saved block) keeps the content and the previous ready artifact.
+1. **Artifacts of saved revisions.** Depends on Task 8 (revision render jobs and artifact
+   routes). After a save or restore, poll the render job until revision N HTML/PDF are
+   `ready` → the preview shows "Text revision N" with no "Older artifact" note. A forced
+   render failure (for example, an invalid label in a saved block) keeps the content and the
+   previous ready artifact. Rendering the figure saved by scenario 4 above also covers the
+   known `?@fig-…` defect in the browser.
 2. **AI suggestion review.** Depends on Task 9 (suggestions API and UI). The mock needs
    answers for the suggestion and re-verification schemas once they are named.
    Request a suggestion for one block → reject it, and the revision is unchanged → request

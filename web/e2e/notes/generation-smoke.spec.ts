@@ -120,7 +120,7 @@ test("the figure registers through the asset API", async ({ request }) => {
   const stored = await request.get(notesUrl(id, `/assets/${asset.id}`));
   expect(stored.status()).toBe(200);
   expect(stored.headers()["content-type"]).toBe("image/png");
-  // Placing it into the saved document needs the revision/editor interfaces (Task 6/7).
+  // Placing it into a saved revision through the editor: notes-workflow.spec.ts.
 });
 
 test("legacy notes still open without schema metadata", async ({ request, page }) => {

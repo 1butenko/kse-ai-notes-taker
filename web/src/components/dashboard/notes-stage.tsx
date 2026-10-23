@@ -16,6 +16,7 @@ import {
 import { toast } from "sonner";
 
 import { useFileViewer } from "@/components/dashboard/file-viewer";
+import { artifactRevision, RevisionTag } from "@/components/notes/artifact-revision";
 import {
   Accordion,
   AccordionContent,
@@ -179,6 +180,11 @@ function TopicRow({ note, onOpen }: { note: TopicNote; onOpen?: () => void }) {
         )}
       </ItemContent>
       <ItemActions>
+        {note.verification_stale && (
+          <Badge variant="outline" title="Edited after its last check">
+            Verification outdated
+          </Badge>
+        )}
         <Badge className={status.className}>{status.label}</Badge>
         {onOpen && (
           <Button variant="outline" size="sm" onClick={onOpen}>
@@ -318,6 +324,11 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
 
   const run = view?.run.id === selected ? view.run : null;
   const polling = run !== null && isActive(run);
+  const textRevision = view?.current_revision ?? 0;
+  const pdfRevision = artifactRevision(view?.artifacts ?? [], "pdf", null);
+  const fileTitle = (title: string, revision: number) =>
+    `${title} · PDF revision ${revision}` +
+    (revision < textRevision ? ` (older than text revision ${textRevision})` : "");
 
   useEffect(() => {
     if (!polling || !selected) return;
@@ -446,14 +457,16 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
                       onClick={() =>
                         openFile({
                           path: "notes.pdf",
-                          title: view?.document?.title ?? "Lecture notes",
+                          title: fileTitle(view?.document?.title ?? "Lecture notes", pdfRevision),
                           url: notesFileUrl(course, run.id, "pdf"),
                         })
                       }
                     >
                       <FileTextIcon />
                       Open PDF
+                      <RevisionTag revision={pdfRevision} text={textRevision} />
                     </Button>
+                    {/* The Quarto source at this URL is the original generation's. */}
                     <a
                       href={notesFileUrl(course, run.id, "qmd")}
                       download
@@ -461,7 +474,14 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
                     >
                       <FileCodeIcon />
                       Quarto source
+                      <RevisionTag revision={0} text={textRevision} />
                     </a>
+                    {textRevision > 0 && (
+                      <p className="basis-full text-sm text-muted-foreground">
+                        Text revision {textRevision}. Files marked older were rendered before the
+                        latest saved edits and don&apos;t include them.
+                      </p>
+                    )}
                     {view?.document?.sections.some((s) =>
                       s.topics.some((t) => t.status === "failed"),
                     ) && (
@@ -499,7 +519,10 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
                           ? () =>
                               openFile({
                                 path: `${note.topic_id}.pdf`,
-                                title: note.title,
+                                title: fileTitle(
+                                  note.title,
+                                  artifactRevision(view.artifacts ?? [], "pdf", note.topic_id),
+                                ),
                                 url: topicPdfUrl(course, run.id, note.topic_id),
                               })
                           : undefined

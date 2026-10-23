@@ -85,11 +85,7 @@ export default async function PreviewPage(props: Props) {
       course={course}
       run={run}
       topicId={topicId}
-      document={view.document}
-      textRevision={view.current_revision}
-      pdf={view.pdf}
-      topicPdfs={view.topic_pdfs}
-      artifacts={view.artifacts ?? []}
+      view={{ ...view, document: view.document, artifacts: view.artifacts ?? [] }}
     />
   );
 }
