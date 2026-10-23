@@ -96,7 +96,7 @@ function pythonEnv(uploads) {
     NOTES_ESCALATION_MODEL: "e2e/escalation",
     NOTES_CONCURRENCY: "1",
     QUARTO_CONCURRENCY: "1",
-    QUARTO_BIN: QUARTO,
+    QUARTO_BIN: path.join(root, "quarto"),
     LANGFUSE_PUBLIC_KEY: "",
     LANGFUSE_SECRET_KEY: "",
     LANGFUSE_BASE_URL: `${url(PORTS.mock)}/unused-langfuse`,
@@ -176,6 +176,11 @@ async function main() {
   fs.mkdirSync(path.join(root, "logs"), { recursive: true });
   fs.mkdirSync(uploads);
   console.log(`notes-e2e: root ${root} (Quarto ${quartoVersion})`);
+  // A per-stack launcher lets acceptance tests make Quarto unavailable without
+  // modifying the installed tool or restarting the serving worker.
+  const launcher = path.join(root, "quarto");
+  fs.writeFileSync(launcher, `#!${PYTHON}\nimport os, pathlib, sys\nif pathlib.Path(${JSON.stringify(path.join(root, "quarto-disabled"))}).exists():\n    sys.exit("Quarto disabled for acceptance test")\nos.execvp(${JSON.stringify(QUARTO)}, [${JSON.stringify(QUARTO)}, *sys.argv[1:]])\n`);
+  fs.chmodSync(launcher, 0o755);
 
   const env = pythonEnv(uploads);
   const seeded = spawnSync(PYTHON, ["-m", "tests.e2e.synthetic", "seed", uploads], {

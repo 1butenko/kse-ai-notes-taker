@@ -60,7 +60,7 @@ import {
   listNotesRuns,
   notesFileUrl,
   previewPath,
-  topicPdfUrl,
+  revisionArtifactUrl,
   type NotesDocument,
   type NotesRun,
   type NotesRunView,
@@ -458,7 +458,7 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
                         openFile({
                           path: "notes.pdf",
                           title: fileTitle(view?.document?.title ?? "Lecture notes", pdfRevision),
-                          url: notesFileUrl(course, run.id, "pdf"),
+                          url: revisionArtifactUrl(course, run.id, pdfRevision, "pdf"),
                         })
                       }
                     >
@@ -523,7 +523,13 @@ export function NotesStage({ course, hasMaterials, onDoneChange }: NotesStagePro
                                   note.title,
                                   artifactRevision(view.artifacts ?? [], "pdf", note.topic_id),
                                 ),
-                                url: topicPdfUrl(course, run.id, note.topic_id),
+                                url: revisionArtifactUrl(
+                                  course,
+                                  run.id,
+                                  artifactRevision(view.artifacts ?? [], "pdf", note.topic_id),
+                                  "pdf",
+                                  note.topic_id,
+                                ),
                               })
                           : undefined
                     }

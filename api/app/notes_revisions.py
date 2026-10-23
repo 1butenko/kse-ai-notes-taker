@@ -274,6 +274,13 @@ class RevisionStore:
             (stage / "document.json").write_text(view.document.model_dump_json(indent=2))
             (stage / "revision.json").write_text(view.info.model_dump_json(indent=2))
             (stage / "artifacts").mkdir()
+            if view.info.revision > 0:
+                # Intent is staged before HEAD, even if scheduling never happens.
+                from app.notes_artifacts import new_job
+
+                job = new_job(view.info.revision, ["html", "pdf"])
+                (stage / "jobs").mkdir()
+                (stage / "jobs" / f"{job.id}.json").write_text(job.model_dump_json())
             # The run lock and allocation policy ensure the destination never exists.
             os.rename(stage, self._folder(view.info.revision))
         finally:

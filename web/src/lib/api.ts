@@ -429,6 +429,8 @@ export type NotesRunView = {
   /** The current revision's document; each artifact names the revision it shows. */
   document: NotesDocument | null;
   current_revision: number;
+  display_revision: number | null;
+  render: RenderJob | null;
   pdf: boolean;
   topic_pdfs: string[];
   artifacts: RenderedArtifact[];
@@ -539,6 +541,35 @@ export function generateNotes(course: string, resume?: string): Promise<NotesRun
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(resume ? { resume } : {}),
   });
+}
+
+/** Rebuild a saved revision's files; no model is called. */
+export function renderNotesRevision(
+  course: string,
+  run: string,
+  revision: number,
+  formats: RenderFormat[] = ["html", "pdf"],
+): Promise<RenderJob> {
+  return request(
+    `${notesPath(course, run)}/revisions/${revision}/render`,
+    sendJson("POST", { formats }),
+  );
+}
+
+export function getRenderJob(course: string, run: string, job: string): Promise<RenderJob> {
+  return request(`${notesPath(course, run)}/render-jobs/${encodeURIComponent(job)}`);
+}
+
+/** The canonical URL of one revision's file; it never falls back to another revision. */
+export function revisionArtifactUrl(
+  course: string,
+  run: string,
+  revision: number,
+  kind: RenderFormat,
+  topic?: string | null,
+): string {
+  const scope = topic ? `/topics/${encodeURIComponent(topic)}` : "";
+  return `${PUBLIC_API_URL}${notesPath(course, run)}/revisions/${revision}${scope}/artifacts/${kind}`;
 }
 
 export function notesFileUrl(course: string, run: string, kind: RenderFormat | "qmd"): string {

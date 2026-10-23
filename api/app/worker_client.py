@@ -6,12 +6,13 @@ from fastapi import Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
-from app.notes_revisions import EditResult
+from app.notes_revisions import EditResult, RenderJob
 from app.worker_contract import (
     MapRequest,
     MapResponse,
     NotesRequest,
     NotesResponse,
+    RenderRequest,
     RestoreRequest,
     ReviseRequest,
     TranscribeRequest,
@@ -40,6 +41,9 @@ class WorkerClient:
 
     async def restore_notes(self, request: RestoreRequest) -> EditResult:
         return await self.call("/notes/restore", request, EditResult)
+
+    async def render_notes(self, request: RenderRequest) -> RenderJob:
+        return await self.call("/notes/render", request, RenderJob)
 
     async def call[T: BaseModel](self, path: str, request: BaseModel, response: type[T]) -> T:
         try:

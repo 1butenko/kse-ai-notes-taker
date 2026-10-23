@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel
 
-from app.notes import NotesRun
+from app.notes import NotesRun, RenderFormat
 from app.notes_revisions import TopicPatch
 from app.plan import BookMatch, Plan, Proposal
 from app.syllabus import SyllabusExtraction, Transcript
@@ -52,3 +52,10 @@ class RestoreRequest(BaseModel):
     run: str
     revision: int
     base_revision: int
+
+
+class RenderRequest(BaseModel):
+    course: str
+    run: str
+    revision: int
+    formats: list[RenderFormat]

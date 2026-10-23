@@ -264,13 +264,40 @@ def test_control_fixture_renders_with_actual_quarto(control_render) -> None:
         assert any(name.startswith("word/media/") for name in archive.namelist())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known defect: a non-callout block whose content starts with a figure gets its bold "
-    "title inlined into the image paragraph, so Quarto renders no figure and @fig-... "
-    "prints as ?@fig-... in HTML, PDF and DOCX. Remove this marker once fixed.",
-)
 def test_control_cross_references_resolve_in_every_format(control_render) -> None:
     output, _ = control_render
-    for kind, text in rendered_text(output).items():
+    from html.parser import HTMLParser
+
+    class VisibleText(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.hidden = 0
+            self.text = []
+            self.figures = 0
+            self.figure_links = 0
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ("script", "style"):
+                self.hidden += 1
+            if tag == "figure":
+                self.figures += 1
+            if tag == "a" and dict(attrs).get("href") == "#fig-t2-eigenvector":
+                self.figure_links += 1
+
+        def handle_endtag(self, tag):
+            if tag in ("script", "style"):
+                self.hidden -= 1
+
+        def handle_data(self, data):
+            if not self.hidden:
+                self.text.append(data)
+
+    texts = rendered_text(output)
+    visible = VisibleText()
+    visible.feed(texts["html"])
+    assert visible.figures >= 1 and visible.figure_links >= 1
+    texts["html"] = " ".join(visible.text)
+    for kind, text in texts.items():
+        # AnchorJS's inline script contains '?@' in a regex; it is not rendered text.
         assert "?@" not in text, kind
+        assert "Вектор v і його образ Av" in text, kind

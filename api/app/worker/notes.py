@@ -26,7 +26,7 @@ from app.worker.models import NotesModels
 from app.worker.openrouter import Opener, OpenRouterClient
 from app.worker.planning import plan_course
 from app.worker.quarto import QuartoError, render_document
-from app.worker.references import ReferenceContext
+from app.worker.references import revision_context
 from app.worker.render import to_quarto, topic_to_quarto
 from app.worker.sources import Retriever, build_inputs
 from app.worker.topics import generate_topic
@@ -44,7 +44,10 @@ def fail_interrupted(uploads_dir: Path) -> list[str]:
     failed so they can be resumed."""
     interrupted = []
     for file in uploads_dir.glob("*/notes/*/run.json"):
-        run = NotesRun.model_validate_json(file.read_text())
+        try:
+            run = NotesRun.model_validate_json(file.read_text())
+        except (OSError, ValueError):
+            continue
         if run.status in ("queued", "running"):
             store = RunStore(file.parent, run)
             run.status = "failed"
@@ -228,7 +231,6 @@ async def render_notes_outputs(
     notes.pdf/notes.qmd and topics/<id>/note.pdf download locations.
     """
     artifacts: list[RenderedArtifact] = []
-    gate = asyncio.Semaphore(settings.quarto_concurrency)
     store.log("rendering", "Rendering HTML and PDF with Quarto")
     store.write("artifacts.json", "[]")
 
@@ -237,7 +239,8 @@ async def render_notes_outputs(
         stem = "note" if note else "notes"
         prepared = {}
         resources = {}
-        context = ReferenceContext(public_api_url=settings.public_api_url)
+        # Generation output is revision 0; links must not follow newer revisions.
+        context = revision_context(settings.public_api_url, document, 0)
         results = []
         for target in ("html", "pdf"):
             try:
@@ -263,10 +266,14 @@ async def render_notes_outputs(
                         error=str(error),
                     )
                 )
-        async with gate:
-            results += await render_document(
-                prepared, store.directory / prefix, 0, settings.quarto_bin, resources=resources
-            )
+        results += await render_document(
+            prepared,
+            store.directory / prefix,
+            0,
+            settings.quarto_bin,
+            resources=resources,
+            concurrency=settings.quarto_concurrency,
+        )
         for artifact in results:
             artifact.path = prefix + artifact.path
             artifact.topic_id = note.topic_id if note else None

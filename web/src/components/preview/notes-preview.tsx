@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ExternalLinkIcon, FileTextIcon, LinkIcon, PencilLineIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -35,9 +35,10 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getNotesRun,
-  notesFileUrl,
+  getRenderJob,
+  renderNotesRevision,
+  revisionArtifactUrl,
   previewPath,
-  topicNotesUrl,
   type NotesDocument,
   type NotesRunView,
 } from "@/lib/api";
@@ -61,6 +62,9 @@ type NotesPreviewProps = {
 
 export function NotesPreview({ course, run, topicId, view: initial }: NotesPreviewProps) {
   const [view, setView] = useState(initial);
+  const requested = useRef(0);
+  const accepted = useRef(0);
+  const [retrying, setRetrying] = useState(false);
   const [chosenMode, setChosenMode] = useState<Mode | null>(null);
   const [preferredFormat, setPreferredFormat] = useState<"html" | "pdf">("html");
   const { document, current_revision: textRevision, artifacts } = view;
@@ -73,12 +77,11 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
   const html = available.find((a) => a.format === "html");
   const hasPdf = note ? withPdf.has(note.topic_id) : view.pdf;
   const format = preferredFormat === "html" && html ? "html" : hasPdf ? "pdf" : "html";
-  const url = (format === "html" ? html : hasPdf)
-    ? note
-      ? topicNotesUrl(course, run, note.topic_id, format)
-      : notesFileUrl(course, run, format)
-    : null;
   const shownRevision = artifactRevision(artifacts, format, topicId);
+  const shownArtifact = available.find((a) => a.format === format);
+  const url = (format === "html" ? html : hasPdf)
+    ? revisionArtifactUrl(course, run, shownRevision, format, topicId)
+    : null;
 
   const draft = useTopicDraft(course, run, note ? note.topic_id : null);
   const drafts = useDraftTopics(course, run);
@@ -87,18 +90,22 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
   const mode: Mode = chosenMode ?? "preview";
   const guard = useLeaveGuard(draft !== null);
 
-  const apply = useCallback((next: NotesRunView) => {
+  const apply = useCallback((next: NotesRunView, sequence: number) => {
     const document = next.document;
-    // HEAD never moves back, so a slower, older answer must not replace a newer one.
-    if (document) {
+    // Render completion changes artifacts without advancing HEAD. Order every
+    // refresh, including the mount request, so a delayed equal-revision answer
+    // cannot replace a newer manifest or return a completed job to pending.
+    if (document && sequence >= accepted.current) {
+      accepted.current = sequence;
       setView((prev) => (next.current_revision < prev.current_revision ? prev : { ...next, document }));
     }
   }, []);
 
   const refresh = useCallback(async () => {
+    const sequence = ++requested.current;
     try {
       const next = await getNotesRun(course, run);
-      apply(next);
+      apply(next, sequence);
       return next;
     } catch {
       return null;
@@ -107,8 +114,9 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
 
   useEffect(() => {
     let cancelled = false;
+    const sequence = ++requested.current;
     getNotesRun(course, run).then(
-      (next) => !cancelled && apply(next),
+      (next) => !cancelled && apply(next, sequence),
       () => {},
     );
     return () => {
@@ -129,6 +137,46 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
       window.document.removeEventListener("visibilitychange", visible);
     };
   }, [mode, refresh]);
+
+  const job = view.render;
+  const pendingJob = job && (job.status === "queued" || job.status === "running") ? job.id : null;
+  useEffect(() => {
+    if (!pendingJob) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Poll this job; once it has finished, reload the run for its artifacts and labels.
+    const poll = async () => {
+      try {
+        const polled = await getRenderJob(course, run, pendingJob);
+        if (cancelled) return;
+        if (polled.status === "done" || polled.status === "failed") {
+          // The reloaded view's latest job decides whether polling continues.
+          if (await refresh()) return;
+        }
+      } catch {
+        // A temporary connection failure keeps the saved preview; keep polling.
+      }
+      if (!cancelled) timer = setTimeout(poll, 1_000);
+    };
+    timer = setTimeout(poll, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [course, run, pendingJob, refresh]);
+
+  // Rendering never calls a model: it rebuilds files for a saved revision.
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await renderNotesRevision(course, run, job?.revision ?? textRevision, job?.formats);
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not start rendering");
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   const choose = (next: Mode) => {
     setChosenMode(next);
@@ -154,7 +202,7 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
   const frame = (title: string) =>
     url ? (
       <iframe
-        key={url}
+        key={`${url}:${shownArtifact?.path ?? "legacy"}`}
         src={url}
         title={title}
         sandbox={format === "html" ? "allow-scripts" : undefined}
@@ -296,6 +344,29 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
               ))}
             </SelectContent>
           </Select>
+
+          {job && ["queued", "running"].includes(job.status) && (
+            <p role="status" className="text-sm text-muted-foreground">
+              Rendering revision {job.revision}. Saved text is safe; the preview keeps its labelled version.
+            </p>
+          )}
+          {job?.status === "failed" && (
+            <Alert variant="destructive">
+              <AlertTitle>Could not render revision {job.revision}</AlertTitle>
+              <AlertDescription>
+                <p>Your saved text and previous files are kept.</p>
+                {job.errors.map((error, index) => <p key={index}>{error}</p>)}
+                <Button size="sm" variant="outline" onClick={retry} disabled={retrying}>
+                  {retrying ? "Starting…" : "Retry render"}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {!job && (!url || shownRevision < textRevision) && (
+            <Button size="sm" variant="outline" onClick={retry} disabled={retrying} className="self-start">
+              Render revision {textRevision}
+            </Button>
+          )}
 
           <Tabs
             value={mode}

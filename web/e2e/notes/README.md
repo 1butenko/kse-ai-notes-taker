@@ -81,8 +81,9 @@ cd api && QUARTO_TEST_BIN=/path/to/quarto TYPST_FONT_PATHS=... \
   NOTES_FIXTURE_OUTPUT=/tmp/control-render uv run pytest tests/test_notes_fixtures.py
 ```
 
-It currently records one known defect as a strict `xfail`: a block whose content starts
-with a figure loses the figure, and `@fig-…` renders as `?@fig-…` in HTML, PDF and DOCX.
+The native fixture checks real figures and resolved references in HTML, PDF and DOCX.
+HTML assertions use visible text: bundled AnchorJS contains `?@` in a script regex,
+which is unrelated to unresolved references.
 
 ## Coverage today (`generation-smoke.spec.ts`)
 
@@ -106,14 +107,15 @@ with a figure loses the figure, and `@fig-…` renders as `?@fig-…` in HTML, P
 ## Editing workflow (`notes-workflow.spec.ts`)
 
 This file generates its own run, so the smoke run keeps revision 0. Revision numbers are
-relative to the run's HEAD when each test starts.
+relative to the run's HEAD when each test starts. Saves and restores automatically render
+HTML/PDF without calling the mock LLM.
 
 1. **Edit, 409 and draft recovery.** Tab A edits the T1 Sarrus formula, adds a `remark`
    block and moves it up, ticks a citation from T1's evidence list, and saves. The API then
    has the next revision (`manual`, `changed_topics == ["T1"]`), a `b-<hex>` ID for the new
    block, T1 `unresolved` with `verification_stale`, T2 unchanged, and no new mock LLM
    calls. Going to T2 and back with browser Back still shows the new text revision and the
-   older-artifact note. Tab B started a draft on the old base: a focus refresh shows the newer revision
+   correctly labelled artifact revision. Tab B started a draft on the old base: a focus refresh shows the newer revision
    and keeps the draft; Save gets the 409. After a reload the draft is found under its old
    base (sessionStorage key `…/T1@<base>`), shows what changed since that base, and saves
    only after an explicit transfer.
@@ -128,23 +130,26 @@ relative to the run's HEAD when each test starts.
    only; HEAD is unchanged until Save, after which `document.assets` lists the image.
 5. **Unknown language.** A run written by the test with `language: null` needs an
    explicit uk/en choice before Save; saving unchanged blocks makes a metadata revision.
+6. **Delayed responses.** A held response with the same text revision and older artifacts
+   cannot overwrite a newer completed render in the browser.
+7. **Saved and restored artifacts.** The image dialog inserts a figure into an empty block;
+   after Save, the canonical revision HTML contains a real figure and resolved reference,
+   and the actual PDF contains its caption and figure number. Restore renders its own
+   revision. Disabling the stack's Quarto launcher (`<root>/quarto-disabled`) keeps the
+   saved text, the new history entry and the previous HTML/PDF, each labelled with its own
+   older revision; the Retry render button publishes current files when Quarto is
+   re-enabled. These operations add zero model calls.
 
 ## Planned scenarios (`notes-workflow.spec.ts`, currently `fixme`)
 
 These follow the Task 12 plan. Each one is skipped until its interfaces land; check the
 landed contracts again before writing the bodies.
 
-1. **Artifacts of saved revisions.** Depends on Task 8 (revision render jobs and artifact
-   routes). After a save or restore, poll the render job until revision N HTML/PDF are
-   `ready` → the preview shows "Text revision N" with no "Older artifact" note. A forced
-   render failure (for example, an invalid label in a saved block) keeps the content and the
-   previous ready artifact. Rendering the figure saved by scenario 4 above also covers the
-   known `?@fig-…` defect in the browser.
-2. **AI suggestion review.** Depends on Task 9 (suggestions API and UI). The mock needs
+1. **AI suggestion review.** Depends on Task 9 (suggestions API and UI). The mock needs
    answers for the suggestion and re-verification schemas once they are named.
    Request a suggestion for one block → reject it, and the revision is unchanged → request
    again → apply with `base_revision` → a new revision is created and only that topic changes.
-3. **Word and book.** Depends on Task 10 (DOCX revision artifacts) and Task 11 (book job
+2. **Word and book.** Depends on Task 10 (DOCX revision artifacts) and Task 11 (book job
    and `.../revisions/{revision}/book/...`).
    Download the DOCX for the current revision (check the media type, that the figure is in
    `word/media`, and the text) → render the book → open it → search for a term from T2 →
@@ -172,10 +177,7 @@ the control PDF, DOCX through the office QA compose, and the book with search.
 - **Lockfile.** npm 11 `npm install` strips every `"libc"` field from `package-lock.json`,
   which changes how Linux/musl optional native packages resolve. When adding or upgrading
   test dependencies, keep the lockfile diff limited to the packages you change.
-- **Known defect (strict xfail).** `test_control_cross_references_resolve_in_every_format`:
-  a non-callout block that starts with a figure gets its bold title inlined into the image
-  paragraph (`block_markdown` in `api/app/worker/render.py`). There is then no figure and
-  `?@fig-…` is printed. Once it is fixed, the test XPASSes and fails; remove the marker.
+- **Figure/reference checks.** Keep real HTML figure/link assertions and PDF/DOCX text
+  assertions. Do not scan raw HTML for `?@`: bundled scripts can contain that sequence.
 - **Turning `fixme` into tests.** Check the landed routes and models first, then replace
-  the body and drop `fixme`. Placing the control figure into a saved revision through the
-  revision interface also covers the defect above in the browser.
+  the body and drop `fixme`. Keep checks on actual artifacts and model-call counts.

@@ -102,8 +102,14 @@ test("published artifacts are the real Quarto files", async ({ request }) => {
   }
   const topic = await request.get(notesUrl(id, "/topics/T2/html"));
   expect(topic.status()).toBe(200);
-  // A standalone topic links other topics' content into the full HTML.
-  expect(await topic.text()).toContain(`/plans/${COURSE}/notes/${id}/html#eq-t1-sarrus`);
+  // A standalone topic links other topics' content into the full HTML of its own revision
+  // (0 for generation), never into the legacy alias, which follows newer revisions.
+  const full = `/plans/${COURSE}/notes/${id}/revisions/0/artifacts/html`;
+  expect(await topic.text()).toContain(`${full}#eq-t1-sarrus`);
+  const target = await request.get(notesUrl(id, "/revisions/0/artifacts/html"));
+  expect(target.status()).toBe(200);
+  expect(target.headers()["x-notes-revision"]).toBe("0");
+  expect(await target.text()).toContain('id="eq-t1-sarrus"');
 });
 
 test("the figure registers through the asset API", async ({ request }) => {

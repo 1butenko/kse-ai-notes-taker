@@ -276,6 +276,21 @@ class ReferenceContext:
         return f"{base}/plans/{course}/notes/{run}/html"
 
 
+def revision_context(
+    public_api_url: str, document: NotesDocument, revision: int
+) -> ReferenceContext:
+    """Cross-document links to one revision's full HTML: never to whatever is newest.
+
+    The deployment path prefix is kept and route components are percent-encoded.
+    """
+    base = validate_public_api_url(public_api_url)
+    course, run = quote(document.course, safe=""), quote(document.run, safe="")
+    return ReferenceContext(
+        public_api_url=base,
+        full_html_url=f"{base}/plans/{course}/notes/{run}/revisions/{revision}/artifacts/html",
+    )
+
+
 def normalize_links(
     content: str, document: NotesDocument, current_topic: str | None, context: ReferenceContext
 ) -> str:

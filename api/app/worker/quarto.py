@@ -11,11 +11,21 @@ import signal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import unquote
+from weakref import WeakKeyDictionary
 
 from app.note_assets import ASSET_PATH, IMAGE, image_references
 from app.notes import RenderedArtifact, RenderFormat
 
 QUARTO_TIMEOUT = 600
+# One semaphore per serving event loop, shared by initial generation and every job.
+_GATES: WeakKeyDictionary = WeakKeyDictionary()
+
+
+def subprocess_gate(concurrency: int) -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    if loop not in _GATES:
+        _GATES[loop] = asyncio.Semaphore(max(1, concurrency))
+    return _GATES[loop]
 
 
 class QuartoError(Exception):
@@ -136,6 +146,7 @@ async def render_document(
     revision: int,
     quarto: str,
     resources: dict[str, Path] | None = None,
+    concurrency: int = 4,
 ) -> list[RenderedArtifact]:
     """Publish only successful outputs; failures leave previous artifacts untouched.
 
@@ -186,37 +197,38 @@ async def render_document(
                 if target == "html":
                     for asset in ("notes.css", "notes-head.html"):
                         shutil.copyfile(Path(__file__).parent / "templates" / asset, stage / asset)
-                process = await asyncio.create_subprocess_exec(
-                    binary,
-                    "render",
-                    staged_source.name,
-                    "--to",
-                    "typst" if target == "pdf" else target,
-                    "--output",
-                    destination.name,
-                    "--no-execute",
-                    cwd=stage,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    start_new_session=True,
-                )
-                communication = asyncio.create_task(process.communicate())
-                try:
-                    output, _ = await asyncio.wait_for(
-                        asyncio.shield(communication), QUARTO_TIMEOUT
+                async with subprocess_gate(concurrency):
+                    process = await asyncio.create_subprocess_exec(
+                        binary,
+                        "render",
+                        staged_source.name,
+                        "--to",
+                        "typst" if target == "pdf" else target,
+                        "--output",
+                        destination.name,
+                        "--no-execute",
+                        cwd=stage,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                        start_new_session=True,
                     )
-                except (TimeoutError, asyncio.CancelledError) as error:
-                    # Quarto launches Pandoc/Typst: terminate the group, then drain
-                    # pipes and reap the parent before cleaning its working files.
+                    communication = asyncio.create_task(process.communicate())
                     try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    output, _ = await communication
-                    log = output.decode(errors="replace")
-                    if isinstance(error, asyncio.CancelledError):
-                        raise
-                    raise QuartoError(f"Quarto took longer than {QUARTO_TIMEOUT} s") from error
+                        output, _ = await asyncio.wait_for(
+                            asyncio.shield(communication), QUARTO_TIMEOUT
+                        )
+                    except (TimeoutError, asyncio.CancelledError) as error:
+                        # Quarto launches Pandoc/Typst: terminate the group, then drain
+                        # pipes and reap the parent before cleaning its working files.
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        output, _ = await communication
+                        log = output.decode(errors="replace")
+                        if isinstance(error, asyncio.CancelledError):
+                            raise
+                        raise QuartoError(f"Quarto took longer than {QUARTO_TIMEOUT} s") from error
                 log = output.decode(errors="replace")
                 rendered = stage / destination.name
                 if process.returncode != 0 or not rendered.is_file():

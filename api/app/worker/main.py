@@ -1,4 +1,5 @@
 import asyncio
+import fcntl
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -8,7 +9,13 @@ from typing import Annotated
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 
 from app.notes import RUN_ID, run_dir
-from app.notes_revisions import EditResult, RevisionConflict
+from app.notes_revisions import (
+    EditResult,
+    InvalidEdit,
+    RenderJob,
+    RevisionConflict,
+    RevisionNotFound,
+)
 from app.storage import sha256
 from app.syllabus import SyllabusExtraction
 from app.worker import revisions
@@ -30,6 +37,7 @@ from app.worker_contract import (
     MapResponse,
     NotesRequest,
     NotesResponse,
+    RenderRequest,
     RestoreRequest,
     ReviseRequest,
     TranscribeRequest,
@@ -44,9 +52,21 @@ langfuse = init_langfuse(settings)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    fail_interrupted(settings.uploads_dir)
-    yield
-    langfuse.shutdown()
+    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+    with (settings.uploads_dir / ".worker.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError(
+                "Another worker is already serving this uploads directory"
+            ) from error
+        try:
+            await asyncio.to_thread(fail_interrupted, settings.uploads_dir)
+            await asyncio.to_thread(revisions.fail_interrupted_renders, settings.uploads_dir)
+            yield
+        finally:
+            langfuse.shutdown()
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 app = FastAPI(title="kse-ai-notes-taker-worker", lifespan=lifespan)
@@ -179,21 +199,50 @@ def run_directory(settings: WorkerSettings, course: str, run: str) -> Path:
 @app.post("/notes/revise")
 async def revise_notes(
     body: ReviseRequest,
+    background: BackgroundTasks,
     settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
 ) -> EditResult:
     """Save one topic's blocks as a new immutable revision, without a model."""
     directory = run_directory(settings, body.course, body.run)
-    return await revisions.revise(directory, body.topic, body.patch)
+    result = await revisions.revise(directory, body.topic, body.patch)
+    if result.render:
+        background.add_task(revisions.render_revision, directory, result.render.id, settings)
+    return result
 
 
 @app.post("/notes/restore")
 async def restore_notes(
     body: RestoreRequest,
+    background: BackgroundTasks,
     settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
 ) -> EditResult:
     """Copy an earlier revision's content into a new revision, without a model."""
     directory = run_directory(settings, body.course, body.run)
-    return await revisions.restore(directory, body.revision, body.base_revision)
+    result = await revisions.restore(directory, body.revision, body.base_revision)
+    if result.render:
+        background.add_task(revisions.render_revision, directory, result.render.id, settings)
+    return result
+
+
+@app.post("/notes/render", status_code=status.HTTP_202_ACCEPTED)
+async def render_saved_notes(
+    body: RenderRequest,
+    background: BackgroundTasks,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+) -> RenderJob:
+    directory = run_directory(settings, body.course, body.run)
+    try:
+        job = await asyncio.to_thread(
+            revisions.enqueue_render, directory, body.revision, body.formats
+        )
+    except RevisionNotFound as error:
+        raise HTTPException(404, str(error)) from error
+    except InvalidEdit as error:
+        raise HTTPException(422, str(error)) from error
+    except RevisionConflict as error:
+        raise HTTPException(409, str(error)) from error
+    background.add_task(revisions.render_revision, directory, job.id, settings)
+    return job
 
 
 @app.get("/health")

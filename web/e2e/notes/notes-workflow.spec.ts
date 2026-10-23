@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -7,6 +8,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import {
   COURSE,
   attachDiagnostics,
+  capture,
   mockRequests,
   notesUrl,
   stack,
@@ -36,7 +38,7 @@ type Document = {
   assets: { id: string; path: string }[];
   sections: { topics: Topic[] }[];
 };
-type Head = { current_revision: number; document: Document };
+type Head = { current_revision: number; document: Document; render: { id: string; status: string } | null };
 type Revision = {
   revision: number;
   parent: number | null;
@@ -147,7 +149,7 @@ test("HTML → edit → save → new revision; a second tab gets 409 and recover
   await expect(editor(page).getByText("No unsaved changes")).toBeVisible();
   await expect(editor(page).getByText("Verification outdated")).toBeVisible();
   await page.getByRole("tab", { name: "Preview" }).click();
-  await expect(page.getByText(/^HTML revision 0 · Older artifact/)).toBeVisible();
+  await expect(page.getByText(/^HTML revision \d+( · Older artifact)?/)).toBeVisible();
 
   const saved = await head(request, run);
   expect(saved.current_revision).toBe(h + 1);
@@ -173,7 +175,7 @@ test("HTML → edit → save → new revision; a second tab gets 409 and recover
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`/${run}/T1$`));
   await expect(page.getByText(`Text revision ${h + 1}`, { exact: true })).toBeVisible();
-  await expect(page.getByText(/^HTML revision 0 · Older artifact/)).toBeVisible();
+  await expect(page.getByText(/^HTML revision \d+( · Older artifact)?/)).toBeVisible();
 
   // Tab B: a background refresh shows the newer revision and keeps the draft as it is.
   await tabB.bringToFront();
@@ -401,19 +403,146 @@ test("notes with an unknown language need an explicit language before saving", a
   await expect(page.getByRole("list", { name: "Revisions" }).getByRole("button").first()).toContainText("Language set");
 });
 
-test.fixme(
-  "saved and restored revisions get their own ready HTML/PDF artifacts",
-  {
-    annotation: dependsOn(
-      "Task 8 / P2.3: revision render jobs and revision artifact routes",
-    ),
-  },
-  async () => {
-    // After a save or restore: poll the render job until revision N HTML/PDF are `ready`,
-    // the preview shows "Text revision N" with no "Older artifact" note, and a forced render
-    // failure keeps the saved text and the previous ready artifact.
-  },
-);
+async function waitForRender(request: APIRequestContext, run: string, id: string) {
+  let job: { status: string; errors: string[] };
+  await expect.poll(async () => {
+    const response = await request.get(notesUrl(run, `/render-jobs/${id}`));
+    expect(response.status()).toBe(200);
+    job = await response.json();
+    return job.status;
+  }, { timeout: 180_000, intervals: [500, 1000] }).toMatch(/^(done|failed)$/);
+  return job!;
+}
+
+test("a delayed equal-text-revision response cannot regress completed artifacts", async ({ page, request }) => {
+  const run = await generated(request);
+  const before = await head(request, run);
+  const blocks = structuredClone(topic(before.document, "T1").blocks);
+  blocks[0].content += "\n\nRender response ordering.";
+  const saved = await request.patch(notesUrl(run, "/topics/T1"), {
+    data: { base_revision: before.current_revision, blocks },
+  });
+  expect(saved.status()).toBe(200);
+  const pending = await (await request.get(notesUrl(run))).json();
+  const done = await waitForRender(request, run, (await saved.json()).render.id);
+  expect(done.status, done.errors.join("\n")).toBe("done");
+  const revision = pending.current_revision;
+  expect(pending.artifacts.some((a: { revision: number }) => a.revision < revision)).toBe(true);
+  await page.goto(`/preview/${COURSE}/${run}/T1`);
+  await page.waitForLoadState("networkidle");
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let arrived!: () => void;
+  const waiting = new Promise<void>((resolve) => { arrived = resolve; });
+  let count = 0;
+  await page.route(notesUrl(run), async (route) => {
+    if (count++ === 0) {
+      arrived();
+      await held;
+      await route.fulfill({ json: pending, headers: { "Access-Control-Allow-Origin": "*" } });
+    } else await route.continue();
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await waiting;
+  const fresh = page.waitForResponse(notesUrl(run));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await fresh;
+  await expect(page.getByText(`HTML revision ${revision}`, { exact: true })).toBeVisible();
+  const old = page.waitForResponse(notesUrl(run));
+  release();
+  await (await old).finished();
+  await page.waitForTimeout(500);
+  // Wait for the delayed answer's React commit, then observe the user-visible revision.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(page.getByText(`HTML revision ${revision}`, { exact: true })).toBeVisible();
+  await expect(page.getByText(/Older artifact:/)).toHaveCount(0);
+});
+
+test("saved and restored revisions get their own ready HTML/PDF artifacts", async ({ page, request }, testInfo) => {
+  const run = await generated(request);
+  const before = await head(request, run);
+  if (before.render) await waitForRender(request, run, before.render.id);
+  const calls = mockRequests().length;
+  const h = before.current_revision;
+  await openEditor(page, run, "T1");
+  const target = "Block 6 (T1.6)";
+  // Exercise the Task 7 image dialog with an empty block: figure is the first paragraph.
+  await content(page, target).fill("");
+  await content(page, target).click();
+  await block(page, target).getByRole("button", { name: "Insert image" }).click();
+  const dialog = page.getByRole("dialog", { name: "Insert an image into block 6" });
+  const label = await dialog.getByLabel("Label", { exact: true }).inputValue();
+  await dialog.getByLabel(/^Image/).setInputFiles(path.join(stack.fixtures, "figure.png"));
+  await dialog.getByLabel("Caption").fill("Схема збереженої ревізії");
+  await dialog.getByRole("button", { name: "Upload and insert" }).click();
+  await expect(dialog).toBeHidden();
+  const markdown = await content(page, target).inputValue();
+  expect(markdown.trimStart()).toMatch(/^!\[/);
+  await content(page, target).fill(`${markdown}\n\nДив. @${label}.`);
+  await editor(page).getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText(`Saved as revision ${h + 1}`)).toBeVisible();
+  await page.getByRole("tab", { name: "Preview", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText(`Rendering revision ${h + 1}`);
+  const saved = await head(request, run);
+  const done = await waitForRender(request, run, saved.render!.id);
+  expect(done.status, done.errors.join("\n")).toBe("done");
+  await expect(page.getByText(`HTML revision ${h + 1}`, { exact: true })).toBeVisible();
+  const frame = page.frameLocator("iframe");
+  await expect(frame.locator(`#${label} figure img`)).toBeVisible();
+  await expect(frame.locator(`a.quarto-xref[href="#${label}"]`)).toContainText(/Рисунок\s*1/);
+  await expect(frame.locator("body")).not.toContainText(`?@${label}`);
+  await frame.locator(`#${label}`).scrollIntoViewIfNeeded();
+  await capture(page, testInfo, "saved-revision-figure-first-html");
+  await expect(page.locator("iframe")).toHaveAttribute("src", notesUrl(run, `/revisions/${h + 1}/topics/T1/artifacts/html`));
+  const pdf = await request.get(notesUrl(run, `/revisions/${h + 1}/topics/T1/artifacts/pdf`));
+  expect(pdf.status()).toBe(200);
+  const bytes = await pdf.body();
+  expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+  const extracted = spawnSync(path.resolve(stack.fixtures, "../../../.venv/bin/python"), ["-c",
+    "import io,sys; from pypdf import PdfReader; print(' '.join(p.extract_text() for p in PdfReader(io.BytesIO(sys.stdin.buffer.read())).pages))"], { input: bytes, encoding: "utf8" });
+  expect(extracted.status, extracted.stderr).toBe(0);
+  expect(extracted.stdout).toContain("Схема збереженої ревізії");
+  expect(extracted.stdout).toMatch(/Рисунок\s*1/);
+  expect(extracted.stdout).not.toContain(`?@${label}`);
+
+  const restored = await request.post(notesUrl(run, `/revisions/${h}/restore`), { data: { base_revision: h + 1 } });
+  expect(restored.status()).toBe(200);
+  const restoration = await restored.json();
+  expect((await waitForRender(request, run, restoration.render.id)).status).toBe("done");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByText(`Text revision ${h + 2}`, { exact: true })).toBeVisible();
+  await expect(page.getByText(`HTML revision ${h + 2}`, { exact: true })).toBeVisible();
+  expect(topic((await head(request, run)).document, "T1").blocks).toEqual(topic(before.document, "T1").blocks);
+
+  const disabled = path.join(path.dirname(stack.uploads), "quarto-disabled");
+  fs.writeFileSync(disabled, "disabled");
+  try {
+    await page.getByRole("tab", { name: "Edit", exact: true }).click();
+    const text = await content(page, target).inputValue();
+    await content(page, target).fill(`${text}\n\nSaved while Quarto is unavailable.`);
+    await editor(page).getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByText(`Saved as revision ${h + 3}`)).toBeVisible();
+    await expect(page.getByText(`Could not render revision ${h + 3}`, { exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: "Preview", exact: true }).click();
+    await expect(page.getByText(new RegExp(`HTML revision ${h + 2} · Older artifact`))).toBeVisible();
+    // The previous PDF stays available and is labelled with its own revision.
+    await page.getByRole("button", { name: "PDF · Print" }).click();
+    await expect(page.getByText(new RegExp(`PDF revision ${h + 2} · Older artifact`))).toBeVisible();
+    await expect(page.locator("iframe")).toHaveAttribute("src", notesUrl(run, `/revisions/${h + 2}/topics/T1/artifacts/pdf`));
+    await page.getByRole("button", { name: "HTML", exact: true }).click();
+    const history: Revision[] = await (await request.get(notesUrl(run, "/revisions"))).json();
+    expect(history.at(-1)).toMatchObject({ revision: h + 3, parent: h + 2, origin: "manual" });
+    expect(topic((await head(request, run)).document, "T1").blocks[5].content).toContain("Saved while Quarto is unavailable.");
+    expect((await request.get(notesUrl(run, `/revisions/${h + 3}/artifacts/pdf`))).status()).toBe(404);
+    expect((await request.get(notesUrl(run, `/revisions/${h + 2}/artifacts/pdf`))).status()).toBe(200);
+  } finally { fs.unlinkSync(disabled); }
+  await page.getByRole("button", { name: "Retry render", exact: true }).click();
+  await expect(page.getByText(`HTML revision ${h + 3}`, { exact: true })).toBeVisible({ timeout: 180_000 });
+  await expect(page.getByText(/Older artifact:/)).toHaveCount(0);
+  const currentPdf = await request.get(notesUrl(run, `/revisions/${h + 3}/artifacts/pdf`));
+  expect((await currentPdf.body()).subarray(0, 5).toString()).toBe("%PDF-");
+  expect(mockRequests().length, "save, restore and retry never call a model").toBe(calls);
+});
 
 test.fixme(
   "AI suggestion: reject keeps the revision, apply creates a verified-stale revision",
