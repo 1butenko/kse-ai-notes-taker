@@ -20,6 +20,7 @@ import {
   type NoteSuggestion,
   type TopicNote,
   type Verification,
+  type VerificationIssue,
   type VerificationJob,
 } from "@/lib/api";
 
@@ -75,8 +76,14 @@ function usePolled<T extends { id: string }>(
   return id && value?.id === id ? value : null;
 }
 
-function Issues({ check }: { check: Verification }) {
-  const issues = check.issues.filter((issue) => issue.severity === "major");
+/** Whether the check itself found nothing wrong, whatever else blocks "verified". */
+function checkIsClean(check: Verification) {
+  return check.passed && !check.escalate && !check.issues.some((issue) => issue.severity === "major");
+}
+
+/** The check's major issues, then the topic's standing gaps that block verification. */
+function Issues({ check, blocking }: { check: Verification; blocking: VerificationIssue[] }) {
+  const issues = [...check.issues.filter((issue) => issue.severity === "major"), ...blocking];
   return (
     <ul aria-label="Verification issues" className="flex flex-col gap-2 text-sm">
       {issues.map((issue, index) => (
@@ -155,9 +162,11 @@ export function SuggestionReview({ suggestion, topic, revision, busy, onApply, o
           <p className="text-sm font-medium">
             {suggestion.verified
               ? "A fresh check of this exact text found no problems."
-              : "A fresh check of this exact text did not verify it."}
+              : checkIsClean(check)
+                ? "A fresh check of this exact text found no new problems, but a standing gap keeps the topic from being verified."
+                : "A fresh check of this exact text did not verify it."}
           </p>
-          {!suggestion.verified && <Issues check={check} />}
+          {!suggestion.verified && <Issues check={check} blocking={suggestion.blocking} />}
           {!suggestion.verified && (
             <p className="text-xs text-muted-foreground">
               If you apply it, the topic stays Unresolved and these issues stay visible.
@@ -430,7 +439,9 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
                   {job.verified ? "" : "The topic stays Unresolved with these issues."}
                 </span>
               </div>
-              {!job.verified && job.verification && <Issues check={job.verification} />}
+              {!job.verified && job.verification && (
+                <Issues check={job.verification} blocking={job.blocking} />
+              )}
             </>
           )}
         </div>

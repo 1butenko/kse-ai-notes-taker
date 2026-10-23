@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from app.notes import NoteBlock, Verification
+from app.notes import NoteBlock, Verification, VerificationIssue
 from app.notes_artifacts import atomic_json
 from app.notes_revisions import RevisionNotFound
 
@@ -45,8 +45,10 @@ class NoteSuggestion(BaseModel):
     error: str | None = None
     block_ids: list[str] = []
     instruction: str = ""
-    # True only for a clean check of the exact candidate: no major issue, no escalation.
+    # True only for a clean check of the exact candidate: no major issue, no escalation,
+    # and no standing evidence gap in the topic (those are listed in `blocking`).
     verified: bool = False
+    blocking: list[VerificationIssue] = []
     applied_revision: int | None = None
 
 
@@ -82,6 +84,8 @@ class VerificationJob(BaseModel):
     # The check of the frozen base topic; kept even when it could not be recorded.
     verification: Verification | None = None
     verified: bool = False
+    # Standing evidence gaps that keep the topic from being verified by any check.
+    blocking: list[VerificationIssue] = []
     # The metadata revision that recorded the result, if the base was still current.
     revision: int | None = None
     conflict: bool = False

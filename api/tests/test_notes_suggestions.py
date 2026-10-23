@@ -161,8 +161,8 @@ def topic_of(directory: Path, topic: int = 0):
 # The proposal is separate from the notes.
 
 
-def test_suggestion_does_not_change_current_document(saved_run, client, model):
-    directory, document = saved_run
+def test_suggestion_does_not_change_current_document(clean_run, client, model):
+    directory, document = clean_run
     model.suggestion = {"replacements": [replace("T1.1", "Simpler.")], "insertions": []}
     before = files(directory)
 
@@ -173,6 +173,7 @@ def test_suggestion_does_not_change_current_document(saved_run, client, model):
     assert [b["content"] for b in proposal["proposed_blocks"]] == ["Simpler.", "In short."]
     assert proposal["proposed_blocks"][0]["id"] == "T1.1"
     assert proposal["verification"]["passed"] is True and proposal["verified"] is True
+    assert proposal["blocking"] == []
     # Only the suggestion record (and the stable lock file) was added: no revision, HEAD or
     # snapshot, and notes.json is untouched.
     after = files(directory)
@@ -520,6 +521,21 @@ def test_apply_certifies_only_the_checked_text(clean_run, client, model):
     assert (note.status, note.verification_stale, note.verifier) == ("unresolved", True, None)
 
 
+def test_a_selector_gap_keeps_the_public_flag_unverified_and_visible(saved_run, client, model):
+    directory, _ = saved_run
+    model.suggestion = {"replacements": [replace("T1.1", "Simpler.")], "insertions": []}
+
+    proposal = made(client)
+
+    # The check itself is clean, but the topic's evidence gap blocks "verified": the public
+    # flag says what apply will do, and the blocking gap is listed for the reviewer.
+    assert proposal["verification"]["passed"] is True and proposal["verification"]["issues"] == []
+    assert proposal["verified"] is False
+    assert [i["detail"] for i in proposal["blocking"]] == ["No excerpt proves the claim"]
+    client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0})
+    assert topic_of(directory).status == "unresolved"
+
+
 def test_applied_text_replaces_stale_issues_with_fresh_ones(saved_run, client, model):
     directory, _ = saved_run
     model.suggestion = {"replacements": [replace("T1.1", "Simpler.")], "insertions": []}
@@ -637,14 +653,22 @@ def test_manual_fresh_verification_records_a_metadata_revision(clean_run, client
 
 def test_a_clean_check_cannot_hide_a_selector_gap(saved_run, client, model):
     directory, _ = saved_run
-    client.post(url("/topics/T1/verify"), json={"base_revision": 0})
 
+    def checked(topic: str, base: int) -> dict:
+        started = client.post(url(f"/topics/{topic}/verify"), json={"base_revision": base})
+        return client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+
+    job = checked("T1", 0)
+    assert job["verification"]["passed"] is True
+    assert job["verified"] is False  # The same decision as the recorded status below.
+    assert [i["detail"] for i in job["blocking"]] == ["No excerpt proves the claim"]
     note = topic_of(directory)
     assert note.status == "unresolved" and note.verification_stale is False
     assert [i.detail for i in note.open_issues] == ["No excerpt proves the claim"]
+
     # T2 has no gap: a clean check of the exact text verifies it.
-    assert topic_of(directory, 1).status == "verified"
-    client.post(url("/topics/T2/verify"), json={"base_revision": 1})
+    job = checked("T2", 1)
+    assert job["verified"] is True and job["blocking"] == []
     assert topic_of(directory, 1).status == "verified"
     assert topic_of(directory, 1).verification_stale is False
 

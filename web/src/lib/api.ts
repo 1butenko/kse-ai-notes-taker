@@ -504,6 +504,8 @@ export type NoteSuggestion = {
   instruction: string;
   /** True only for a clean check: no major issue and no escalation. */
   verified: boolean;
+  /** Standing evidence gaps that keep the topic from being verified by any check. */
+  blocking: VerificationIssue[];
   applied_revision: number | null;
 };
 
@@ -514,6 +516,7 @@ export type VerificationJob = {
   status: "queued" | "running" | "done" | "failed";
   verification: Verification | null;
   verified: boolean;
+  blocking: VerificationIssue[];
   /** The metadata revision that recorded the result. */
   revision: number | null;
   /** The notes changed while the check ran, so the result was not recorded. */

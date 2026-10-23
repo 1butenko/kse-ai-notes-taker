@@ -260,6 +260,12 @@ async def verify_topic(
     )
 
 
+def is_verified(note: TopicNote, check: Verification) -> bool:
+    """The one rule for "verified": a clean check, and no standing gap in the topic's evidence
+    (what blocks it is `evidence_gaps(note)`; certify and every public flag use this)."""
+    return is_clean(check) and not evidence_gaps(note)
+
+
 def certify(note: TopicNote, check: Verification) -> None:
     """Record a completed check of this exact content. Only a clean check verifies it."""
     note.open_issues = [
@@ -270,7 +276,7 @@ def certify(note: TopicNote, check: Verification) -> None:
     note.rounds = check.round
     note.verification_stale = False
     note.error = None
-    note.status = "verified" if is_clean(check) and not note.open_issues else "unresolved"
+    note.status = "verified" if is_verified(note, check) and not note.open_issues else "unresolved"
 
 
 # Candidate assembly: pure, deterministic, and run again at apply.
@@ -489,7 +495,8 @@ async def run_suggestion(
         def finished(record: SuggestionRecord) -> None:
             record.status = "ready"
             record.verification = check
-            record.verified = is_clean(check)
+            record.verified = is_verified(candidate, check)
+            record.blocking = evidence_gaps(candidate)
 
         await asyncio.to_thread(transition, directory, identifier, ("running",), finished)
     except asyncio.CancelledError:
@@ -628,14 +635,19 @@ def advance_job(
         return job
 
 
-def record_verification(directory: Path, identifier: str, check: Verification) -> RenderJob | None:
-    """Commit the result as a metadata revision if its base is still current."""
+def record_verification(
+    directory: Path, identifier: str, check: Verification, frozen: TopicNote
+) -> RenderJob | None:
+    """Commit the result as a metadata revision if its base is still current.
+
+    `frozen` is the checked topic of the base revision: the flags describe that content."""
     store = RevisionStore(directory)
     with store.locked():
         job = read_verification_job(directory, identifier)
         if job.status != "running":
             return None
-        job.verification, job.verified = check, is_clean(check)
+        job.verification, job.verified = check, is_verified(frozen, check)
+        job.blocking = evidence_gaps(frozen)
         head = store.head_revision()
         current = store.current()
         note = find_topic(current.document, job.topic_id)
@@ -684,7 +696,7 @@ async def run_verification(
                 note,
                 "verify-topic-manual",
             )
-        render = await asyncio.to_thread(record_verification, directory, identifier, check)
+        render = await asyncio.to_thread(record_verification, directory, identifier, check, note)
         if render is not None:
             await render_revision(directory, render.id, settings)
     except asyncio.CancelledError:
