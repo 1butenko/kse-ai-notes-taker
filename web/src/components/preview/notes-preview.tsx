@@ -43,7 +43,7 @@ import {
 } from "@/lib/api";
 
 const FULL = "full";
-// Picks up revisions saved in other tabs while editing; drafts are never touched by it.
+// While editing, picks up revisions saved in other tabs. Refreshes never touch the draft.
 const REFRESH_MS = 20_000;
 
 type Mode = "preview" | "edit" | "history";
@@ -52,7 +52,10 @@ type NotesPreviewProps = {
   course: string;
   run: string;
   topicId: string | null;
-  /** The run as the server loaded it; the page refreshes it after saves and restores. */
+  /**
+   * The run as the server loaded it. Browser Back can replay an old copy, so the page
+   * reloads it on mount, on focus, when Edit/History opens, and after saves and restores.
+   */
   view: NotesRunView & { document: NotesDocument };
 };
 
@@ -84,30 +87,53 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
   const mode: Mode = chosenMode ?? "preview";
   const guard = useLeaveGuard(draft !== null);
 
+  const apply = useCallback((next: NotesRunView) => {
+    const document = next.document;
+    // HEAD never moves back, so a slower, older answer must not replace a newer one.
+    if (document) {
+      setView((prev) => (next.current_revision < prev.current_revision ? prev : { ...next, document }));
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       const next = await getNotesRun(course, run);
-      if (next.document) setView({ ...next, document: next.document });
+      apply(next);
       return next;
     } catch {
       return null;
     }
-  }, [course, run]);
+  }, [course, run, apply]);
 
   useEffect(() => {
-    if (mode === "preview") return;
+    let cancelled = false;
+    getNotesRun(course, run).then(
+      (next) => !cancelled && apply(next),
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [course, run, apply]);
+
+  useEffect(() => {
     const visible = () => {
       if (window.document.visibilityState === "visible") refresh();
     };
-    const timer = setInterval(visible, REFRESH_MS);
     window.addEventListener("focus", visible);
     window.document.addEventListener("visibilitychange", visible);
+    const timer = mode === "preview" ? undefined : setInterval(visible, REFRESH_MS);
     return () => {
       clearInterval(timer);
       window.removeEventListener("focus", visible);
       window.document.removeEventListener("visibilitychange", visible);
     };
   }, [mode, refresh]);
+
+  const choose = (next: Mode) => {
+    setChosenMode(next);
+    if (next !== "preview") refresh();
+  };
 
   const copyLink = async () => {
     try {
@@ -273,7 +299,7 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
 
           <Tabs
             value={mode}
-            onValueChange={(value) => setChosenMode(value as Mode)}
+            onValueChange={(value) => choose(value as Mode)}
             className="min-h-0 flex-1"
           >
             <div className="flex flex-wrap items-center gap-2">
@@ -302,7 +328,7 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
                   <AlertTitle>Unsaved draft of this topic</AlertTitle>
                   <AlertDescription className="flex flex-col items-start gap-2">
                     It is based on revision {draft.base_revision} and isn&apos;t in this preview.
-                    <Button size="sm" variant="outline" onClick={() => setChosenMode("edit")}>
+                    <Button size="sm" variant="outline" onClick={() => choose("edit")}>
                       Open the editor
                     </Button>
                   </AlertDescription>

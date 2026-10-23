@@ -167,6 +167,14 @@ test("HTML → edit → save → new revision; a second tab gets 409 and recover
   });
   expect(mockRequests().length, "a manual save calls no model").toBe(calls);
 
+  // Browser Back reuses the cached T1 page; it must still show the saved revision.
+  await page.getByRole("navigation", { name: "Topics" }).getByRole("link", { name: /T2/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/${run}/T2$`));
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`/${run}/T1$`));
+  await expect(page.getByText(`Text revision ${h + 1}`, { exact: true })).toBeVisible();
+  await expect(page.getByText(/^HTML revision 0 · Older artifact/)).toBeVisible();
+
   // Tab B: a background refresh shows the newer revision and keeps the draft as it is.
   await tabB.bringToFront();
   await tabB.evaluate(() => window.dispatchEvent(new Event("focus")));

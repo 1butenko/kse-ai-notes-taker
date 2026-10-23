@@ -112,7 +112,8 @@ relative to the run's HEAD when each test starts.
    block and moves it up, ticks a citation from T1's evidence list, and saves. The API then
    has the next revision (`manual`, `changed_topics == ["T1"]`), a `b-<hex>` ID for the new
    block, T1 `unresolved` with `verification_stale`, T2 unchanged, and no new mock LLM
-   calls. Tab B started a draft on the old base: a focus refresh shows the newer revision
+   calls. Going to T2 and back with browser Back still shows the new text revision and the
+   older-artifact note. Tab B started a draft on the old base: a focus refresh shows the newer revision
    and keeps the draft; Save gets the 409. After a reload the draft is found under its old
    base (sessionStorage key `…/T1@<base>`), shows what changed since that base, and saves
    only after an explicit transfer.
