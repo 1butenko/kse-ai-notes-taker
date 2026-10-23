@@ -664,11 +664,15 @@ def revision_cli(tmp_path, tmp_uploads):
     cli = fake_cli(
         tmp_path,
         """
-import sys
+import sys, zipfile
 from pathlib import Path
 source = Path(sys.argv[2]).read_text()
 output = Path(sys.argv[sys.argv.index('--output') + 1])
-output.write_text(('%PDF-' if output.suffix == '.pdf' else '<html>') + source)
+if output.suffix == '.docx':
+    with zipfile.ZipFile(output, 'w') as archive:
+        archive.writestr('word/document.xml', source)
+else:
+    output.write_text(('%PDF-' if output.suffix == '.pdf' else '<html>') + source)
 """,
     )
     settings = WorkerSettings(uploads_dir=tmp_uploads, quarto_bin=str(cli))

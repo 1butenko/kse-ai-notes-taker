@@ -94,6 +94,7 @@ LABELS = {
         "summary": "Summary",
         "references": "References",
         "sources": "Sources",
+        "contents": "Table of contents",
         "unverified": "Not fully verified",
         "no_evidence": "No supporting material was found for this topic.",
         "notation": "Notation",
@@ -113,6 +114,7 @@ LABELS = {
         "summary": "Підсумок",
         "references": "Джерела",
         "sources": "Джерела",
+        "contents": "Зміст",
         "unverified": "Не повністю перевірено",
         "no_evidence": "Для цієї теми не знайдено матеріалів.",
         "notation": "Позначення",
@@ -222,7 +224,9 @@ def front_matter(
             "  enabled: false",
             "format:",
             f"  {'typst' if target == 'pdf' else target}:",
-            f"    toc: {str(outline).lower()}",
+            # Word's TOC field is empty until the reader updates it; to_quarto writes a
+            # linked contents list into the document instead.
+            f"    toc: {str(outline and target != 'docx').lower()}",
             f"    number-sections: {str(outline).lower()}",
             *options[target],
             "---",
@@ -282,6 +286,28 @@ def footer(document: NotesDocument, text: dict[str, str]) -> str:
     return f"\n*{text['generated']}: {document.created_at} · {models}*\n"
 
 
+def section_id(number: int) -> str:
+    return f"section-{number}"
+
+
+def word_contents(document: NotesDocument, text: dict[str, str]) -> list[str]:
+    """A static, linked contents list for Word. Numbers repeat Quarto's heading numbering."""
+    if not document.sections:
+        return []
+
+    def link(label: str, anchor: str) -> str:
+        return f"[{label.replace('[', '\\[').replace(']', '\\]')}](#{anchor})"
+
+    lines = [f"# {text['contents']} {{.unnumbered}}\n"]
+    for number, section in enumerate(document.sections, 1):
+        lines.append(f"- {link(f'{number}. {section.title}', section_id(number))}")
+        lines += [
+            f"  - {link(f'{number}.{index} {note.title}', reference_id(note.topic_id))}"
+            for index, note in enumerate(section.topics, 1)
+        ]
+    return [*lines, ""]
+
+
 def to_quarto(
     document: NotesDocument,
     language: str | None,
@@ -292,7 +318,7 @@ def to_quarto(
     transform = typst_safe if target == "pdf" else str
     text = labels(language)
     references = checked_references(document)
-    body = []
+    body = word_contents(document, text) if target == "docx" else []
     if document.notation:
         body.append(f"# {text['notation']} {{.unnumbered}}\n")
         body.append(f"| {text['symbol']} | {text['meaning']} |\n|---|---|")
@@ -303,8 +329,9 @@ def to_quarto(
         ]
         body.append("")
 
-    for section in document.sections:
-        body.append(f"# {section.title}\n")
+    for number, section in enumerate(document.sections, 1):
+        anchor = f" {{#{section_id(number)}}}" if target == "docx" else ""
+        body.append(f"# {section.title}{anchor}\n")
         for note in section.topics:
             body.append(f"## {note.title} {{#{reference_id(note.topic_id)}}}\n")
             body += topic_body(note, text, document, target, context=context)

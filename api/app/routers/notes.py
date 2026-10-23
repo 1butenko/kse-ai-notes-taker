@@ -364,7 +364,8 @@ def served(
         path,
         media_type=media or DOWNLOADS[kind][1],
         filename=filename,
-        content_disposition_type="inline",
+        # A Word file is never displayed in the page: it is saved.
+        content_disposition_type="attachment" if kind == "docx" else "inline",
         headers=headers,
     )
 

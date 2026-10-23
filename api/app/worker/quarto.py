@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import signal
+import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import unquote
@@ -15,6 +16,7 @@ from weakref import WeakKeyDictionary
 
 from app.note_assets import ASSET_PATH, IMAGE, image_references
 from app.notes import RenderedArtifact, RenderFormat
+from app.worker.docx import polish_docx
 
 QUARTO_TIMEOUT = 600
 # One semaphore per serving event loop, shared by initial generation and every job.
@@ -128,7 +130,7 @@ def validated_source(source: str, target: RenderFormat, assets: set[str] | None 
             values["date"],
             values["lang"],
             values.get("subtitle"),
-            outline="    toc: true" in header.splitlines(),
+            outline="    number-sections: true" in header.splitlines(),
             target=target,
             references=values.get("references", []),
         )
@@ -234,6 +236,11 @@ async def render_document(
                 if process.returncode != 0 or not rendered.is_file():
                     tail = re.sub(r"\s+", " ", log[-600:]).strip()
                     raise QuartoError(f"Quarto failed (exit {process.returncode}): {tail}")
+                if target == "docx":
+                    try:
+                        polish_docx(rendered)
+                    except (zipfile.BadZipFile, KeyError) as error:
+                        raise QuartoError(f"Quarto wrote an invalid Word file: {error}") from error
                 os.replace(rendered, destination)
                 artifact.status = "ready"
             except (OSError, QuartoError) as error:

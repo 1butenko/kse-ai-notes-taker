@@ -317,3 +317,50 @@ def test_control_cross_references_resolve_in_every_format(control_render) -> Non
         # AnchorJS's inline script contains '?@' in a regex; it is not rendered text.
         assert "?@" not in text, kind
         assert "Вектор v і його образ Av" in text, kind
+
+
+def test_control_word_has_visible_contents_and_native_numbered_math(control_render) -> None:
+    import re
+
+    output, _ = control_render
+    with zipfile.ZipFile(output / "notes.docx") as archive:
+        word = archive.read("word/document.xml").decode()
+
+    # No field that stays empty until a reader updates it.
+    assert "TOC \\" not in word and "<w:sdt>" not in word
+
+    def text(paragraph: str) -> str:
+        return "".join(re.findall(r"<w:t[^>]*>([^<]*)</w:t>", paragraph))
+
+    paragraphs = re.findall(r"<w:p>.*?</w:p>", word, re.S)
+    headings = {text(p) for p in paragraphs if re.search(r'<w:pStyle w:val="Heading[12]"', p)}
+    # Later links to the same bookmarks are ordinary "Topic T1" cross-references.
+    contents = word[
+        : word.index('<w:pStyle w:val="Heading1" /></w:pPr><w:r><w:t xml:space="preserve">1.')
+    ]
+    entries = [
+        (text(link), anchor)
+        for anchor, link in re.findall(
+            r'<w:hyperlink w:anchor="((?:sec-T|section-)[^"]+)">(.*?)</w:hyperlink>', contents, re.S
+        )
+    ]
+    # The visible list names the same numbered headings, and each link has a bookmark.
+    assert [label for label, _ in entries] == [
+        "1. Матриці та спектр",
+        "1.1 Системи лінійних рівнянь",
+        "1.2 Власні значення та власні вектори",
+    ]
+    assert {label for label, _ in entries} <= headings
+    for _, anchor in entries:
+        assert f'w:name="{anchor}"' in word
+    assert word.index("Зміст") < len(contents)
+
+    # Equations remain editable OMML, and each equation number has a gap that survives viewers.
+    assert word.count("<m:oMath>") >= 30
+    # Each callout title row keeps with its body, so none is stranded at a page bottom.
+    titles = word.count('<w:textAlignment w:val="center"/>')
+    assert titles >= 5 and word.count("<w:keepNext/>") == titles
+    numbered = re.findall(
+        r"<m:r><m:rPr><m:nor/></m:rPr><m:t xml:space=\"preserve\"> +</m:t></m:r>", word
+    )
+    assert len(numbered) == 4

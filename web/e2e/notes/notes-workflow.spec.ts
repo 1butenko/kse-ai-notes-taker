@@ -684,13 +684,101 @@ test("AI suggestions are reviewed: reject, apply, stale conflict and a manual re
   expect((await waitForRender(request, run, checked.render!.id)).status).toBe("done");
 });
 
+const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+test("Word is prepared on demand for one revision and downloads with its figure and contents", async ({
+  page,
+  request,
+}, testInfo) => {
+  const run = await generated(request);
+  const before = await head(request, run);
+  if (before.render) await waitForRender(request, run, before.render.id);
+  const calls = mockRequests().length;
+  const h = before.current_revision;
+
+  // A figure in T2 through the real asset route; the generated notes have none of their own.
+  const upload = await request.post(notesUrl(run, "/assets"), {
+    multipart: {
+      file: { name: "figure.png", mimeType: "image/png", buffer: fs.readFileSync(path.join(stack.fixtures, "figure.png")) },
+    },
+  });
+  expect(upload.status(), await upload.text()).toBe(201);
+  const figure = (await upload.json()).markdown_path as string;
+  const edit = async (base: number, extra: string) => {
+    const blocks = structuredClone(topic((await head(request, run)).document, "T2").blocks);
+    blocks[0].content += extra;
+    const saved = await request.patch(notesUrl(run, "/topics/T2"), { data: { base_revision: base, blocks } });
+    expect(saved.status(), await saved.text()).toBe(200);
+    const job = await waitForRender(request, run, (await saved.json()).render.id);
+    expect(job.status, job.errors.join("\n")).toBe("done");
+  };
+  await edit(h, `\n\n![Схема для Word](${figure}){#fig-t2-word}\n\nДив. @fig-t2-word.`);
+
+  await page.goto(`/preview/${COURSE}/${run}`);
+  await expect(page.getByText(`Text revision ${h + 1}`, { exact: true })).toBeVisible();
+  const word = page.getByRole("group", { name: "Word" });
+  await expect(word.getByRole("link", { name: /Download Word/ })).toHaveCount(0);
+  await word.getByRole("button", { name: "Prepare Word" }).click();
+  await expect(word.getByRole("button", { name: "Preparing Word…" })).toBeDisabled();
+  const link = word.getByRole("link", { name: /^Download Word/ });
+  await expect(link).toBeVisible({ timeout: 120_000 });
+  await expect(link).toContainText(`rev. ${h + 1}`);
+  await capture(page, testInfo, "word-ready");
+
+  const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
+  expect(download.suggestedFilename()).toBe("notes.docx");
+  const file = await download.path();
+  const unpacked = spawnSync(path.resolve(stack.fixtures, "../../../.venv/bin/python"), ["-c",
+    "import json,sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); print(json.dumps({'names': z.namelist(), 'xml': z.read('word/document.xml').decode()}))", file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  expect(unpacked.status, unpacked.stderr).toBe(0);
+  const docx = JSON.parse(unpacked.stdout) as { names: string[]; xml: string };
+  expect(docx.names.some((name) => /^word\/media\/.+\.png$/.test(name)), "the figure is embedded").toBe(true);
+  for (const text of ["Схема для Word", "Власні значення та власні вектори", "Рисунок"]) expect(docx.xml).toContain(text);
+  // A static, linked contents list instead of a field that stays empty until Word updates it.
+  expect(docx.xml).toContain("Зміст");
+  expect(docx.xml).toContain('w:anchor="sec-T2"');
+  expect(docx.xml).not.toMatch(/TOC \\/);
+  expect(docx.xml).toContain("<m:oMath>");
+  expect(docx.xml).not.toContain("?@");
+
+  const served = await request.get(notesUrl(run, `/revisions/${h + 1}/artifacts/docx`));
+  expect(served.status()).toBe(200);
+  expect(served.headers()["content-type"]).toBe(DOCX);
+  expect(served.headers()["x-notes-revision"]).toBe(String(h + 1));
+
+  // A newer revision gets no Word file until asked: the old one is labelled, not offered as current.
+  await edit(h + 1, "\n\nПісля Word.");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByText(`Text revision ${h + 2}`, { exact: true })).toBeVisible();
+  await expect(word.getByRole("link", { name: /^Download Word/ })).toHaveCount(0);
+  await expect(word.getByRole("link", { name: `Older Word file · revision ${h + 1}` })).toBeVisible();
+  expect((await request.get(notesUrl(run, `/revisions/${h + 2}/artifacts/docx`))).status()).toBe(404);
+
+  // A failed Word job keeps HTML and PDF, says so, and Retry publishes the file.
+  const disabled = path.join(path.dirname(stack.uploads), "quarto-disabled");
+  fs.writeFileSync(disabled, "disabled");
+  try {
+    await word.getByRole("button", { name: "Prepare Word" }).click();
+    await expect(page.getByText(`Could not prepare Word for revision ${h + 2}`, { exact: true })).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("Your saved text, HTML and PDF are kept.")).toBeVisible();
+    await expect(page.getByText(`HTML revision ${h + 2}`, { exact: true })).toBeVisible();
+    await expect(word.getByRole("link", { name: /^Download Word/ })).toHaveCount(0);
+    expect((await request.get(notesUrl(run, `/revisions/${h + 2}/artifacts/html`))).status()).toBe(200);
+    expect((await request.get(notesUrl(run, `/revisions/${h + 2}/artifacts/docx`))).status()).toBe(404);
+  } finally {
+    fs.rmSync(disabled, { force: true });
+  }
+  await word.getByRole("button", { name: "Retry Word" }).click();
+  await expect(word.getByRole("link", { name: /^Download Word/ })).toContainText(`rev. ${h + 2}`, { timeout: 120_000 });
+  await expect(page.getByText(`Could not prepare Word for revision ${h + 2}`)).toHaveCount(0);
+  expect((await request.get(notesUrl(run, `/revisions/${h + 2}/artifacts/docx`))).status()).toBe(200);
+  expect(mockRequests().length, "Word makes no model calls").toBe(calls);
+});
+
 test.fixme(
-  "Word download and course book search from one revision",
+  "Course book search from one revision",
   {
-    annotation: dependsOn(
-      "Task 10 / P3.1: DOCX revision artifacts and download",
-      "Task 11 / P3.2: book render job, GET .../revisions/{revision}/book/{asset_path}",
-    ),
+    annotation: dependsOn("Task 11 / P3.2: book render job, GET .../revisions/{revision}/book/{asset_path}"),
   },
   async () => {},
 );

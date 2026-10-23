@@ -152,20 +152,29 @@ HTML/PDF without calling the mock LLM.
    `verification` revision with the same blocks; the mock still finds a major issue, so T2 stays
    Unresolved with that issue shown. Unit tests cover the 503 without OpenRouter.
 
+9. **Word on demand.** A figure is added to T2 through the asset route and a save. On the
+   full-notes preview, "Prepare Word" asks for DOCX of the current revision only
+   (`POST .../revisions/{revision}/render {formats: ["docx"]}`); "Download Word" then saves
+   `notes.docx` with `rev. N`. The test opens the file: the figure is in `word/media`, the
+   caption, the heading text, a linked contents list (`Зміст`, `w:anchor="sec-T2"`, no `TOC`
+   field) and native `<m:oMath>` equations are present. The API serves it with the Word media
+   type, `attachment` and `X-Notes-Revision`. A later revision shows no current Word file, the
+   old one is labelled "Older Word file · revision N", and its URL for the new revision is a
+   404. With Quarto disabled, "Prepare Word" ends in an alert that says HTML and PDF are kept,
+   HTML stays available, and "Retry Word" publishes the file after Quarto is back. Zero model calls.
+
 ## Planned scenarios (`notes-workflow.spec.ts`, currently `fixme`)
 
 These follow the Task 12 plan. Each one is skipped until its interfaces land; check the
 landed contracts again before writing the bodies.
 
-1. **Word and book.** Depends on Task 10 (DOCX revision artifacts) and Task 11 (book job
-   and `.../revisions/{revision}/book/...`).
-   Download the DOCX for the current revision (check the media type, that the figure is in
-   `word/media`, and the text) → render the book → open it → search for a term from T2 →
-   the result opens the right chapter of the same revision. Private textbooks and
-   intermediate AI files do not appear in the search.
+1. **Course book.** Depends on Task 11 (book job and `.../revisions/{revision}/book/...`).
+   Render the book → open it → search for a term from T2 → the result opens the right chapter
+   of the same revision. Private textbooks and intermediate AI files do not appear in the
+   search.
 
 Visual QA stays manual, per the Task 12 brief: HTML at 390 px and on desktop, every page of
-the control PDF, DOCX through the office QA compose, and the book with search.
+the control PDF, DOCX through the office QA compose (contents list, equation numbers, callout titles), and the book with search.
 
 ## Maintaining
 

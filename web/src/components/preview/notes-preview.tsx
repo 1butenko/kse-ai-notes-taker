@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ExternalLinkIcon, FileTextIcon, LinkIcon, PencilLineIcon } from "lucide-react";
+import { DownloadIcon, ExternalLinkIcon, FileTextIcon, LinkIcon, PencilLineIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { TOPIC_STATUS } from "@/components/dashboard/notes-stage";
@@ -83,6 +83,17 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
     ? revisionArtifactUrl(course, run, shownRevision, format, topicId)
     : null;
 
+  // Word is prepared on demand for one revision. A file from an older revision is labelled
+  // as such and is never offered as the current download.
+  const wordFile = available.find((a) => a.format === "docx");
+  const wordCurrent = wordFile?.revision === textRevision;
+  const job = view.render;
+  const wordJob = job?.formats.includes("docx") ? job : null;
+  const wordOnly = wordJob !== null && wordJob.formats.every((f) => f === "docx");
+  const wordPending = wordJob !== null && ["queued", "running"].includes(wordJob.status);
+  const wordFailed = wordJob?.status === "failed" && !wordCurrent;
+  const [wordStarting, setWordStarting] = useState(false);
+
   const draft = useTopicDraft(course, run, note ? note.topic_id : null);
   const drafts = useDraftTopics(course, run);
   // A draft found after a reload (sessionStorage is read after hydration) opens the editor.
@@ -138,7 +149,6 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
     };
   }, [mode, refresh]);
 
-  const job = view.render;
   const pendingJob = job && (job.status === "queued" || job.status === "running") ? job.id : null;
   useEffect(() => {
     if (!pendingJob) return;
@@ -175,6 +185,19 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
       toast.error(error instanceof Error ? error.message : "Could not start rendering");
     } finally {
       setRetrying(false);
+    }
+  };
+
+  // Prepares only Word, for the revision on screen; HTML and PDF are left as they are.
+  const prepareWord = async () => {
+    setWordStarting(true);
+    try {
+      await renderNotesRevision(course, run, textRevision, ["docx"]);
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not start preparing Word");
+    } finally {
+      setWordStarting(false);
     }
   };
 
@@ -345,12 +368,12 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
             </SelectContent>
           </Select>
 
-          {job && ["queued", "running"].includes(job.status) && (
+          {job && !wordOnly && ["queued", "running"].includes(job.status) && (
             <p role="status" className="text-sm text-muted-foreground">
               Rendering revision {job.revision}. Saved text is safe; the preview keeps its labelled version.
             </p>
           )}
-          {job?.status === "failed" && (
+          {job?.status === "failed" && !wordOnly && (
             <Alert variant="destructive">
               <AlertTitle>Could not render revision {job.revision}</AlertTitle>
               <AlertDescription>
@@ -362,7 +385,7 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
               </AlertDescription>
             </Alert>
           )}
-          {!job && (!url || shownRevision < textRevision) && (
+          {(!job || wordOnly) && (!url || shownRevision < textRevision) && (
             <Button size="sm" variant="outline" onClick={retry} disabled={retrying} className="self-start">
               Render revision {textRevision}
             </Button>
@@ -427,7 +450,60 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
                   </Button>
                 </div>
                 {artifactNote}
+                <Separator orientation="vertical" className="hidden h-6 sm:block" />
+                <div role="group" aria-label="Word" className="flex flex-wrap items-center gap-2">
+                  {wordCurrent ? (
+                    <a
+                      href={revisionArtifactUrl(course, run, textRevision, "docx", topicId)}
+                      download
+                      className={buttonVariants({ variant: "outline", size: "sm" })}
+                    >
+                      <DownloadIcon />
+                      Download Word
+                      <RevisionTag revision={textRevision} text={textRevision} />
+                    </a>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={prepareWord}
+                      disabled={wordPending || wordStarting}
+                    >
+                      <DownloadIcon />
+                      {wordPending || wordStarting
+                        ? "Preparing Word…"
+                        : wordFailed
+                          ? "Retry Word"
+                          : "Prepare Word"}
+                    </Button>
+                  )}
+                  {wordFile && !wordCurrent && (
+                    <a
+                      href={revisionArtifactUrl(course, run, wordFile.revision, "docx", topicId)}
+                      download
+                      className="text-xs text-muted-foreground underline"
+                    >
+                      Older Word file · revision {wordFile.revision}
+                    </a>
+                  )}
+                  {wordPending && wordJob && (
+                    <span role="status" className="text-xs text-muted-foreground">
+                      Preparing Word for revision {wordJob.revision}. Your text is safe.
+                    </span>
+                  )}
+                </div>
               </div>
+              {wordFailed && wordJob && (
+                <Alert variant="destructive">
+                  <AlertTitle>Could not prepare Word for revision {wordJob.revision}</AlertTitle>
+                  <AlertDescription>
+                    <p>Your saved text, HTML and PDF are kept.</p>
+                    {wordJob.errors.map((error, index) => (
+                      <p key={index}>{error}</p>
+                    ))}
+                  </AlertDescription>
+                </Alert>
+              )}
               {frame(note ? note.title : document.title)}
             </TabsContent>
 
