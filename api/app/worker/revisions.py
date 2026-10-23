@@ -39,30 +39,32 @@ from app.worker.references import revision_context
 from app.worker.render import to_quarto, topic_to_quarto
 
 
-async def transact(change: Callable[[], RevisionView]) -> EditResult:
+async def guarded[T](work: Callable[[], T]) -> T:
+    """Run blocking store work off the event loop, mapping store errors to HTTP statuses."""
     try:
-        view = await asyncio.to_thread(change)
+        return await asyncio.to_thread(work)
     except RevisionConflict as error:
         raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
     except RevisionNotFound as error:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
     except InvalidEdit as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
-    return EditResult(revision=view.info)
+
+
+async def transact(change: Callable[[RevisionStore], RevisionView], directory: Path) -> EditResult:
+    """One store transaction. The render job is the one the commit staged inside its revision,
+    so a successful commit never fails afterwards on a lookup."""
+    store = RevisionStore(directory)
+    view = await guarded(lambda: change(store))
+    return EditResult(revision=view.info, render=store.staged)
 
 
 async def revise(directory: Path, topic: str, patch: TopicPatch) -> EditResult:
-    result = await transact(lambda: RevisionStore(directory).commit_topic(topic, patch))
-    if result.revision.revision != patch.base_revision:
-        result.render = revision_jobs(directory, result.revision.revision)[0]
-    return result
+    return await transact(lambda store: store.commit_topic(topic, patch), directory)
 
 
 async def restore(directory: Path, revision: int, base_revision: int) -> EditResult:
-    result = await transact(lambda: RevisionStore(directory).restore(revision, base_revision))
-    if result.revision.revision != base_revision:
-        result.render = revision_jobs(directory, result.revision.revision)[0]
-    return result
+    return await transact(lambda store: store.restore(revision, base_revision), directory)
 
 
 def enqueue_render(directory: Path, revision: int, formats: list[RenderFormat]) -> RenderJob:
@@ -106,9 +108,29 @@ async def render_lock(directory: Path):
 
 async def render_revision(directory: Path, job_id: str, settings: WorkerSettings) -> RenderJob:
     job = read_job(directory, job_id)
+    try:
+        return await render_job(directory, job, settings)
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        # A step before the guarded render failed (lock file, job read or write): the job
+        # must not stay pending until the next restart.
+        print(f"Render job {job_id} could not run: {error!r}")
+        if job.status != "queued":
+            return job
+        job.status = "failed"
+        job.errors.append(str(error))
+        try:
+            write_job(directory, job)
+        except OSError as write_error:
+            print(f"Render job {job_id} could not be marked failed: {write_error!r}")
+        return job
+
+
+async def render_job(directory: Path, job: RenderJob, settings: WorkerSettings) -> RenderJob:
     folder = revision_folder(directory, job.revision)
     async with render_lock(folder):
-        job = read_job(directory, job_id)
+        job = read_job(directory, job.id)
         if job.status != "queued":
             return job
         job.status = "running"

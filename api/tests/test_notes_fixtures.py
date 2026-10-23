@@ -140,7 +140,11 @@ def test_mock_openrouter_answers_by_schema_and_topic(tmp_path: Path, monkeypatch
     client = TestClient(mock.app)
 
     assert client.get("/health").json() == {"status": "ok"}
-    prompts = {"topic_draft": "Topic T2: x", "topic_verification": "Topic T2: x"}
+    prompts = {
+        "topic_draft": "Topic T2: x",
+        "topic_verification": "Topic T2: x",
+        "topic_suggestion": "Topic T1: x\nSelected block IDs: T1.6\nInstruction:\nSimplify",
+    }
     for schema in SCHEMAS:
         response = client.post(
             "/api/v1/chat/completions", json=request(schema, prompts.get(schema, ""))
@@ -160,6 +164,18 @@ def test_mock_openrouter_answers_by_schema_and_topic(tmp_path: Path, monkeypatch
     assert "error" in records[-1] and "error" in records[-2]
     assert answer(request("topic_verification", "Topic T1: x"))[0]["passed"] is True
     assert answer(request("topic_verification", "Topic T2: x"))[0]["passed"] is False
+    asked = (
+        "Topic T1: x"
+        + ' {"text": "Selected block IDs: T1.6"} {"text": "Instruction:\\nExpand the example"}'
+    )
+    simplified = answer(
+        request("topic_suggestion", "Topic T1: x\nSelected block IDs: T1.6\nInstruction:\nSimplify")
+    )
+    assert [r["block_id"] for r in simplified[0]["replacements"]] == ["T1.6"]
+    assert simplified[0]["insertions"] == []
+    example = answer(request("topic_suggestion", asked))[0]
+    assert example["replacements"] == []
+    assert [i["after_block_id"] for i in example["insertions"]] == ["T1.6"]
     draft = answer(request("topic_draft", "Topic T2: x"))[0]
     assert all("![" not in b["content"] for b in draft["blocks"])
 

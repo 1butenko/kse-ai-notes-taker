@@ -5,6 +5,7 @@ visual QA share one control content. Nothing here reads production uploads or ke
 """
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -169,6 +170,53 @@ def verification(topic: str) -> dict:
     }
 
 
+# What the prompt of a suggestion request names: the selected block IDs and the instruction.
+# The prompt is a JSON-encoded message list, so a newline may appear escaped.
+SELECTED = re.compile(r'Selected block IDs: ([^"\\\n]*)')
+INSTRUCTION = re.compile(r'Instruction:(?:\\n|\n)([^"\\]*)')
+
+
+def suggestion(topic: str, prompt: str) -> dict:
+    """Changes for the first selected block: a simpler text, or a worked example after it.
+
+    The text is plain, so applying it never breaks a label or a reference."""
+    selected = SELECTED.search(prompt)
+    asked = INSTRUCTION.search(prompt)
+    ids = [i.strip() for i in (selected.group(1) if selected else "").split(",") if i.strip()]
+    note = next(t for s in control_document().sections for t in s.topics if t.topic_id == topic)
+    block = next((b for b in note.blocks if ids and b.id == ids[0]), None)
+    if block is None or asked is None:
+        raise UnknownRequest(f"No block selected for the suggestion of {topic}")
+    cited = [0] if block.citations else []
+    if "example" in asked.group(1).lower():
+        return {
+            "replacements": [],
+            "insertions": [
+                {
+                    "after_block_id": block.id,
+                    "kind": "example",
+                    "title": "Додатковий приклад",
+                    "content": (
+                        "Розглянемо систему $x + y = 2$, $x - y = 0$. Її розв'язок: $x = y = 1$."
+                    ),
+                    "citations": [0],
+                }
+            ],
+        }
+    return {
+        "replacements": [
+            {
+                "block_id": block.id,
+                "kind": block.kind,
+                "title": block.title,
+                "content": "Простіше кажучи: оборотні перетворення рядків не змінюють розв'язків.",
+                "citations": cited,
+            }
+        ],
+        "insertions": [],
+    }
+
+
 SCHEMAS = (
     "course_plan",
     "coverage_review",
@@ -176,6 +224,7 @@ SCHEMAS = (
     "topic_draft",
     "topic_verification",
     "consistency_edits",
+    "topic_suggestion",
 )
 
 
@@ -212,6 +261,8 @@ def answer(body: dict) -> tuple[dict, dict]:
         }
     elif name == "consistency_edits":
         result = {"edits": []}
+    elif name == "topic_suggestion" and topic:
+        result = suggestion(topic, prompt)
     elif name in ("topic_draft", "topic_verification") and topic:
         result = draft(topic) if name == "topic_draft" else verification(topic)
     else:

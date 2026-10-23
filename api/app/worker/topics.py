@@ -1,11 +1,11 @@
 """Topic generation: select evidence, synthesize a note, verify it and revise with feedback."""
 
 import json
-import re
 from typing import Literal
 
 from langfuse import get_client
 
+from app.note_structure import evidence_gap, structure_gaps
 from app.notes import (
     BlockKind,
     Chunk,
@@ -309,56 +309,10 @@ async def verify(
     return check
 
 
-# Explicit objective cues only: legacy/unknown objectives impose no template.
-STRUCTURE_CUES = {
-    "definition": r"\bdefin(?:e|ition|itions)\b|означенн|визначенн|визначити",
-    "example": r"\bexamples?\b|приклад",
-    "intuition": r"\bintuition\b|інтуї",
-    "proof": r"\b(?:prove|proof)\b|довести|доведенн",
-    "summary": r"\b(?:summary|summari[sz]e)\b|підсум",
-}
-
-
-def topic_structure_issues(note: TopicNote) -> list[str]:
-    """Report objective-dependent teaching gaps without inventing missing content."""
-    issues = []
-    objectives = " ".join(note.objectives).lower()
-    evidence = {item.chunk_id for item in note.evidence}
-    for kind, cue in STRUCTURE_CUES.items():
-        if not re.search(cue, objectives):
-            continue
-        blocks = [block for block in note.blocks if block.kind == kind and block.content.strip()]
-        if not blocks:
-            issues.append(f"Objective requires a {kind} block; supporting material may be missing.")
-        elif not any(evidence.intersection(block.citations) for block in blocks):
-            issues.append(f"The required {kind} has no cited supporting evidence.")
-    return issues
-
-
-def evidence_gap(detail: str) -> VerificationIssue:
-    return VerificationIssue(
-        block=None,
-        kind="citation",
-        severity="major",
-        detail=detail,
-        fix="Add supporting course evidence; do not invent missing content.",
-    )
-
-
 def add_structure_issues(note: TopicNote) -> None:
     """Use the existing open issues/status for deterministic learning gaps."""
     existing = {issue.detail for issue in note.open_issues}
-    for detail in topic_structure_issues(note):
-        if detail not in existing:
-            note.open_issues.append(
-                VerificationIssue(
-                    block=None,
-                    kind="missing_objective",
-                    severity="major",
-                    detail=detail,
-                    fix="Add supporting course evidence before completing this objective.",
-                )
-            )
+    note.open_issues += [issue for issue in structure_gaps(note) if issue.detail not in existing]
     if note.open_issues and note.status == "verified":
         note.status = "unresolved"
 

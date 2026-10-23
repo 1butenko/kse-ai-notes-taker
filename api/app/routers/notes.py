@@ -32,9 +32,25 @@ from app.notes_revisions import (
     RevisionView,
     TopicPatch,
 )
+from app.notes_suggestions import (
+    NoteSuggestion,
+    SuggestionRequest,
+    VerificationJob,
+    VerifyBody,
+    read_suggestion,
+    read_verification_job,
+)
 from app.routers.plans import course_dir, current
 from app.worker_client import WorkerClient, get_worker_client
-from app.worker_contract import NotesRequest, RenderRequest, RestoreRequest, ReviseRequest
+from app.worker_contract import (
+    NotesRequest,
+    RenderRequest,
+    RestoreRequest,
+    ReviseRequest,
+    SuggestionActionRequest,
+    SuggestRequest,
+    VerifyTopicRequest,
+)
 
 router = APIRouter(prefix="/plans", tags=["notes"])
 
@@ -254,6 +270,89 @@ def get_render_job(
         return read_job(store.directory, job)
     except (RevisionNotFound, OSError, ValueError) as error:
         raise HTTPException(404, "Render job not found") from error
+
+
+@router.post("/{course}/notes/{run}/suggestions", status_code=status.HTTP_202_ACCEPTED)
+async def create_suggestion(
+    course: str,
+    run: str,
+    body: SuggestionRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> NoteSuggestion:
+    """Ask the model to propose changes to some blocks of one topic. Nothing is changed."""
+    find_run(settings, course, run)
+    return await worker.suggest_notes(SuggestRequest(course=course, run=run, suggestion=body))
+
+
+@router.get("/{course}/notes/{run}/suggestions/{suggestion}")
+def get_suggestion(
+    course: str, run: str, suggestion: str, settings: Annotated[Settings, Depends(get_settings)]
+) -> NoteSuggestion:
+    store = revision_store(settings, course, run)
+    try:
+        return read_suggestion(store.directory, suggestion).public()
+    except (RevisionNotFound, OSError, ValueError) as error:
+        raise HTTPException(404, "Suggestion not found") from error
+
+
+@router.post("/{course}/notes/{run}/suggestions/{suggestion}/apply")
+async def apply_suggestion(
+    course: str,
+    run: str,
+    suggestion: str,
+    body: RestoreBody,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> EditResult:
+    """Commit the reviewed suggestion as a new revision, if the notes are still at its base."""
+    find_run(settings, course, run)
+    return await worker.apply_suggestion(
+        SuggestionActionRequest(
+            course=course, run=run, suggestion=suggestion, base_revision=body.base_revision
+        )
+    )
+
+
+@router.post("/{course}/notes/{run}/suggestions/{suggestion}/reject")
+async def reject_suggestion(
+    course: str,
+    run: str,
+    suggestion: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> NoteSuggestion:
+    find_run(settings, course, run)
+    return await worker.reject_suggestion(
+        SuggestionActionRequest(course=course, run=run, suggestion=suggestion)
+    )
+
+
+@router.post("/{course}/notes/{run}/topics/{topic}/verify", status_code=status.HTTP_202_ACCEPTED)
+async def verify_topic(
+    course: str,
+    run: str,
+    topic: str,
+    body: VerifyBody,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> VerificationJob:
+    """Recheck a topic's saved text against its evidence; a clean result is recorded."""
+    find_run(settings, course, run)
+    return await worker.verify_topic(
+        VerifyTopicRequest(course=course, run=run, topic=topic, base_revision=body.base_revision)
+    )
+
+
+@router.get("/{course}/notes/{run}/verification-jobs/{job}")
+def get_verification_job(
+    course: str, run: str, job: str, settings: Annotated[Settings, Depends(get_settings)]
+) -> VerificationJob:
+    store = revision_store(settings, course, run)
+    try:
+        return read_verification_job(store.directory, job)
+    except (RevisionNotFound, OSError, ValueError) as error:
+        raise HTTPException(404, "Verification job not found") from error
 
 
 def served(

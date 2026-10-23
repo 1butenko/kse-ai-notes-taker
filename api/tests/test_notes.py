@@ -790,7 +790,7 @@ def test_block_titles_keep_lists_and_single_qed() -> None:
 
 
 def test_topic_without_example_reports_gap_when_objective_requires_one(legacy_notes) -> None:
-    from app.worker.topics import topic_structure_issues
+    from app.note_structure import topic_structure_issues
 
     directory, run, _, _ = legacy_notes
     note = load_document(directory, run).sections[0].topics[0]

@@ -22,6 +22,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from app.note_assets import ASSET_PATH, image_references, load_asset
+from app.note_structure import evidence_gaps, structure_gaps
 from app.notes import (
     NoteBlock,
     NotesDocument,
@@ -37,9 +38,12 @@ class RevisionInfo(BaseModel):
     revision: int
     parent: int | None
     created_at: str
-    origin: Literal["generation", "manual", "restore", "ai"]
+    origin: Literal["generation", "manual", "restore", "ai", "verification"]
     changed_topics: list[str]
     restored_from: int | None = None
+    # Provenance, staged with the revision so a crash after HEAD can be reconciled.
+    suggestion: str | None = None
+    verification_job: str | None = None
 
 
 class RevisionView(BaseModel):
@@ -98,9 +102,10 @@ def invalidate_verification(topic: TopicNote) -> None:
     topic.verification_stale = True
     topic.verifier = None
     topic.rounds = 0
-    # Block-indexed results would address the new block order; topic-level gaps still hold.
-    topic.open_issues = [issue for issue in topic.open_issues if issue.block is None]
     topic.error = None
+    # Verifier results (block-indexed or topic-level) described other text. What stays is
+    # what the frozen evidence and the saved text themselves show.
+    topic.open_issues = [*evidence_gaps(topic), *structure_gaps(topic)]
 
 
 def authored(topic: TopicNote) -> dict:
@@ -165,6 +170,8 @@ class RevisionStore:
         self.directory = directory
         self.revisions = directory / "revisions"
         self.head = directory / "head.json"
+        # The render job the last commit through this instance staged inside its revision.
+        self.staged: RenderJob | None = None
 
     # Reading. A view reads HEAD once, then only immutable snapshots.
 
@@ -252,20 +259,34 @@ class RevisionStore:
     # Writing, under the run lock: check, then publish a snapshot, then replace HEAD.
 
     @contextmanager
-    def _transaction(self, base: int) -> Iterator[RevisionView]:
-        """The current revision, if this completed run is still at `base`."""
+    def locked(self) -> Iterator[None]:
+        """The run lock, for a completed run only. Short: never held across awaits."""
         metadata = self.directory / "run.json"
         if not metadata.is_file():
             raise RevisionNotFound("Notes run not found")
         with run_lock(self.directory):
             if NotesRun.model_validate_json(metadata.read_text()).status != "done":
                 raise RevisionConflict("Only completed notes runs can be edited")
+            self.staged = None
+            yield
+
+    def head_revision(self) -> int:
+        return self._head()
+
+    def history(self) -> "list[RevisionInfo]":
+        """Newest first: HEAD and its parents."""
+        return [*self._history()]
+
+    @contextmanager
+    def transaction(self, base: int) -> Iterator[RevisionView]:
+        """The current revision, if this completed run is still at `base`."""
+        with self.locked():
             head = self._head()
             if base != head:
                 raise RevisionConflict(f"Revision changed; current revision is {head}")
             yield (self._baseline() or self._original()) if head == 0 else self._load(head)
 
-    def _publish(self, view: RevisionView) -> None:
+    def _publish(self, view: RevisionView) -> RenderJob | None:
         """Write under a unique staging name, then rename the complete directory into place."""
         self.revisions.mkdir(exist_ok=True)
         stage = self.revisions / f".staging-{uuid4().hex}"
@@ -274,6 +295,7 @@ class RevisionStore:
             (stage / "document.json").write_text(view.document.model_dump_json(indent=2))
             (stage / "revision.json").write_text(view.info.model_dump_json(indent=2))
             (stage / "artifacts").mkdir()
+            job = None
             if view.info.revision > 0:
                 # Intent is staged before HEAD, even if scheduling never happens.
                 from app.notes_artifacts import new_job
@@ -286,6 +308,7 @@ class RevisionStore:
         finally:
             if stage.exists():
                 shutil.rmtree(stage)
+        return job
 
     def _allocate(self) -> int:
         """Above every numbered directory, orphans included: gaps are fine, reuse is not."""
@@ -293,14 +316,17 @@ class RevisionStore:
         used = [int(name) for name in names if name.isascii() and name.isdigit()]
         return max(used, default=0) + 1
 
-    def _commit(
+    def commit(
         self,
         current: RevisionView,
         document: NotesDocument,
-        origin: Literal["manual", "restore", "ai"],
+        origin: Literal["manual", "restore", "ai", "verification"],
         changed: list[str],
         restored_from: int | None = None,
+        suggestion: str | None = None,
+        verification_job: str | None = None,
     ) -> RevisionView:
+        """Publish `document` as the next revision. Call inside `transaction`/`locked`."""
         if self._baseline() is None:
             self._publish(current if current.info.revision == 0 else self._original())
         view = RevisionView(
@@ -311,10 +337,12 @@ class RevisionStore:
                 origin=origin,
                 changed_topics=changed,
                 restored_from=restored_from,
+                suggestion=suggestion,
+                verification_job=verification_job,
             ),
             document=document,
         )
-        self._publish(view)
+        self.staged = self._publish(view)
         temporary = self.directory / f".head-{uuid4().hex}"
         try:
             temporary.write_text(json.dumps({"revision": view.info.revision}))
@@ -326,7 +354,7 @@ class RevisionStore:
     def commit_topic(
         self, topic_id: str, patch: TopicPatch, origin: Literal["manual", "ai"] = "manual"
     ) -> RevisionView:
-        with self._transaction(patch.base_revision) as current:
+        with self.transaction(patch.base_revision) as current:
             document = current.document.model_copy(deep=True)
             topic = find_topic(document, topic_id)
             if topic is None:
@@ -347,11 +375,11 @@ class RevisionStore:
                 topic.blocks = blocks
                 invalidate_verification(topic)
                 register_figures(self.directory, document, [topic])
-            return self._commit(current, document, origin, [topic_id] if edited else [])
+            return self.commit(current, document, origin, [topic_id] if edited else [])
 
     def restore(self, target_revision: int, base_revision: int) -> RevisionView:
         """Copy a committed revision's content into a new revision; HEAD never moves back."""
-        with self._transaction(base_revision) as current:
+        with self.transaction(base_revision) as current:
             target = self.read(target_revision).document
             document = current.document.model_copy(deep=True)
             restored: list[TopicNote] = []
@@ -367,7 +395,7 @@ class RevisionStore:
             if not restored:
                 return current
             register_figures(self.directory, document, restored)
-            return self._commit(
+            return self.commit(
                 current,
                 document,
                 "restore",

@@ -16,9 +16,10 @@ from app.notes_revisions import (
     RevisionConflict,
     RevisionNotFound,
 )
+from app.notes_suggestions import NoteSuggestion, VerificationJob
 from app.storage import sha256
 from app.syllabus import SyllabusExtraction
-from app.worker import revisions
+from app.worker import note_suggestions, revisions
 from app.worker.config import WorkerSettings, get_worker_settings
 from app.worker.llm import ask
 from app.worker.mapping import proposal_summary, run_mapping
@@ -40,8 +41,11 @@ from app.worker_contract import (
     RenderRequest,
     RestoreRequest,
     ReviseRequest,
+    SuggestionActionRequest,
+    SuggestRequest,
     TranscribeRequest,
     TranscribeResponse,
+    VerifyTopicRequest,
 )
 
 COURSE = re.compile(r"^(local|\d+)$")
@@ -63,6 +67,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
             await asyncio.to_thread(fail_interrupted, settings.uploads_dir)
             await asyncio.to_thread(revisions.fail_interrupted_renders, settings.uploads_dir)
+            await asyncio.to_thread(note_suggestions.fail_interrupted_jobs, settings.uploads_dir)
             yield
         finally:
             langfuse.shutdown()
@@ -222,6 +227,72 @@ async def restore_notes(
     if result.render:
         background.add_task(revisions.render_revision, directory, result.render.id, settings)
     return result
+
+
+@app.post("/notes/suggestions", status_code=status.HTTP_202_ACCEPTED)
+async def suggest_notes(
+    body: SuggestRequest,
+    background: BackgroundTasks,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+    opener: Annotated[Opener | None, Depends(get_openrouter_opener)],
+) -> NoteSuggestion:
+    """Prepare a proposal for some blocks of one topic; it changes nothing until applied."""
+    directory = run_directory(settings, body.course, body.run)
+    if opener is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "AI suggestions are not configured"
+        )
+    record = await revisions.guarded(
+        lambda: note_suggestions.create_suggestion(directory, body.suggestion)
+    )
+    background.add_task(note_suggestions.run_suggestion, directory, record.id, settings, opener)
+    return record.public()
+
+
+@app.post("/notes/suggestions/apply")
+async def apply_suggestion(
+    body: SuggestionActionRequest,
+    background: BackgroundTasks,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+) -> EditResult:
+    """Commit a ready suggestion as a new revision, once."""
+    directory = run_directory(settings, body.course, body.run)
+    if body.base_revision is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "base_revision is required")
+    result, _ = await note_suggestions.apply(directory, body.suggestion, body.base_revision)
+    if result.render:
+        background.add_task(revisions.render_revision, directory, result.render.id, settings)
+    return result
+
+
+@app.post("/notes/suggestions/reject")
+async def reject_suggestion(
+    body: SuggestionActionRequest,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+) -> NoteSuggestion:
+    directory = run_directory(settings, body.course, body.run)
+    record = await revisions.guarded(
+        lambda: note_suggestions.reject_suggestion(directory, body.suggestion)
+    )
+    return record.public()
+
+
+@app.post("/notes/verify", status_code=status.HTTP_202_ACCEPTED)
+async def verify_topic(
+    body: VerifyTopicRequest,
+    background: BackgroundTasks,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+    opener: Annotated[Opener | None, Depends(get_openrouter_opener)],
+) -> VerificationJob:
+    """Check one topic's saved text against its evidence, without rewriting anything."""
+    directory = run_directory(settings, body.course, body.run)
+    if opener is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Verification is not configured")
+    job = await revisions.guarded(
+        lambda: note_suggestions.create_verification(directory, body.topic, body.base_revision)
+    )
+    background.add_task(note_suggestions.run_verification, directory, job.id, settings, opener)
+    return job
 
 
 @app.post("/notes/render", status_code=status.HTTP_202_ACCEPTED)

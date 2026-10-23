@@ -53,6 +53,8 @@ export function originLabel(info: RevisionInfo): string {
       return `Restored from revision ${info.restored_from}`;
     case "ai":
       return "AI suggestion";
+    case "verification":
+      return "Verification recorded";
   }
 }
 

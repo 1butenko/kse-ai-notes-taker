@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.note_assets import import_asset
+from app.note_structure import evidence_gap
 from app.notes import NoteBlock, NotesRun, RenderedArtifact, VerificationIssue
 from app.notes_revisions import (
     RevisionConflict,
@@ -72,6 +73,7 @@ def saved_run(tmp_uploads):
             block=None, kind="citation", severity="minor", detail="Thin evidence", fix="Add"
         ),
         VerificationIssue(block=0, kind="clarity", severity="minor", detail="Wordy", fix="Trim"),
+        evidence_gap("No excerpt proves the claim"),
     ]
     document.sources[0].chunk_ids.append("c2")
     document.sections[0].topics.append(other)
@@ -337,11 +339,12 @@ def test_changed_topic_loses_old_verification(saved_run, client):
     assert changed["status"] == "unresolved"
     assert changed["verification_stale"] is True
     assert (changed["verifier"], changed["rounds"]) == (None, 0)
-    # Block-indexed results no longer address the edited blocks; topic-level gaps remain.
-    assert [issue["detail"] for issue in changed["open_issues"]] == ["Thin evidence"]
+    # Verifier results (block-indexed and topic-level) described other text and are gone;
+    # the selector's evidence gap is a fact about the frozen evidence and stays visible.
+    assert [issue["detail"] for issue in changed["open_issues"]] == ["No excerpt proves the claim"]
     assert other["status"] == "verified" and other["verification_stale"] is False
     zero = RevisionStore(directory).read(0).document.sections[0].topics[0]
-    assert (zero.status, zero.verifier, len(zero.open_issues)) == ("verified", "test/verifier", 2)
+    assert (zero.status, zero.verifier, len(zero.open_issues)) == ("verified", "test/verifier", 3)
 
 
 def test_foreign_block_or_chunk_id_is_rejected(saved_run, client):
@@ -492,6 +495,8 @@ def test_language_patch_only_fills_unknown_language(saved_run, client):
         "origin": "manual",
         "changed_topics": [],
         "restored_from": None,
+        "suggestion": None,
+        "verification_job": None,
     }
     run = client.get(url()).json()
     assert run["document"]["language"] == "uk"
@@ -690,6 +695,46 @@ def test_manual_edit_renders_without_model_calls(saved_run, client, model_calls,
         assert "Edited text" in response.text
         assert client.get(url(f"/revisions/0/artifacts/{kind}")).status_code == 404
     assert model_calls == []
+
+
+def test_render_job_that_cannot_start_is_failed_not_left_queued(
+    saved_run, revision_cli, monkeypatch, model_calls
+):
+    from app.notes_artifacts import read_job, revision_jobs
+    from app.worker import revisions
+
+    directory, document = saved_run
+    RevisionStore(directory).commit_topic("T1", TopicPatch(**patch_for(document)))
+    job = revision_jobs(directory, 1)[0]
+
+    @revisions.asynccontextmanager
+    async def broken_lock(_):
+        raise OSError("Cannot open the render lock")
+        yield
+
+    monkeypatch.setattr(revisions, "render_lock", broken_lock)
+    result = asyncio.run(revisions.render_revision(directory, job.id, revision_cli))
+
+    assert result.status == "failed" and "render lock" in result.errors[0]
+    assert read_job(directory, job.id).status == "failed"  # Retryable, not pending forever.
+
+
+def test_a_saved_revision_reports_its_staged_job_without_a_later_lookup(
+    saved_run, client, monkeypatch, model_calls
+):
+    from app.worker import revisions
+
+    directory, document = saved_run
+
+    def unavailable(*_):
+        raise AssertionError("The job comes from the commit, not from a later directory scan")
+
+    monkeypatch.setattr(revisions, "revision_jobs", unavailable)
+    saved = client.patch(url("/topics/T1"), json=patch_for(document))
+    restored = client.post(url("/revisions/0/restore"), json={"base_revision": 1})
+
+    assert saved.status_code == 200 and saved.json()["render"]["revision"] == 1
+    assert restored.status_code == 200 and restored.json()["render"]["revision"] == 2
 
 
 def test_old_render_cannot_replace_new_head(saved_run, client, revision_cli, model_calls):

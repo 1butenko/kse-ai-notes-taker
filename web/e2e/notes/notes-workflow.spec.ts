@@ -31,6 +31,7 @@ type Topic = {
   title: string;
   status: string;
   verification_stale: boolean;
+  open_issues: { detail: string }[];
   blocks: Block[];
 };
 type Document = {
@@ -544,16 +545,144 @@ test("saved and restored revisions get their own ready HTML/PDF artifacts", asyn
   expect(mockRequests().length, "save, restore and retry never call a model").toBe(calls);
 });
 
-test.fixme(
-  "AI suggestion: reject keeps the revision, apply creates a verified-stale revision",
-  {
-    annotation: dependsOn(
-      "Task 9 / P2.4: POST .../suggestions, GET .../suggestions/{id}, apply/reject",
-      "Mock OpenRouter: answers for the suggestion and re-verification schemas once named",
-    ),
-  },
-  async () => {},
-);
+type SuggestionRecord = { id: string; status: string; topic_id: string };
+
+/** The worker's own records of suggestions: the one place that shows a rejected proposal. */
+function suggestionRecords(run: string): SuggestionRecord[] {
+  const folder = path.join(stack.uploads, COURSE, "notes", run, "suggestions");
+  if (!fs.existsSync(folder)) return [];
+  return fs.readdirSync(folder).map((name) => JSON.parse(fs.readFileSync(path.join(folder, name), "utf8")));
+}
+
+const schemaCount = (schema: string) => mockRequests().filter((call) => call.schema === schema).length;
+
+test("AI suggestions are reviewed: reject, apply, stale conflict and a manual recheck", async ({ page, request }, testInfo) => {
+  const run = await generated(request);
+  const start = await head(request, run);
+  if (start.render) await waitForRender(request, run, start.render.id);
+  const h = start.current_revision;
+  const before = topic(start.document, "T1");
+  const otherBefore = topic(start.document, "T2");
+  const history = (await revisions(request, run)).length;
+
+  await openEditor(page, run, "T1");
+  const ai = page.getByRole("region", { name: "AI suggestions" });
+  const review = page.getByRole("region", { name: "Suggestion review" });
+  const simpler = async (blockLabel: string) => {
+    await ai.getByLabel(blockLabel).check();
+    await ai.getByRole("button", { name: "Explain this more simply" }).click();
+    await ai.getByRole("button", { name: "Request suggestion" }).click();
+    await expect(review).toBeVisible({ timeout: 60_000 });
+  };
+
+  // Reject: the proposal is shown with its diff and a fresh check, and changes nothing.
+  const suggestionCalls = schemaCount("topic_suggestion");
+  const checkCalls = schemaCount("topic_verification");
+  await simpler("Select block 6 (T1.6)");
+  await expect(review).toContainText(`based on revision ${h}`);
+  await expect(review.locator("ins", { hasText: "Простіше кажучи" })).toBeVisible();
+  await expect(review).toContainText("Verified against the sources");
+  expect(schemaCount("topic_suggestion")).toBe(suggestionCalls + 1);
+  expect(schemaCount("topic_verification")).toBe(checkCalls + 1);
+  expect((await head(request, run)).current_revision, "a proposal is not a revision").toBe(h);
+  await capture(page, testInfo, "ai-suggestion-review");
+  await review.getByRole("button", { name: "Reject suggestion" }).click();
+  await expect(review).toHaveCount(0);
+  expect(suggestionRecords(run).map((r) => r.status)).toEqual(["rejected"]);
+  const rejected = await head(request, run);
+  expect(rejected.current_revision).toBe(h);
+  expect(topic(rejected.document, "T1")).toEqual(before);
+  expect((await revisions(request, run)).length).toBe(history);
+
+  // Ask again and apply: one new revision, and only the selected block of T1 changes.
+  await simpler("Select block 6 (T1.6)");
+  await review.getByRole("button", { name: "Apply suggestion" }).click();
+  await expect(page.getByText(`Applied as revision ${h + 1}`)).toBeVisible();
+  await expect(page.getByText(`Text revision ${h + 1}`, { exact: true })).toBeVisible();
+  const applied = await head(request, run);
+  expect(applied.current_revision).toBe(h + 1);
+  expect((await revisions(request, run)).at(-1)).toMatchObject({
+    revision: h + 1,
+    parent: h,
+    origin: "ai",
+    changed_topics: ["T1"],
+  });
+  const edited = topic(applied.document, "T1");
+  expect(edited.blocks.map((b) => b.id)).toEqual(before.blocks.map((b) => b.id));
+  expect(edited.blocks.slice(0, 5)).toEqual(before.blocks.slice(0, 5));
+  expect(edited.blocks[5].content).toContain("Простіше кажучи");
+  expect(edited).toMatchObject({ status: "verified", verification_stale: false });
+  expect(topic(applied.document, "T2")).toEqual(otherBefore);
+  expect(suggestionRecords(run).map((r) => r.status).sort()).toEqual(["applied", "rejected"]);
+  // The applied revision gets its own real files, with the suggested text.
+  const render = await waitForRender(request, run, applied.render!.id);
+  expect(render.status, render.errors.join("\n")).toBe("done");
+  const html = await request.get(notesUrl(run, `/revisions/${h + 1}/topics/T1/artifacts/html`));
+  expect(html.status()).toBe(200);
+  expect(await html.text()).toContain("Простіше кажучи");
+  const pdf = await request.get(notesUrl(run, `/revisions/${h + 1}/topics/T1/artifacts/pdf`));
+  expect((await pdf.body()).subarray(0, 5).toString()).toBe("%PDF-");
+
+  // An example is inserted right after the selected block, with a server-assigned ID.
+  await ai.getByLabel("Select block 6 (T1.6)").uncheck();
+  await ai.getByLabel("Select block 5 (T1.5)").check();
+  await ai.getByRole("button", { name: "Expand the example with a worked case" }).click();
+  await ai.getByRole("button", { name: "Request suggestion" }).click();
+  await expect(review).toBeVisible({ timeout: 60_000 });
+  await expect(review.getByRole("article", { name: /^Added: Block 6 · example/ })).toBeVisible();
+  await review.getByRole("button", { name: "Apply suggestion" }).click();
+  await expect(page.getByText(`Applied as revision ${h + 2}`)).toBeVisible();
+  const expanded = topic((await head(request, run)).document, "T1");
+  expect(expanded.blocks.length).toBe(before.blocks.length + 1);
+  expect(expanded.blocks[4].id).toBe("T1.5");
+  expect(expanded.blocks[5].id).toMatch(/^b-[0-9a-f]{32}$/);
+  expect(expanded.blocks[5].content).toContain("x = y = 1");
+  expect(expanded.blocks[6]).toEqual(edited.blocks[5]);
+
+  // Stale: the notes move on while a suggestion is on screen. It is never applied.
+  // A different block: the mock would repeat the summary's text, which changes nothing.
+  await simpler("Select block 4 (T1.4)");
+  const t2 = structuredClone(topic((await head(request, run)).document, "T2").blocks);
+  t2[0].content += "\n\nПримітка після пропозиції.";
+  const moved = await request.patch(notesUrl(run, "/topics/T2"), { data: { base_revision: h + 2, blocks: t2 } });
+  expect(moved.status(), await moved.text()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(review.getByText("The notes changed after this suggestion")).toBeVisible();
+  await expect(review.getByRole("button", { name: "Apply suggestion" })).toBeDisabled();
+  const pending = suggestionRecords(run).find((r) => r.status === "ready")!;
+  const refused = await request.post(notesUrl(run, `/suggestions/${pending.id}/apply`), { data: { base_revision: h + 2 } });
+  expect(refused.status()).toBe(409);
+  expect((await head(request, run)).current_revision, "a stale apply creates nothing").toBe(h + 3);
+  await review.getByRole("button", { name: "Reject suggestion" }).click();
+  await expect(review).toHaveCount(0);
+  expect(topic((await head(request, run)).document, "T1")).toEqual(expanded);
+
+  // Manual recheck: T2 is unresolved for real (the mock finds a major issue every time).
+  const t2Before = topic((await head(request, run)).document, "T2");
+  await openEditor(page, run, "T2");
+  const checks = schemaCount("topic_verification");
+  await ai.getByRole("button", { name: "Verify this topic again" }).click();
+  const result = page.getByRole("group", { name: "Verification result" });
+  await expect(result).toBeVisible({ timeout: 60_000 });
+  await expect(result).toContainText("Not verified");
+  await expect(result).toContainText("Синтетичні джерела не містять спектральної теореми.");
+  expect(schemaCount("topic_verification")).toBeGreaterThan(checks);
+  const checked = await head(request, run);
+  expect(checked.current_revision).toBe(h + 4);
+  expect((await revisions(request, run)).at(-1)).toMatchObject({
+    revision: h + 4,
+    parent: h + 3,
+    origin: "verification",
+    changed_topics: ["T2"],
+  });
+  const t2After = topic(checked.document, "T2");
+  expect(t2After.blocks).toEqual(t2Before.blocks);
+  expect(t2After).toMatchObject({ status: "unresolved", verification_stale: false });
+  expect(t2After.open_issues.map((i) => i.detail)).toContain(
+    "Синтетичні джерела не містять спектральної теореми.",
+  );
+  expect((await waitForRender(request, run, checked.render!.id)).status).toBe("done");
+});
 
 test.fixme(
   "Word download and course book search from one revision",

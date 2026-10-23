@@ -55,6 +55,7 @@ import {
 } from "./draft";
 import { FigureDialog, figureLabels, nextFigureLabel } from "./figure-dialog";
 import { TopicDiff } from "./revision-diff";
+import { AiAssist } from "./suggestion-review";
 
 const LANGUAGES = [
   { value: "uk", label: "Ukrainian (uk)" },
@@ -346,6 +347,16 @@ export function TopicEditor({ course, run, revision, document, topic, draft, ref
           </p>
         </div>
       )}
+
+      <AiAssist
+        key={topicId}
+        course={course}
+        run={run}
+        revision={revision}
+        topic={topic}
+        hasDraft={draft !== null}
+        refresh={refresh}
+      />
 
       {working.blocks.map((block, index) => (
         <BlockEditor

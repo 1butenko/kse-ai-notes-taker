@@ -64,7 +64,8 @@ test("generation renders HTML and PDF through the worker and Quarto", async ({ r
   // The mock only stood in for the model: every pipeline stage asked it with its own model.
   const calls = mockRequests();
   expect(calls.filter((c) => c.error)).toEqual([]);
-  expect(new Set(calls.map((c) => c.schema))).toEqual(
+  // Suggestions are exercised by the workflow suite, which generates its own run.
+  expect(new Set(calls.map((c) => c.schema).filter((schema) => schema !== "topic_suggestion"))).toEqual(
     new Set([
       "course_plan",
       "coverage_review",

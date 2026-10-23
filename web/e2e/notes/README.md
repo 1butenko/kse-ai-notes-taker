@@ -92,7 +92,7 @@ which is unrelated to unresolved references.
 2. The document is schema 2, language `uk`; T1 is verified and T2 is unresolved with open issues.
 3. Every required manifest entry (full notes, T1 and T2; HTML and PDF) is `ready` at revision
    0. A `done` run alone is not accepted.
-4. The mock log shows all six pipeline schemas, each with its `e2e/*` stage model, and
+4. The mock log shows all six generation schemas (`topic_suggestion` is only asked by the workflow suite), each with its `e2e/*` stage model, and
    repeated T2 verification.
 5. The served bytes are real: the HTML has the sandbox CSP, `lang="uk"`, MathJax, equation
    and table anchors and the bibliography; the PDFs start with `%PDF-`; the T2 HTML links
@@ -140,16 +140,24 @@ HTML/PDF without calling the mock LLM.
    older revision; the Retry render button publishes current files when Quarto is
    re-enabled. These operations add zero model calls.
 
+8. **AI suggestions and recheck.** The suggestion panel of the T1 editor: pick block 6,
+   request "Explain this more simply", review the diff and the fresh check ("Verified against
+   the sources"), and Reject. HEAD, the history and T1 are unchanged, and the worker's record is
+   `rejected`. Requesting again and applying gives one `ai` revision with `suggestion` set; only
+   block 6 of T1 differs, T2 is equal, T1 is `verified` (the check was of exactly that text),
+   and the new revision gets real HTML/PDF with the suggested text. "Expand the example"
+   inserts a `b-<hex>` block right after block 5. A suggestion on screen while T2 is saved over
+   the API shows "The notes changed after this suggestion", has Apply disabled, and an API
+   apply is a 409 that creates nothing. "Verify this topic again" on T2 records a
+   `verification` revision with the same blocks; the mock still finds a major issue, so T2 stays
+   Unresolved with that issue shown. Unit tests cover the 503 without OpenRouter.
+
 ## Planned scenarios (`notes-workflow.spec.ts`, currently `fixme`)
 
 These follow the Task 12 plan. Each one is skipped until its interfaces land; check the
 landed contracts again before writing the bodies.
 
-1. **AI suggestion review.** Depends on Task 9 (suggestions API and UI). The mock needs
-   answers for the suggestion and re-verification schemas once they are named.
-   Request a suggestion for one block → reject it, and the revision is unchanged → request
-   again → apply with `base_revision` → a new revision is created and only that topic changes.
-2. **Word and book.** Depends on Task 10 (DOCX revision artifacts) and Task 11 (book job
+1. **Word and book.** Depends on Task 10 (DOCX revision artifacts) and Task 11 (book job
    and `.../revisions/{revision}/book/...`).
    Download the DOCX for the current revision (check the media type, that the figure is in
    `word/media`, and the text) → render the book → open it → search for a term from T2 →
@@ -167,8 +175,7 @@ the control PDF, DOCX through the office QA compose, and the book with search.
   Editing a reading changes its chunk ID (`<sha256[:8]>-0`), so update the `control.json`
   sources, evidence and citations to match. Replacing `figure.png` changes the asset digest
   and path.
-- **New LLM steps.** When the worker gains a response schema (suggestions, re-verification
-  steps), add it to `answer()` and `SCHEMAS` in `api/tests/e2e/synthetic.py`. The smoke
+- **New LLM steps.** When the worker gains a response schema (suggestions: `topic_suggestion`; re-verification reuses `topic_verification`), add it to `answer()` and `SCHEMAS` in `api/tests/e2e/synthetic.py`. The smoke
   asserts the exact set of schemas it sees, so update both together. An unknown schema
   fails the run on purpose.
 - **Pipeline changes.** If topic structure or verification rules change, expected statuses

@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from app.notes import NotesRun, RenderFormat
 from app.notes_revisions import TopicPatch
+from app.notes_suggestions import SuggestionRequest
 from app.plan import BookMatch, Plan, Proposal
 from app.syllabus import SyllabusExtraction, Transcript
 
@@ -59,3 +60,25 @@ class RenderRequest(BaseModel):
     run: str
     revision: int
     formats: list[RenderFormat]
+
+
+class SuggestRequest(BaseModel):
+    course: str
+    run: str
+    suggestion: SuggestionRequest
+
+
+class SuggestionActionRequest(BaseModel):
+    """Apply (with the base revision the reviewer saw) or reject one suggestion."""
+
+    course: str
+    run: str
+    suggestion: str
+    base_revision: int | None = None
+
+
+class VerifyTopicRequest(BaseModel):
+    course: str
+    run: str
+    topic: str
+    base_revision: int

@@ -440,9 +440,12 @@ export type RevisionInfo = {
   revision: number;
   parent: number | null;
   created_at: string;
-  origin: "generation" | "manual" | "restore" | "ai";
+  origin: "generation" | "manual" | "restore" | "ai" | "verification";
   changed_topics: string[];
   restored_from: number | null;
+  /** Older stored revisions have neither field. */
+  suggestion?: string | null;
+  verification_job?: string | null;
 };
 
 export type RevisionView = {
@@ -468,6 +471,54 @@ export type RenderJob = {
 export type EditResult = {
   revision: RevisionInfo;
   render: RenderJob | null;
+};
+
+export type Verification = {
+  round: number;
+  model: string;
+  passed: boolean;
+  issues: VerificationIssue[];
+  escalate: boolean;
+  escalation_reason: string | null;
+};
+
+export type SuggestionRequest = {
+  base_revision: number;
+  topic_id: string;
+  /** Empty means the whole topic. */
+  block_ids: string[];
+  instruction: string;
+};
+
+export type NoteSuggestion = {
+  id: string;
+  base_revision: number;
+  topic_id: string;
+  status: "queued" | "running" | "ready" | "failed" | "applied" | "rejected";
+  /** The complete proposed topic: every block, in its final order. */
+  proposed_blocks: NoteBlock[];
+  /** The fresh check of exactly `proposed_blocks`. */
+  verification: Verification | null;
+  error: string | null;
+  block_ids: string[];
+  instruction: string;
+  /** True only for a clean check: no major issue and no escalation. */
+  verified: boolean;
+  applied_revision: number | null;
+};
+
+export type VerificationJob = {
+  id: string;
+  topic_id: string;
+  base_revision: number;
+  status: "queued" | "running" | "done" | "failed";
+  verification: Verification | null;
+  verified: boolean;
+  /** The metadata revision that recorded the result. */
+  revision: number | null;
+  /** The notes changed while the check ran, so the result was not recorded. */
+  conflict: boolean;
+  error: string | null;
 };
 
 function notesPath(course: string, run: string): string {
@@ -512,6 +563,68 @@ export function restoreNotesRevision(
     `${notesPath(course, run)}/revisions/${revision}/restore`,
     sendJson("POST", { base_revision: baseRevision }),
   );
+}
+
+/** Asks the model to propose changes; nothing in the notes changes until it is applied. */
+export function createNotesSuggestion(
+  course: string,
+  run: string,
+  body: SuggestionRequest,
+): Promise<NoteSuggestion> {
+  return request(`${notesPath(course, run)}/suggestions`, sendJson("POST", body));
+}
+
+export function getNotesSuggestion(
+  course: string,
+  run: string,
+  suggestion: string,
+): Promise<NoteSuggestion> {
+  return request(`${notesPath(course, run)}/suggestions/${encodeURIComponent(suggestion)}`);
+}
+
+/** Commits a reviewed suggestion; HTTP 409 means the notes moved past `baseRevision`. */
+export function applyNotesSuggestion(
+  course: string,
+  run: string,
+  suggestion: string,
+  baseRevision: number,
+): Promise<EditResult> {
+  return request(
+    `${notesPath(course, run)}/suggestions/${encodeURIComponent(suggestion)}/apply`,
+    sendJson("POST", { base_revision: baseRevision }),
+  );
+}
+
+export function rejectNotesSuggestion(
+  course: string,
+  run: string,
+  suggestion: string,
+): Promise<NoteSuggestion> {
+  return request(
+    `${notesPath(course, run)}/suggestions/${encodeURIComponent(suggestion)}/reject`,
+    { method: "POST" },
+  );
+}
+
+/** Rechecks a topic's saved text against its evidence, without rewriting it. */
+export function verifyNotesTopic(
+  course: string,
+  run: string,
+  topic: string,
+  baseRevision: number,
+): Promise<VerificationJob> {
+  return request(
+    `${notesPath(course, run)}/topics/${encodeURIComponent(topic)}/verify`,
+    sendJson("POST", { base_revision: baseRevision }),
+  );
+}
+
+export function getVerificationJob(
+  course: string,
+  run: string,
+  job: string,
+): Promise<VerificationJob> {
+  return request(`${notesPath(course, run)}/verification-jobs/${encodeURIComponent(job)}`);
 }
 
 export type NoteAssetUpload = {
