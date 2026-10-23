@@ -47,6 +47,7 @@ To run without Docker you also need:
    | `MOODLE_TOKEN` | yes      |                                | Web service token of the Moodle bot account |
    | `OPENROUTER_API_KEY` | no |                              | Enables syllabus transcription via [OpenRouter](https://openrouter.ai) |
    | `OPENROUTER_MODEL` | no  | `google/gemini-3.1-flash-lite` | Model used for transcription           |
+   | `PUBLIC_API_URL` | no | `http://localhost:8000` | Absolute API base for links inside downloaded PDF/DOCX notes; include any deployment path prefix, no credentials, query or fragment |
 
    The API reads these from the root `.env` (compose passes it to the container). It refuses to start if `MOODLE_URL` or `MOODLE_TOKEN` is missing. Never commit `.env`.
 
@@ -236,11 +237,11 @@ notes.json               final structured notes with provenance
 notes.qmd, notes.pdf     the Quarto document and its PDF (quarto.log on failure)
 ```
 
-`POST /plans/{course}/notes` with `{"resume": "<run>"}` continues a failed or finished run. It reuses the plan and every finished topic, retries failed topics, then composes again. A topic whose model call fails is marked `failed` without stopping the run, and a topic still failing verification is kept as `unresolved`, flagged in the PDF with its open issues.
+`POST /plans/{course}/notes` with `{"resume": "<run>"}` continues a failed run that was never published. A run that is `done` is refused with `409`: its notes are revision 0 and may already be edited (see [Editing and publishing notes](#editing-and-publishing-notes)), so generate again in a new run. It reuses the plan and every finished topic, retries failed topics, then composes again. A topic whose model call fails is marked `failed` without stopping the run, and a topic still failing verification is kept as `unresolved`, flagged in the PDF with its open issues.
 
 | Endpoint | What it does |
 |----------|--------------|
-| `POST /plans/{course}/notes` | Start a run (`202`), or resume one with `{"resume": "<run>"}`. `409` without a transcribed plan, without session materials, or while a run is going |
+| `POST /plans/{course}/notes` | Start a run (`202`), or resume one with `{"resume": "<run>"}`. `409` without a transcribed plan, without session materials, while a run is going, or when resuming a `done` run |
 | `GET /plans/{course}/notes` | The course's runs, newest first |
 | `GET /plans/{course}/notes/{run}` | The run's status, plus the structured notes once it is done |
 | `GET /plans/{course}/notes/{run}/pdf` / `qmd` | The typeset PDF or its Quarto source |
@@ -254,6 +255,81 @@ Langfuse trace: `generate-notes` → `plan-course` (`draft-course-plan`, `check-
 
 The worker image (`worker-dev` / `worker-prod` targets) adds Quarto, whose bundled Typst makes the PDF, so no LaTeX is needed. Its build renders a sample document, so a broken Quarto or font setup fails the build instead of the first run. Without Quarto (e.g. running the worker outside Docker) the run still finishes with `notes.qmd` and a warning instead of a PDF.
 
+## Editing and publishing notes
+
+A finished run (`status: done`) can be read as HTML and PDF, edited topic by topic, restored to an earlier text, exported to Word and refined with AI suggestions. Editing, restoring and rendering never call a model; only AI suggestions and the manual recheck need OpenRouter. The architectural decisions behind this are recorded in [docs/superpowers/specs/2026-10-23-quarto-notes-decisions.md](docs/superpowers/specs/2026-10-23-quarto-notes-decisions.md).
+
+### Revisions
+
+The generated `notes.json` is **revision 0** and is never rewritten. Every save creates a new immutable snapshot next to it, and `head.json` names the current revision:
+
+```
+uploads/<course>/notes/<run>/
+  notes.json                       revision 0, as generated
+  head.json                        {"revision": N}: the current revision
+  assets/<sha256>.png|jpg          uploaded figures (immutable)
+  revisions/000000/                frozen copy of revision 0 (created by the first edit)
+  revisions/NNNNNN/document.json   the whole document at that revision
+  revisions/NNNNNN/revision.json   parent, origin (manual, restore, ai, verification), changed topics
+  revisions/NNNNNN/jobs/           render jobs of the revision
+  revisions/NNNNNN/artifacts/      manifest.json and one folder per render job
+  suggestions/, verification-jobs/ AI suggestions and manual rechecks (not part of any snapshot)
+```
+
+Only the current revision and its parent chain count as history. A save carries the `base_revision` it was made from: if another tab saved first, it gets `409` and nothing is written. Only completed runs can be edited, and a published run cannot be resumed (start a new run instead).
+
+### Editing, history and restore
+
+Open `/preview/<course>/<run>/<topic>` and use the **Edit** tab: change a block's kind, title, text (Markdown with LaTeX) and citations (chosen from the topic's own evidence), add, delete or reorder blocks, then **Save**. The **History** tab compares revisions block by block and **Restore** copies an earlier text into a **new** revision (history is never rewritten).
+
+- An unsaved draft is kept in the browser tab (`sessionStorage`), survives a 409 and offers to transfer it onto the newer revision. The preview shows the draft only after it is saved and rendered.
+- A topic whose text changed (by hand, restore or AI) becomes **Unresolved** with "Verification outdated": the old `verified` status is never carried over to different text. Topics you did not touch keep their current status. Use **Verify this topic again** (below) to check the new text.
+- **Insert image** uploads a PNG or JPEG (up to 10 MiB and 20 megapixels) and adds `![caption](assets/<sha256>.png){#fig-label}` to the draft. Uploading alone changes no revision; the file is published when a saved revision references it. Only images uploaded this way can be used.
+- Notes generated before the language was recorded may have none: pick Ukrainian or English in the editor before saving; it is never guessed. Rendering such a revision fails with that instruction until you do.
+
+### Render jobs and retry
+
+Every save, restore and applied suggestion queues a render job for the new revision (HTML and PDF, full notes and each written topic). The preview shows both the **text revision** and the revision of each shown file; a file that is older than the text is labelled "Older artifact" and is never presented as current. Files are served per revision and never fall back to another one:
+
+| Endpoint | What it does |
+|----------|--------------|
+| `GET /plans/{course}/notes/{run}/revisions` / `.../revisions/{n}` | History (newest first) / one revision with its document |
+| `PATCH /plans/{course}/notes/{run}/topics/{topic}` | Body `{"base_revision", "blocks", "language"?}`: save a topic. Empty block `id` adds a block. `409` stale base or run not done, `422` unknown block, evidence or figure |
+| `POST .../revisions/{n}/restore` | Body `{"base_revision"}`: restore revision *n*'s text as a new revision |
+| `POST .../revisions/{n}/render` | Body `{"formats": ["html", "pdf", "docx"]}`: queue a render job (`202`), also to retry |
+| `GET .../render-jobs/{job}` | `queued`, `running`, `done` or `failed`, with `errors` |
+| `GET .../revisions/{n}/artifacts/{html\|pdf\|docx}` | The revision's full notes; `.../revisions/{n}/topics/{topic}/artifacts/{kind}` for one topic. `404` if that revision has no such file |
+| `POST .../assets`, `GET .../assets/{id}` | Upload and download a figure |
+
+The older `GET .../{html,pdf,qmd,docx}` URLs still work: they serve the newest ready file and name its revision in the `X-Notes-Revision` header (`qmd` is always revision 0).
+
+A failed render never touches the saved text or an earlier file. If Quarto is missing or breaks, the save still succeeds, the job ends as `failed` with the Quarto error, the preview keeps showing the previous files with their own revision and offers **Retry render**; once Quarto works again, retry creates the files without regenerating anything. A successful output is kept when only another format fails, and a failed retry keeps the previous file of the same kind. If the worker restarts mid-render, the job is marked `failed` and can be retried. Run one worker per `uploads` directory (the worker refuses to start otherwise). `QUARTO_CONCURRENCY` (default 4) caps the Quarto processes of all generation and render jobs together.
+
+PDF and DOCX files link to other topics through `PUBLIC_API_URL`, pointing at the HTML of the same revision.
+
+### Word export
+
+**Prepare Word** in the Preview tab queues a DOCX render of the revision on screen; **Download Word** appears when the file is that exact revision. Word is created on demand only, with a linked contents list in place of Word's table-of-contents field (which stays empty until updated), native editable equations and the bibliography. Limits: the contents has no page numbers, and some inline formulas such as `(2-\lambda)^{2}` render as `¿` in LibreOffice (not checked in Microsoft Word).
+
+### AI suggestions and manual recheck
+
+These need `OPENROUTER_API_KEY` on the worker. Without it they answer `503` and everything above keeps working.
+
+- In the **Edit** tab, select blocks (none selects the whole topic), pick a preset or describe the change, and request a suggestion. Nothing changes yet: the review shows the text and source diff and a fresh verification of exactly the proposed text. The model only returns replacements and insertions; the server assigns block IDs, keeps every unselected block in place and accepts only citations from the topic's own evidence.
+- **Apply** creates a new revision (and a render job) only if the notes are still at the revision the suggestion was made for, and applies it once. **Reject** changes nothing. A stale suggestion cannot be applied.
+- The topic becomes `verified` only when the check of exactly the applied text finds no major issue, the verifier is not unsure, and the topic has no standing evidence gap (those are listed as blocking). Otherwise it stays Unresolved with the reasons shown.
+- **Verify this topic again** (`POST .../topics/{topic}/verify` with `{"base_revision"}`, then poll `GET .../verification-jobs/{id}`) checks the saved text of one topic against its sources without rewriting it. A clean result is recorded as a new revision with origin `verification`; if the notes changed while the check ran, the result is reported as a conflict and the newer text is not certified.
+
+### Running the notes E2E
+
+The browser suite starts its own stack (mock OpenRouter, worker, API and web on ports 8124-8126 and 3124) with a temporary uploads directory and real Quarto, so it needs no keys or production data:
+
+```bash
+cd web && npm run test:e2e:notes
+```
+
+Setup, the environment variables (`NOTES_E2E_QUARTO_BIN`, `TYPST_FONT_PATHS`, `NOTES_E2E_CHROME`, port and keep/hold options) and what each test covers are in [web/e2e/notes/README.md](web/e2e/notes/README.md).
+
 ## Worker
 
 The API never calls a model. `POST /syllabus/transcribe` and `POST /plans/{course}/map` validate the request, then forward it to the `worker` container (`api/app/worker/`, same image as the API, run with `uvicorn app.worker.main:app`), which owns OpenRouter and Langfuse and is not published to the host. The API keeps the plan, transcripts and Moodle; both containers share the `uploads` volume, so the worker reads syllabi and books and caches book indexes there.
@@ -263,6 +339,10 @@ The API never calls a model. `POST /syllabus/transcribe` and `POST /plans/{cours
 | `POST /transcribe` | `POST /syllabus/transcribe` | Extracts the reading plan from a stored syllabus |
 | `POST /map` | `POST /plans/{course}/map` | Matches materials to books and locates the cited pages |
 | `POST /notes` | `POST /plans/{course}/notes` | Starts or resumes a notes run in the background (`202`) |
+| `POST /notes/revise`, `/notes/restore` | `PATCH .../topics/{topic}`, `POST .../revisions/{n}/restore` | Saves a topic or restores an earlier revision as a new revision, without a model |
+| `POST /notes/render` | `POST .../revisions/{n}/render` | Queues an HTML/PDF/DOCX render job for a saved revision (`202`) |
+| `POST /notes/suggestions`, `/apply`, `/reject` | `POST .../suggestions...` | Prepares, applies or rejects an AI suggestion |
+| `POST /notes/verify` | `POST .../topics/{topic}/verify` | Re-checks one saved topic against its sources (`202`) |
 | `GET /health` | compose healthcheck | |
 
 The request and response shapes are in `api/app/worker_contract.py`; the API side is `WorkerClient` in `api/app/worker_client.py` (`WORKER_URL`, default `http://localhost:8001`). Worker errors pass through with their status (`422`, `502`, `503`, `504`); an unreachable worker is `502`, a slow one `504`. `OPENROUTER_*` and `LANGFUSE_*` are read by the worker only. Tests run the worker in-process over ASGI.

@@ -10,6 +10,8 @@
 
 **Spec:** [Специфікація](../specs/2026-10-22-quarto-notes.md), [загальний план](2026-10-22-quarto-notes.md).
 
+**Рішення:** [ухвалені архітектурні рішення](../specs/2026-10-23-quarto-notes-decisions.md) обов'язкові для виконання; вони уточнюють цей план.
+
 ## Global Constraints
 
 - Python >=3.12; мови `uk` та `en`; базова гілка `notes-generation-engine`.
