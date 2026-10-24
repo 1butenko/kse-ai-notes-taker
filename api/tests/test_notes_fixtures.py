@@ -321,6 +321,7 @@ def test_control_cross_references_resolve_in_every_format(control_render) -> Non
 
 def test_control_word_has_visible_contents_and_native_numbered_math(control_render) -> None:
     import re
+    from xml.dom.minidom import parseString
 
     output, _ = control_render
     with zipfile.ZipFile(output / "notes.docx") as archive:
@@ -357,6 +358,16 @@ def test_control_word_has_visible_contents_and_native_numbered_math(control_rend
 
     # Equations remain editable OMML, and each equation number has a gap that survives viewers.
     assert word.count("<m:oMath>") >= 30
+    superscripts = parseString(word).getElementsByTagName("m:sSup")
+    bases = [
+        "".join(
+            part.firstChild.nodeValue
+            for part in superscript.getElementsByTagName("m:e")[0].getElementsByTagName("m:t")
+            if part.firstChild
+        )
+        for superscript in superscripts
+    ]
+    assert "(2−λ)" in bases and "(1,1)" in bases
     # Each callout title row keeps with its body, so none is stranded at a page bottom.
     titles = word.count('<w:textAlignment w:val="center"/>')
     assert titles >= 5 and word.count("<w:keepNext/>") == titles

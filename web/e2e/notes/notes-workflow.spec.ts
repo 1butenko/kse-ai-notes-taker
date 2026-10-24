@@ -775,6 +775,85 @@ test("Word is prepared on demand for one revision and downloads with its figure 
   expect(mockRequests().length, "Word makes no model calls").toBe(calls);
 });
 
+test("History prepares and downloads the exact selected Word revision", async ({ page, request }, testInfo) => {
+  const run = await generated(request);
+  const start = await head(request, run);
+  if (start.render) await waitForRender(request, run, start.render.id);
+  const calls = mockRequests().length;
+  const edit = async (marker: string) => {
+    const current = await head(request, run);
+    const blocks = structuredClone(topic(current.document, "T2").blocks);
+    blocks[0].content += `\n\n${marker}`;
+    const response = await request.patch(notesUrl(run, "/topics/T2"), {
+      data: { base_revision: current.current_revision, blocks },
+    });
+    expect(response.status(), await response.text()).toBe(200);
+    const saved = await response.json();
+    expect((await waitForRender(request, run, saved.render.id)).status).toBe("done");
+    return saved.revision.revision as number;
+  };
+  const old = await edit("Historical Word first text");
+  const newest = await edit("Historical Word newer text");
+  const select = async (revision: number) => {
+    await page.getByRole("list", { name: "Revisions" })
+      .getByRole("button", { name: new RegExp(`^Revision ${revision}\\b`) }).click();
+    return page.getByRole("group", { name: `Word for revision ${revision}` });
+  };
+
+  await page.goto(`/preview/${COURSE}/${run}`);
+  await page.getByRole("tab", { name: "History" }).click();
+  const oldWord = await select(old);
+  await oldWord.getByRole("button", { name: `Prepare Word · revision ${old}` }).click();
+  await expect(oldWord.getByRole("button", { name: "Preparing Word…" })).toBeDisabled();
+  const newWord = await select(newest);
+  await expect(newWord.getByRole("link", { name: /Download Word/ })).toHaveCount(0);
+  await expect(newWord.getByRole("button", { name: `Prepare Word · revision ${newest}` })).toBeVisible();
+  await select(old);
+  await page.reload();
+  await page.getByRole("tab", { name: "History" }).click();
+  const restoredOld = await select(old);
+  const oldLink = restoredOld.getByRole("link", { name: `Download Word · revision ${old}` });
+  await expect(oldLink).toBeVisible({ timeout: 120_000 });
+  await capture(page, testInfo, "history-old-word-ready");
+  const [download] = await Promise.all([page.waitForEvent("download"), oldLink.click()]);
+  const unpacked = spawnSync(path.resolve(stack.fixtures, "../../../.venv/bin/python"), ["-c",
+    "import sys,zipfile; print(zipfile.ZipFile(sys.argv[1]).read('word/document.xml').decode())", await download.path()],
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  expect(unpacked.status, unpacked.stderr).toBe(0);
+  expect(unpacked.stdout).toContain("Historical Word first text");
+  expect(unpacked.stdout).not.toContain("Historical Word newer text");
+  const served = await request.get(notesUrl(run, `/revisions/${old}/artifacts/docx`));
+  expect(served.status()).toBe(200);
+  expect(served.headers()["x-notes-revision"]).toBe(String(old));
+  expect(served.headers()["content-type"]).toBe(DOCX);
+  expect((await head(request, run)).current_revision).toBe(newest);
+
+  // A failed job belongs to the selected new revision; the old file stays available.
+  await select(newest);
+  const disabled = path.join(path.dirname(stack.uploads), "quarto-disabled");
+  fs.writeFileSync(disabled, "disabled");
+  try {
+    await newWord.getByRole("button", { name: `Prepare Word · revision ${newest}` }).click();
+    await expect(newWord.getByText(`Could not prepare Word for revision ${newest}`)).toBeVisible({ timeout: 60_000 });
+    await capture(page, testInfo, "history-new-word-error");
+  } finally {
+    fs.rmSync(disabled, { force: true });
+  }
+  await expect((await select(old)).getByRole("link", { name: `Download Word · revision ${old}` })).toBeVisible();
+  await select(newest);
+  await newWord.getByRole("button", { name: `Retry Word · revision ${newest}` }).click();
+  await expect(newWord.getByRole("link", { name: `Download Word · revision ${newest}` })).toBeVisible({ timeout: 120_000 });
+  expect((await head(request, run)).current_revision).toBe(newest);
+
+  const baselineWord = await select(0);
+  await expect(baselineWord.getByRole("button", { name: "Prepare Word · revision 0" })).toBeVisible();
+  await baselineWord.getByRole("button", { name: "Prepare Word · revision 0" }).click();
+  await expect(baselineWord.getByRole("link", { name: "Download Word · revision 0" })).toBeVisible({ timeout: 120_000 });
+  expect((await request.get(notesUrl(run, "/revisions/0/artifacts/docx"))).headers()["x-notes-revision"]).toBe("0");
+  expect((await head(request, run)).current_revision).toBe(newest);
+  expect(mockRequests().length, "historical Word export makes no model calls").toBe(calls);
+});
+
 test.fixme(
   "Course book search from one revision",
   {

@@ -163,6 +163,13 @@ HTML/PDF without calling the mock LLM.
    404. With Quarto disabled, "Prepare Word" ends in an alert that says HTML and PDF are kept,
    HTML stays available, and "Retry Word" publishes the file after Quarto is back. Zero model calls.
 
+10. **Historical Word in History.** Two distinct edits create an older and a newer revision.
+    History selects the older one, prepares Word for exactly that revision, switches selection
+    while the job runs, reloads, and downloads the old file. Its XML has the older marker and
+    lacks the newer one; the response carries the selected revision header. A failed job for
+    the newer revision shows Retry only there, then publishes the newer Word file. Revision 0
+    can also be selected and prepared. HEAD and the mock model-call count stay unchanged.
+
 ## Planned scenarios (`notes-workflow.spec.ts`, currently `fixme`)
 
 These follow the Task 12 plan. Each one is skipped until its interfaces land; check the

@@ -264,3 +264,45 @@ def test_word_polish_rejects_a_file_that_is_not_a_word_package(tmp_path):
     with pytest.raises(zipfile.BadZipFile):
         polish_docx(broken)
     assert broken.read_text() == "<html>" and not list(tmp_path.glob(".*.tmp"))
+
+
+def test_word_polish_groups_parenthesized_superscript_bases(tmp_path):
+    """Pandoc makes only ')' the base; LibreOffice renders both formulas as ¿."""
+    from xml.dom.minidom import parseString
+
+    from app.worker.docx import polish_docx
+
+    def run(value: str) -> str:
+        return f"<m:r><m:t>{value}</m:t></m:r>"
+
+    def sup(power: str) -> str:
+        return f"<m:sSup><m:e>{run(')')}</m:e><m:sup>{run(power)}</m:sup></m:sSup>"
+
+    math = (
+        f"<m:oMath>{run('(')}{run('2')}{run('−')}{run('λ')}{sup('2')}"
+        f"{run('+')}{run('(')}{run('1')}{run(',')}{run('1')}{sup('T')}"
+        f"{run('+')}{run('(')}{run('a')}{run('(')}{run('b')}{run(')')}{sup('3')}"
+        f"{run('+')}{run('x')}{sup('4')}"
+        f"{run('+')}<m:sSub><m:e>{run('x')}</m:e><m:sub>{run('1')}</m:sub></m:sSub>{sup('5')}"
+        f"<m:sSup><m:e>{run('(')}{run('q')}{run(')')}</m:e><m:sup>{run('6')}</m:sup></m:sSup>"
+        "</m:oMath>"
+    )
+    path = tmp_path / "notes.docx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">'
+            f"{math}</w:document>",
+        )
+
+    polish_docx(path)
+
+    with zipfile.ZipFile(path) as archive:
+        root = parseString(archive.read("word/document.xml"))
+    superscripts = root.getElementsByTagName("m:sSup")
+    bases = [sup.getElementsByTagName("m:e")[0] for sup in superscripts]
+    assert [
+        "".join(t.firstChild.nodeValue for t in base.getElementsByTagName("m:t")) for base in bases
+    ] == ["(2−λ)", "(1,1)", "(a(b))", ")", ")", "(q)"]
+    assert len(superscripts) == 6

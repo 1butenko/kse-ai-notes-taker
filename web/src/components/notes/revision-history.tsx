@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 
 import { diffDocuments } from "./diff";
 import { TopicDiff } from "./revision-diff";
+import { RevisionWord } from "./revision-word";
 
 function errorMessage(err: unknown) {
   return err instanceof ApiError ? err.message : "Couldn't reach the server. Please try again.";
@@ -211,6 +212,13 @@ export function RevisionHistory({ course, run, revision, document, drafts, refre
               </Button>
             )}
           </div>
+          <RevisionWord
+            key={selected.revision}
+            course={course}
+            run={run}
+            revision={selected.revision}
+            refresh={refresh}
+          />
           {selected.parent === null ? (
             <p className="text-sm text-muted-foreground">
               The notes as generated. Later revisions are compared with the one before them.
