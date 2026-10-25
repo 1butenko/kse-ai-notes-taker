@@ -48,7 +48,10 @@ When a run fails, the root is kept and its path is printed. It holds:
   which also needs `npx playwright install ffmpeg`)
 
 Failed tests also attach the logs and run files to the report. The preview test saves
-desktop and 390 px screenshots as attachments on every run.
+desktop and 390 px screenshots, including the full HTML artifact opened directly after
+MathJax and web fonts are ready. Workflow tests retain 390 px editor, restored history, AI review,
+and course book home/search/chapter screenshots. These files are under
+`playwright/results/<test>/` when `NOTES_E2E_KEEP=1` (and after a failure).
 
 Override ports with `NOTES_E2E_{MOCK,WORKER,API,WEB}_PORT`, the Python interpreter with
 `NOTES_E2E_PYTHON`, and the temporary directory with `NOTES_E2E_TMPDIR`.
@@ -178,9 +181,12 @@ HTML/PDF without calling the mock LLM.
     published search file, blocked source/unlisted files and final CORS headers. A direct open
     and a same-origin API parent still cannot read cookies or parent DOM/storage.
 
-Remaining Task 12 visual QA stays manual: HTML at 390 px and on desktop, every page of
-the control PDF, and DOCX through the office QA compose (contents list, equation numbers,
-callout titles). The book browser test attaches search and chapter screenshots.
+The visual acceptance pass uses the retained screenshots plus the real control fixture
+output. To keep the native files, set `QUARTO_TEST_BIN` and `NOTES_FIXTURE_OUTPUT` while
+running `cd api && uv run pytest tests/test_notes_fixtures.py`. Inspect every page of
+its PDF and convert its DOCX through a math-enabled office viewer; the DOCX XML check
+alone does not establish visual fidelity. The book test checks live MathJax and font
+readiness and attaches search/chapter screenshots on desktop and 390 px.
 
 ## Maintaining
 

@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Implement checkbox tasks after their dependencies; this document is a plan, not a deployment request.
 
+**Поточний стан:** P3.1–P3.3 виконано в `feature/quarto-notes`. Чеклісти нижче збережено як початкові завдання; [E2E](../../../web/e2e/notes/README.md) та [рішення](../specs/2026-10-23-quarto-notes-decisions.md) відображають чинні контракти. Microsoft Word лишається неперевіреним.
+
 **Goal:** Експортувати погоджену ревізію у Word і читати весь курс як книгу з пошуком, перевіривши повний цикл доопрацювання.
 
 **Architecture:** Word та Quarto Book споживають той самий immutable snapshot, що HTML/PDF. Книга — похідний артефакт однієї ревізії з контрольованим набором файлів; зовнішня публікація не потрібна.

@@ -259,6 +259,8 @@ The worker image (`worker-dev` / `worker-prod` targets) adds Quarto, whose bundl
 
 A finished run (`status: done`) can be read as HTML and PDF, edited topic by topic, restored to an earlier text, exported to Word and refined with AI suggestions. Editing, restoring and rendering never call a model; only AI suggestions and the manual recheck need OpenRouter. The architectural decisions behind this are recorded in [docs/superpowers/specs/2026-10-23-quarto-notes-decisions.md](docs/superpowers/specs/2026-10-23-quarto-notes-decisions.md).
 
+This workflow was developed on `feature/quarto-notes` from `notes-generation-engine` at `2829b7b`. The structured `NotesDocument` is the source of truth; QMD, HTML, PDF, DOCX and the course book are generated from a saved revision.
+
 ### Revisions
 
 The generated `notes.json` is **revision 0** and is never rewritten. Every save creates a new immutable snapshot next to it, and `head.json` names the current revision:
@@ -296,10 +298,11 @@ Every save, restore and applied suggestion queues a render job for the new revis
 | `GET /plans/{course}/notes/{run}/revisions` / `.../revisions/{n}` | History (newest first) / one revision with its document |
 | `PATCH /plans/{course}/notes/{run}/topics/{topic}` | Body `{"base_revision", "blocks", "language"?}`: save a topic. Empty block `id` adds a block. `409` stale base or run not done, `422` unknown block, evidence or figure |
 | `POST .../revisions/{n}/restore` | Body `{"base_revision"}`: restore revision *n*'s text as a new revision |
-| `POST .../revisions/{n}/render` | Body `{"formats": ["html", "pdf", "docx"]}`: queue a render job (`202`), also to retry |
+| `POST .../revisions/{n}/render` | Body `{"formats": ["html", "pdf", "docx", "book"]}`: queue a render job (`202`), also to retry. The requested formats can be a subset |
 | `GET .../render-jobs/{job}` | `queued`, `running`, `done` or `failed`, with `errors` |
 | `GET .../revisions/{n}/artifacts/{html\|pdf\|docx}` | The revision's full notes; `.../revisions/{n}/topics/{topic}/artifacts/{kind}` for one topic. `404` if that revision has no such file |
 | `POST .../assets`, `GET .../assets/{id}` | Upload and download a figure |
+| `GET .../revisions/{n}/book/` | Open the search-enabled course book for exactly revision *n*; linked chapters and assets stay under that revision |
 
 The older `GET .../{html,pdf,qmd,docx}` URLs still work: they serve the newest ready file and name its revision in the `X-Notes-Revision` header (`qmd` is always revision 0).
 
@@ -309,7 +312,13 @@ PDF and DOCX files link to other topics through `PUBLIC_API_URL`, pointing at th
 
 ### Word export
 
-**Prepare Word** in the Preview tab queues a DOCX render of the revision on screen; **Download Word** appears when the file is that exact revision. Word is created on demand only, with a linked contents list in place of Word's table-of-contents field (which stays empty until updated), native editable equations and the bibliography. Limits: the contents has no page numbers, and some inline formulas such as `(2-\lambda)^{2}` render as `¿` in LibreOffice (not checked in Microsoft Word).
+**Prepare Word** in the Preview tab queues a DOCX render of the revision on screen; **Download Word** appears when the file is that exact revision. History can prepare and download Word for a selected earlier revision too. Word is created on demand only, with a linked contents list in place of Word's table-of-contents field (which stays empty until updated), native editable equations and the bibliography. The contents has no page numbers. The control DOCX was rendered in math-enabled LibreOffice, including parenthesized superscripts; large callouts can leave sparse pages there. Microsoft Word itself has not been tested. A Google Docs import preserved superscripts but flattened matrix rows and sometimes separated a callout title from its body.
+
+### Course book and complete workflow
+
+On the full-notes Preview tab, choose **Prepare course book** to build a searchable Quarto book from the current saved revision. The **Course book** tab opens it after the job finishes. Each chapter, search index and link belongs to that revision; an older book is labelled with its number after a later edit. A failed attempt leaves the previous ready book available and offers **Retry course book**. The publication serves only the book's approved output files, with sandboxed HTML; it does not include uploaded readings or AI working files. The standalone full PDF remains available separately.
+
+For a typical review: open a generated run, read HTML or PDF, edit a topic and save, wait for its new render job, then compare revisions in **History** or restore an older text as a new revision. Request an AI suggestion in **Edit**, inspect its diff and fresh source check, then reject or apply it; use **Verify this topic again** after manual changes. Prepare Word for the current or a historical revision, and prepare the course book when the text is ready. Each view labels the text and displayed artifact revisions. If Quarto fails, use the render retry after fixing it; the saved revision and last successful files remain available. Without OpenRouter, manual edits, history, render retries, Word and book still work, while suggestions and manual rechecks return `503`.
 
 ### AI suggestions and manual recheck
 

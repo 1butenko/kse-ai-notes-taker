@@ -151,7 +151,22 @@ test("preview shows the notes with rendered math on desktop and 390 px", async (
   await expect(frame.locator("mjx-container").first()).toBeVisible({ timeout: 60_000 });
   await expect(frame.locator("#tbl-t1-row-operations")).toBeVisible();
   await expect(frame.getByText("?@")).toHaveCount(0);
+  await frame.locator("body").evaluate(async () => {
+    await document.fonts.ready;
+    await (window as unknown as { MathJax?: { startup?: { promise?: Promise<unknown> } } }).MathJax?.startup?.promise;
+  });
   await capture(page, testInfo, "desktop-full-notes");
+  // The embedded frame has a reader viewport. Open its exact artifact URL in a
+  // separate sandboxed page to capture and inspect the complete rendered document.
+  const direct = await page.context().newPage();
+  const fullUrl = (await page.locator(`iframe[title="${control.title}"]`).getAttribute("src"))!;
+  await direct.goto(fullUrl);
+  await expect(direct.locator("mjx-container").first()).toBeVisible({ timeout: 60_000 });
+  await direct.evaluate(async () => {
+    await document.fonts.ready;
+    await (window as unknown as { MathJax?: { startup?: { promise?: Promise<unknown> } } }).MathJax?.startup?.promise;
+  });
+  await capture(direct, testInfo, "desktop-full-html-direct");
 
   const t2 = topics[1];
   await page.getByRole("navigation", { name: "Topics" }).getByRole("link", { name: new RegExp(t2.title) }).click();
@@ -161,6 +176,10 @@ test("preview shows the notes with rendered math on desktop and 390 px", async (
   const topicFrame = page.frameLocator(`iframe[title="${t2.title}"]`);
   await expect(topicFrame.locator("mjx-container").first()).toBeVisible({ timeout: 60_000 });
   await capture(page, testInfo, "desktop-topic-T2");
+  const topicUrl = (await page.locator(`iframe[title="${t2.title}"]`).getAttribute("src"))!;
+  await direct.goto(topicUrl);
+  await expect(direct.locator("mjx-container").first()).toBeVisible({ timeout: 60_000 });
+  await capture(direct, testInfo, "desktop-topic-T2-html-direct");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/preview/${COURSE}/${id}`);
@@ -174,6 +193,14 @@ test("preview shows the notes with rendered math on desktop and 390 px", async (
   );
   expect(notesOverflow, "notes body wider than the 390 px frame").toBeLessThanOrEqual(0);
   await capture(page, testInfo, "mobile-390-full-notes");
+  await direct.setViewportSize({ width: 390, height: 844 });
+  await direct.goto(fullUrl);
+  await expect(direct.locator("mjx-container").first()).toBeVisible({ timeout: 60_000 });
+  await direct.evaluate(async () => {
+    await document.fonts.ready;
+    await (window as unknown as { MathJax?: { startup?: { promise?: Promise<unknown> } } }).MathJax?.startup?.promise;
+  });
+  await capture(direct, testInfo, "mobile-390-full-html-direct");
   // Matrix, long formula and table at 390 px: Quarto's wrapper scrolls display math.
   for (const id of ["eq-t1-augmented", "eq-t1-sarrus", "tbl-t1-row-operations"]) {
     const element = frame.locator(`#${id}`);
@@ -192,5 +219,15 @@ test("preview shows the notes with rendered math on desktop and 390 px", async (
         : null;
     });
     expect(clipped, `${id} is clipped at 390 px`).toBeNull();
+    if (id === "eq-t1-sarrus") {
+      const scrolled = await element.locator("span.math.display").evaluate((wrapper) => {
+        if (!/auto|scroll/.test(getComputedStyle(wrapper).overflowX)) return false;
+        wrapper.scrollLeft = wrapper.scrollWidth;
+        return wrapper.scrollLeft > 0;
+      });
+      expect(scrolled, "the long formula's right end can be scrolled into view").toBe(true);
+      await capture(element, testInfo, "mobile-390-eq-t1-sarrus-right-end");
+    }
   }
+  await direct.close();
 });

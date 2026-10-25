@@ -97,7 +97,7 @@ test("HTML → edit → save → new revision; a second tab gets 409 and recover
   context,
   page,
   request,
-}) => {
+}, testInfo) => {
   const run = await generated(request);
   const before = await head(request, run);
   const h = before.current_revision;
@@ -215,9 +215,11 @@ test("HTML → edit → save → new revision; a second tab gets 409 and recover
   expect(transferred.blocks[0].title).toBe(`${t1.blocks[0].title} (B)`);
   expect(transferred.blocks[4].content).toBe(t1.blocks[4].content);
   expect(await drafts(tabB)).toEqual([]);
+  await tabB.setViewportSize({ width: 390, height: 844 });
+  await capture(tabB, testInfo, "mobile-390-editor-saved-revision");
 });
 
-test("history diffs and restoring an earlier revision, seen from a new tab", async ({ context, page, request }) => {
+test("history diffs and restoring an earlier revision, seen from a new tab", async ({ context, page, request }, testInfo) => {
   const run = await generated(request);
   const start = await head(request, run);
   const h = start.current_revision;
@@ -284,6 +286,8 @@ test("history diffs and restoring an earlier revision, seen from a new tab", asy
   await expect(
     fresh.getByRole("list", { name: "Revisions" }).getByRole("button").first(),
   ).toContainText(new RegExp(`Revision ${h + 2}\\s*Current`));
+  await fresh.setViewportSize({ width: 390, height: 844 });
+  await capture(fresh, testInfo, "mobile-390-history-restored-revision");
   await fresh.getByRole("tab", { name: "Edit" }).click();
   await expect(content(fresh, `Block ${example + 1} (${t2.blocks[example].id})`)).toHaveValue(
     t2.blocks[example].content,
@@ -582,6 +586,9 @@ test("AI suggestions are reviewed: reject, apply, stale conflict and a manual re
   expect(schemaCount("topic_verification")).toBe(checkCalls + 1);
   expect((await head(request, run)).current_revision, "a proposal is not a revision").toBe(h);
   await capture(page, testInfo, "ai-suggestion-review");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await capture(page, testInfo, "mobile-390-ai-suggestion-review");
+  await page.setViewportSize({ width: 1280, height: 720 });
   await review.getByRole("button", { name: "Reject suggestion" }).click();
   await expect(review).toHaveCount(0);
   expect(suggestionRecords(run).map((r) => r.status)).toEqual(["rejected"]);
@@ -950,7 +957,7 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   await expect(frame.locator(".aa-Panel a").first()).toBeVisible();
   const result = await frame.locator(".aa-Panel a").first().getAttribute("href");
   expect(new URL(result!, current).href).toContain(`${current}T2.html`);
-  await testInfo.attach("course-book-search", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  await capture(page, testInfo, "desktop-course-book-search");
   await frame.locator(".aa-Panel a").first().click();
   await expect(iframe).toHaveAttribute("src", current); // iframe element retains its entry URL
   await expect(frame.getByText("Книжковий маркер ревізії")).toBeVisible();
@@ -966,7 +973,7 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
     return getComputedStyle(element.querySelector("mjx-c")!, "::before").content;
   });
   expect(glyph).toBe('"A"');
-  await testInfo.attach("course-book-chapter", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  await capture(page, testInfo, "desktop-course-book-chapter");
   const inner = page.frames().find((f) => f !== page.mainFrame())!;
   expect(inner.url()).toContain(`${current}T2.html`);
   await frame.getByRole("link", { name: "Topic T1" }).click();
@@ -991,7 +998,7 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   await frame.locator('.nav-page-previous a').click();
   await expect.poll(() => new URL(inner.url()).pathname).toMatch(/\/book\/(?:index\.html)?$/);
   await expect(frame.locator("h1").first()).toBeVisible();
-  await testInfo.attach("course-book", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  await capture(page, testInfo, "desktop-course-book-home");
   expect(errors).toEqual([]);
   await page.evaluate(() => localStorage.setItem("book-parent-canary", "PARENT_ONLY"));
   const isolated = await inner.evaluate(() => {
@@ -1026,4 +1033,19 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   });
   expect(denied).toBe("SecurityError");
   await sameOrigin.close();
+
+  // Retain the responsive reader states from this same published revision.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await capture(page, testInfo, "mobile-390-course-book-home");
+  await frame.locator(".quarto-search-button").click();
+  await frame.locator(".aa-Input").fill("Власний вектор");
+  await expect(frame.locator(".aa-Panel a").first()).toBeVisible();
+  await capture(page, testInfo, "mobile-390-course-book-search");
+  await frame.locator(".aa-Panel a").first().click();
+  await expect(frame.getByText("Книжковий маркер ревізії")).toBeVisible();
+  await frame.locator("body").evaluate(async () => {
+    await document.fonts.ready;
+    await (window as unknown as { MathJax?: { startup?: { promise?: Promise<unknown> } } }).MathJax?.startup?.promise;
+  });
+  await capture(page, testInfo, "mobile-390-course-book-chapter");
 });

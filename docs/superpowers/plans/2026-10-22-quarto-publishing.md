@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Execute checked tasks in dependency order; do not begin implementation before the requested planning handoff is complete.
 
+**Поточний стан:** P1.1–P1.5 виконано в `feature/quarto-notes`. Чеклісти нижче збережено як початкові завдання; фактичні рішення та приймання наведено в [рішеннях](../specs/2026-10-23-quarto-notes-decisions.md) і [E2E](../../../web/e2e/notes/README.md).
+
 **Goal:** Показувати структуровані конспекти у HTML та PDF з коректною математикою, джерелами й навігацією.
 
 **Architecture:** Наявна модель конспекту розширюється сумісно. Форматування змісту відділяється від запуску Quarto; API та UI використовують опис доступних артефактів. Кожна задача розвиває наявний шлях генерація → worker → файл → preview.

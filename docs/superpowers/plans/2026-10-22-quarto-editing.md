@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Execute checkbox steps in dependency order. Execution method is selected at the planning handoff.
 
+**Поточний стан:** P2.1–P2.4 виконано в `feature/quarto-notes`. Чеклісти нижче є початковими завданнями; чинні правила HEAD, блокування run, orphan, jobs, restore і AI зібрані в [рішеннях](../specs/2026-10-23-quarto-notes-decisions.md).
+
 **Goal:** Викладач редагує одну тему, бачить історію й отримує оновлені формати; AI пропонує точкові зміни для перегляду.
 
 **Architecture:** Незмінні знімки ревізій з оптимістичною перевіркою бази. Worker — єдиний власник команд запису та рендерингу; API/UI читають snapshot і стан job. Ручні зміни працюють незалежно від налаштування OpenRouter.
