@@ -912,6 +912,10 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
     expect((await request.get(current)).status()).toBe(200);
     const after = (await (await request.get(notesUrl(run))).json()) as RunView;
     expect(after.artifacts.find((a) => a.format === "book" && a.revision === h + 1)?.path).toBe(readyPath);
+    await page.reload();
+    await expect(page.getByText(`Could not prepare course book for revision ${h + 1}`)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry course book" })).toBeVisible();
+    await expect(page.getByRole("link", { name: new RegExp(`Open course book.*${h + 1}`) })).toBeVisible();
   } finally {
     fs.rmSync(disabled, { force: true });
   }

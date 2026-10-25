@@ -34,7 +34,7 @@ async def published_book_cors(request, call_next):
     response = await call_next(request)
     if (
         request.method == "GET"
-        and response.status_code == 200
+        and response.status_code in (200, 206)
         and response.headers.get("x-book-published") == "1"
     ):
         del response.headers["x-book-published"]

@@ -99,7 +99,7 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
   const bookCurrent = bookFile?.revision === textRevision;
   const bookJob = job?.formats.includes("book") ? job : null;
   const bookPending = bookJob !== null && ["queued", "running"].includes(bookJob.status);
-  const bookFailed = bookJob?.status === "failed" && !bookCurrent;
+  const bookFailed = bookJob?.status === "failed";
   const openUrl = showBook && !note && bookFile
     ? revisionBookUrl(course, run, bookFile.revision)
     : url;
@@ -533,7 +533,7 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
                       Open course book <RevisionTag revision={bookFile.revision} text={textRevision} />
                     </a>
                   )}
-                  {!bookCurrent && (
+                  {(!bookCurrent || bookFailed) && (
                     <Button size="sm" variant="outline" onClick={prepareBook}
                       disabled={bookPending || bookStarting}>
                       {bookPending || bookStarting ? "Preparing course book…" : bookFailed ? "Retry course book" : "Prepare course book"}

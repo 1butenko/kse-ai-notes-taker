@@ -127,6 +127,15 @@ def test_book_route_uses_publication_and_final_wire_policy(tmp_uploads: Path):
         )
         assert allowed.headers["access-control-allow-origin"] == "*"
         assert "access-control-allow-credentials" not in allowed.headers
+        partial = client.get(
+            prefix + "/book/index.html",
+            headers={"Origin": "http://localhost:3000", "Range": "bytes=0-3"},
+        )
+        assert partial.status_code == 206
+        assert partial.content == b"<htm"
+        assert partial.headers["access-control-allow-origin"] == "*"
+        assert "access-control-allow-credentials" not in partial.headers
+        assert "x-book-published" not in partial.headers
         assert (
             client.get(prefix + "/book/search.json", headers={"Origin": "null"}).status_code == 200
         )
