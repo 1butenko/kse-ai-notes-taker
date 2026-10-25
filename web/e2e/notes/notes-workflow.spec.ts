@@ -938,6 +938,52 @@ test("AI suggestions are reviewed: reject, apply, stale conflict and a manual re
   expect((await waitForRender(request, run, checked.render!.id)).status).toBe("done");
 });
 
+test("a ready suggestion remains usable after a verification-only revision", async ({ page, request }) => {
+  const run = await generated(request);
+  const h = (await head(request, run)).current_revision;
+  await openEditor(page, run, "T1");
+  const ai = page.getByRole("region", { name: "AI suggestions" });
+  const review = page.getByRole("region", { name: "Suggestion review" });
+  await ai.getByLabel(/Select block .*T1\.4/).check();
+  await ai.getByRole("button", { name: "Explain this more simply" }).click();
+  await ai.getByRole("button", { name: "Request suggestion" }).click();
+  await expect(review).toBeVisible({ timeout: 60_000 });
+  const proposal = suggestionRecords(run).find((record) => record.status === "ready")!;
+  const suggestionCalls = schemaCount("topic_suggestion");
+
+  const check = await request.post(notesUrl(run, "/topics/T1/verify"), { data: { base_revision: h } });
+  expect(check.status(), await check.text()).toBe(202);
+  const jobId = (await check.json()).id;
+  await expect.poll(async () => {
+    const job = await request.get(notesUrl(run, `/verification-jobs/${jobId}`));
+    return (await job.json()).revision;
+  }, { timeout: 60_000 }).toBe(h + 1);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByText(`Text revision ${h + 1}`, { exact: true })).toBeVisible();
+  await expect(review.getByRole("button", { name: "Apply suggestion" })).toBeEnabled();
+  const publicView = await request.get(notesUrl(run, `/suggestions/${proposal.id}`));
+  expect(await publicView.json()).toMatchObject({ base_revision: h, current_revision: h + 1, compatible: true });
+  await review.getByRole("button", { name: "Apply suggestion" }).click();
+  await expect(page.getByText(`Applied as revision ${h + 2}`)).toBeVisible();
+  expect((await revisions(request, run)).at(-1)).toMatchObject({ parent: h + 1, origin: "ai" });
+  expect(schemaCount("topic_suggestion")).toBe(suggestionCalls);
+
+  await ai.getByLabel(/Select block .*T1\.4/).uncheck();
+  await ai.getByLabel(/Select block .*T1\.5/).check();
+  await ai.getByRole("button", { name: "Expand the example with a worked case" }).click();
+  await ai.getByRole("button", { name: "Request suggestion" }).click();
+  await expect(review).toBeVisible({ timeout: 60_000 });
+  const t2 = structuredClone(topic((await head(request, run)).document, "T2").blocks);
+  t2[0].content += "\n\nManual change after proposal.";
+  const moved = await request.patch(notesUrl(run, "/topics/T2"), {
+    data: { base_revision: h + 2, blocks: t2 },
+  });
+  expect(moved.status(), await moved.text()).toBe(200);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByText(`Text revision ${h + 3}`, { exact: true })).toBeVisible();
+  await expect(review.getByRole("button", { name: "Apply suggestion" })).toBeDisabled();
+});
+
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 test("Word is prepared on demand for one revision and downloads with its figure and contents", async ({

@@ -5,6 +5,7 @@ from collections import Counter
 
 from langfuse import get_client
 
+from app.note_verification_identity import DraftBlock, TopicDraft
 from app.notes import CoursePlan, NotesSection, TopicNote, VerificationIssue
 from app.schemas import Strict
 from app.worker.llm import ask, chat
@@ -12,8 +13,6 @@ from app.worker.models import NotesModels
 from app.worker.openrouter import OpenRouterClient
 from app.worker.references import BLANK_LINE, LABEL, math_regions, prose
 from app.worker.topics import (
-    DraftBlock,
-    TopicDraft,
     add_structure_issues,
     is_clean,
     registry_text,

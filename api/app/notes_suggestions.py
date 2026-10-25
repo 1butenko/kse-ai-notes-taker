@@ -5,6 +5,8 @@ never inside a snapshot: a proposal or a check is not part of the notes until a 
 says so. The worker is the only writer; the API reads.
 """
 
+import hashlib
+import json
 import re
 from pathlib import Path
 from time import time_ns
@@ -13,9 +15,16 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from app.notes import NoteBlock, Verification, VerificationIssue
+from app.note_verification_identity import fingerprint
+from app.notes import NoteBlock, NotesDocument, Verification, VerificationIssue
 from app.notes_artifacts import atomic_json
-from app.notes_revisions import RevisionNotFound
+from app.notes_revisions import (
+    RevisionConflict,
+    RevisionNotFound,
+    RevisionStore,
+    authored,
+    find_topic,
+)
 
 SUGGESTIONS = "suggestions"
 VERIFICATIONS = "verification-jobs"
@@ -50,6 +59,9 @@ class NoteSuggestion(BaseModel):
     verified: bool = False
     blocking: list[VerificationIssue] = []
     applied_revision: int | None = None
+    # Read-time hint for the revision observed by the API. Apply checks again under lock.
+    current_revision: int | None = None
+    compatible: bool = False
 
 
 class Insertion(BaseModel):
@@ -65,11 +77,80 @@ class SuggestionRecord(NoteSuggestion):
     replacements: list[NoteBlock] = []
     insertions: list[Insertion] = []
     fingerprint: str | None = None
+    # A conservative identity of the whole authored document and saved plan. Older
+    # records are checked against immutable snapshots and the exact fingerprint.
+    compatibility_digest: str | None = None
 
-    def public(self) -> NoteSuggestion:
+    def public(
+        self, current_revision: int | None = None, compatible: bool = False
+    ) -> NoteSuggestion:
         return NoteSuggestion.model_validate(
             self.model_dump(include=set(NoteSuggestion.model_fields))
+            | {"current_revision": current_revision, "compatible": compatible}
         )
+
+
+def authored_document(document: NotesDocument) -> dict:
+    """All substantive document fields, excluding per-topic verification results."""
+    content = document.model_dump(mode="json")
+    for section, saved in zip(document.sections, content["sections"], strict=True):
+        saved["topics"] = [
+            authored(topic) | {"topic_id": topic.topic_id} for topic in section.topics
+        ]
+    return content
+
+
+def compatibility_digest(directory: Path, document: NotesDocument) -> str:
+    """Conservative new-record identity: authored content plus raw saved plan bytes."""
+    plan = directory / "plan.json"
+    material = {
+        "document": authored_document(document),
+        "plan": plan.read_bytes().hex() if plan.is_file() else None,
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+def compatible_revision(store: RevisionStore, record: SuggestionRecord, head: int) -> bool:
+    """The stored checked candidate matches HEAD; only metadata-only chains may advance it.
+
+    The public API calls this as a hint; Apply calls it again under the run lock and
+    separately validates the exact candidate, scope and verifier fingerprint.
+    """
+    if head < record.base_revision or not record.fingerprint or record.verification is None:
+        return False
+    try:
+        # A malformed frozen baseline must not become a positive public hint.
+        store._baseline()
+        if head != record.base_revision:
+            history = store.history()
+            base = next(
+                i for i, item in enumerate(history) if item.revision == record.base_revision
+            )
+            chain = history[:base]
+            if not chain or any(
+                item.origin != "verification" or not item.verification_job for item in chain
+            ):
+                return False
+            original = authored_document(store.read(record.base_revision).document)
+            if any(
+                authored_document(store.read(item.revision).document) != original for item in chain
+            ):
+                return False
+        current = store.read(head).document
+        if (
+            record.compatibility_digest
+            and compatibility_digest(store.directory, current) != record.compatibility_digest
+        ):
+            return False
+        note = find_topic(current, record.topic_id)
+        if note is None:
+            return False
+        candidate = note.model_copy(update={"blocks": record.proposed_blocks}, deep=True)
+        return fingerprint(store.directory, current, candidate) == record.fingerprint
+    except (OSError, ValueError, RevisionConflict, RevisionNotFound, StopIteration):
+        return False
 
 
 class VerifyBody(BaseModel):
@@ -114,7 +195,10 @@ def read_suggestion(directory: Path, identifier: str) -> SuggestionRecord:
 
 
 def write_suggestion(directory: Path, record: SuggestionRecord) -> None:
-    atomic_json(_file(directory, SUGGESTIONS, record.id), record.model_dump())
+    atomic_json(
+        _file(directory, SUGGESTIONS, record.id),
+        record.model_dump(exclude={"current_revision", "compatible"}),
+    )
 
 
 def read_verification_job(directory: Path, identifier: str) -> VerificationJob:

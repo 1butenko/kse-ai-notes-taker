@@ -46,6 +46,7 @@ from app.notes_suggestions import (
     SuggestionRequest,
     VerificationJob,
     VerifyBody,
+    compatible_revision,
     read_suggestion,
     read_verification_job,
 )
@@ -300,7 +301,9 @@ def get_suggestion(
 ) -> NoteSuggestion:
     store = revision_store(settings, course, run)
     try:
-        return read_suggestion(store.directory, suggestion).public()
+        record = read_suggestion(store.directory, suggestion)
+        head = store.head_revision()
+        return record.public(head, compatible_revision(store, record, head))
     except (RevisionNotFound, OSError, ValueError) as error:
         raise HTTPException(404, "Suggestion not found") from error
 
@@ -314,7 +317,7 @@ async def apply_suggestion(
     settings: Annotated[Settings, Depends(get_settings)],
     worker: Annotated[WorkerClient, Depends(get_worker_client)],
 ) -> EditResult:
-    """Commit the reviewed suggestion as a new revision, if the notes are still at its base."""
+    """Commit the reviewed candidate if its base still matches or only metadata checks followed."""
     find_run(settings, course, run)
     return await worker.apply_suggestion(
         SuggestionActionRequest(

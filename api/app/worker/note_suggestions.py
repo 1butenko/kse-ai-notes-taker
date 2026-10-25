@@ -9,20 +9,16 @@ under short run-lock sections (never across model calls) and failed on restart.
 """
 
 import asyncio
-import hashlib
-import json
 from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
 
 from app.note_structure import evidence_gaps, structure_gaps
+from app.note_verification_identity import draft_of, fingerprint, verification_inputs
 from app.notes import (
     BlockKind,
-    CoursePlan,
     NoteBlock,
     NotesDocument,
-    PlannedSection,
-    PlannedTopic,
     TopicNote,
     Verification,
 )
@@ -47,6 +43,8 @@ from app.notes_suggestions import (
     SuggestionRecord,
     SuggestionRequest,
     VerificationJob,
+    compatibility_digest,
+    compatible_revision,
     new_id,
     read_suggestion,
     read_verification_job,
@@ -62,10 +60,7 @@ from app.worker.openrouter import Opener, OpenRouterClient
 from app.worker.references import validate_references
 from app.worker.revisions import guarded, render_revision
 from app.worker.topics import (
-    DraftBlock,
-    TopicDraft,
     context_text,
-    draft_text,
     evidence_text,
     is_clean,
     registry_text,
@@ -134,82 +129,6 @@ def blocks_text(topic: TopicNote, scope: list[str]) -> str:
         f"{block.content}"
         for block in topic.blocks
     )
-
-
-# The verifier works on a plan; a saved document carries what it needs of one.
-
-
-def verification_inputs(
-    directory: Path, document: NotesDocument, note: TopicNote
-) -> tuple[CoursePlan, PlannedSection, PlannedTopic]:
-    try:
-        stored_plan = CoursePlan.model_validate_json((directory / "plan.json").read_text())
-    except (OSError, ValueError):
-        stored_plan = None
-    originals = {t.id: t for _, t in stored_plan.topics()} if stored_plan else {}
-
-    def planned(item: TopicNote) -> PlannedTopic:
-        found = originals.get(item.topic_id)
-        base = found or PlannedTopic(
-            id=item.topic_id,
-            title=item.title,
-            sessions=[],
-            objectives=[],
-            success_criteria=[],
-            prerequisites=[],
-            sources=[],
-            key_terms=[],
-        )
-        return base.model_copy(update={"title": item.title, "objectives": list(item.objectives)})
-
-    sections = [
-        PlannedSection(title=section.title, topics=[planned(t) for t in section.topics])
-        for section in document.sections
-    ]
-    plan = CoursePlan(
-        title=document.title,
-        sections=sections,
-        notation=document.notation,
-        terminology=document.terminology,
-        conventions=stored_plan.conventions if stored_plan else [],
-    )
-    section, topic = next((s, t) for s, t in plan.topics() if t.id == note.topic_id)
-    return plan, section, topic
-
-
-def draft_of(note: TopicNote) -> TopicDraft:
-    index = {item.chunk_id: i for i, item in enumerate(note.evidence)}
-    return TopicDraft(
-        blocks=[
-            DraftBlock(
-                kind=block.kind,
-                title=block.title,
-                content=block.content,
-                citations=[index[c] for c in block.citations if c in index],
-            )
-            for block in note.blocks
-        ]
-    )
-
-
-def fingerprint(directory: Path, document: NotesDocument, note: TopicNote) -> str:
-    """Identity of exactly what a check saw: the ordered blocks, their citations, the
-    evidence and the registry and context the verifier is given."""
-    plan, section, topic = verification_inputs(directory, document, note)
-    material = {
-        "topic": note.topic_id,
-        "blocks": [block.model_dump() for block in note.blocks],
-        "evidence": [item.model_dump() for item in note.evidence],
-        "shown": [
-            topic_text(section, topic),
-            context_text(plan, topic),
-            registry_text(plan),
-            evidence_text(note.evidence),
-            draft_text(draft_of(note)),
-        ],
-    }
-    text = json.dumps(material, ensure_ascii=False, sort_keys=True)
-    return hashlib.sha256(text.encode()).hexdigest()
 
 
 async def verify_topic(
@@ -458,10 +377,12 @@ async def run_suggestion(
             )
             candidate = note.model_copy(update={"blocks": blocks}, deep=True)
             digest = fingerprint(directory, view.document, candidate)
+            context_digest = compatibility_digest(directory, view.document)
 
             def assembled(record: SuggestionRecord) -> None:
                 record.replacements, record.insertions = replacements, insertions
                 record.proposed_blocks, record.fingerprint = blocks, digest
+                record.compatibility_digest = context_digest
 
             # The exact candidate, with its assigned IDs, is kept before it is checked.
             kept = await asyncio.to_thread(
@@ -527,7 +448,7 @@ def apply_suggestion(
         if record.status != "ready":
             raise RevisionConflict(f"This suggestion is {record.status} and cannot be applied")
         head = store.head_revision()
-        if not base_revision == record.base_revision == head:
+        if base_revision != record.base_revision or not compatible_revision(store, record, head):
             raise RevisionConflict(
                 f"Revision changed; the suggestion is for revision {record.base_revision} "
                 f"and the notes are at revision {head}"
@@ -546,9 +467,10 @@ def apply_suggestion(
         target.blocks = blocks
         invalidate_verification(target)
         register_figures(directory, document, [target])
-        if record.verification is not None and record.fingerprint == fingerprint(
-            directory, document, target
-        ):
+        candidate_matches = record.fingerprint == fingerprint(directory, document, target)
+        if not candidate_matches:
+            raise RevisionConflict("The checked candidate or its context changed")
+        if record.verification is not None and candidate_matches:
             certify(target, record.verification)
         view = store.commit(current, document, "ai", [record.topic_id], suggestion=record.id)
         record.status, record.applied_revision = "applied", view.info.revision

@@ -507,6 +507,9 @@ export type NoteSuggestion = {
   /** Standing evidence gaps that keep the topic from being verified by any check. */
   blocking: VerificationIssue[];
   applied_revision: number | null;
+  /** Read-time compatibility hint for the reported current revision; Apply rechecks under lock. */
+  current_revision: number | null;
+  compatible: boolean;
 };
 
 export type VerificationJob = {
@@ -585,7 +588,7 @@ export function getNotesSuggestion(
   return request(`${notesPath(course, run)}/suggestions/${encodeURIComponent(suggestion)}`);
 }
 
-/** Commits a reviewed suggestion; HTTP 409 means the notes moved past `baseRevision`. */
+/** Commits a reviewed suggestion; HTTP 409 means the candidate is no longer compatible. */
 export function applyNotesSuggestion(
   course: string,
   run: string,

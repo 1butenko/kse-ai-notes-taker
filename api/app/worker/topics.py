@@ -6,8 +6,15 @@ from typing import Literal
 from langfuse import get_client
 
 from app.note_structure import evidence_gap, structure_gaps
+from app.note_verification_identity import (
+    TopicDraft,
+    context_text,
+    draft_text,
+    evidence_text,
+    registry_text,
+    topic_text,
+)
 from app.notes import (
-    BlockKind,
     Chunk,
     CoursePlan,
     EvidenceItem,
@@ -60,19 +67,6 @@ course materials. Keep only candidates that help a writer meet the objectives, a
 Prefer excerpts from the topic's own sources; keep a complementary one from another reading
 when it adds a different explanation or example. gaps: objectives no candidate supports.
 """
-
-
-def topic_text(section: PlannedSection, topic: PlannedTopic) -> str:
-    lines = [
-        f"Section: {section.title}",
-        f"Topic {topic.id}: {topic.title}",
-        "Objectives:",
-        *[f"- {o}" for o in topic.objectives],
-        "Success criteria:",
-        *[f"- {c}" for c in topic.success_criteria],
-        f"Key terms: {', '.join(topic.key_terms)}",
-    ]
-    return "\n".join(lines)
 
 
 def page_of(chunk: Chunk) -> str | None:
@@ -143,17 +137,6 @@ async def select_evidence(
 # Synthesis.
 
 
-class DraftBlock(Strict):
-    kind: BlockKind
-    title: str | None
-    content: str
-    citations: list[int]
-
-
-class TopicDraft(Strict):
-    blocks: list[DraftBlock]
-
-
 WRITER_PROMPT = """\
 You write one topic of a university course's lecture notes from the selected evidence.
 
@@ -174,43 +157,6 @@ Combine the readings into one clear explanation; do not summarise them one by on
 When you get a previous draft and reviewer issues, return the full revised draft: fix every
 issue, keep what was correct and keep its citations.
 """
-
-
-def registry_text(plan: CoursePlan) -> str:
-    lines = ["Notation:"]
-    lines += [f"- {n.symbol}: {n.meaning}" for n in plan.notation] or ["(none)"]
-    lines += ["Terminology:"]
-    lines += [f"- {t.term}: {t.definition}" for t in plan.terminology] or ["(none)"]
-    lines += ["Conventions:"]
-    lines += [f"- {c}" for c in plan.conventions] or ["(none)"]
-    return "\n".join(lines)
-
-
-def context_text(plan: CoursePlan, topic: PlannedTopic) -> str:
-    order = [t for _, t in plan.topics()]
-    position = next(i for i, t in enumerate(order) if t.id == topic.id)
-    before = ", ".join(f"{t.id} {t.title}" for t in order[:position]) or "(none)"
-    after = ", ".join(f"{t.id} {t.title}" for t in order[position + 1 :]) or "(none)"
-    prerequisites = ", ".join(topic.prerequisites) or "(none)"
-    return (
-        f"Prerequisites: {prerequisites}\nTopics before this one: {before}\n"
-        f"Topics after this one (do not cover them): {after}"
-    )
-
-
-def evidence_text(evidence: list[EvidenceItem]) -> str:
-    return "\n\n".join(
-        f"E{i} [{e.role}] ({e.title}, {e.page or 'no page'}):\n{e.text}"
-        for i, e in enumerate(evidence)
-    )
-
-
-def draft_text(draft: TopicDraft) -> str:
-    return "\n\n".join(
-        f"B{i} [{b.kind}] {b.title or ''} (cites {', '.join(f'E{c}' for c in b.citations)}):\n"
-        f"{b.content}"
-        for i, b in enumerate(draft.blocks)
-    )
 
 
 async def synthesize(

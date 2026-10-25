@@ -44,6 +44,7 @@ function usePolled<T extends { id: string }>(
   read: (id: string) => Promise<T>,
   done: (value: T) => boolean,
   onSettled: (value: T) => void,
+  refreshKey?: number,
 ) {
   const [value, setValue] = useState<T | null>(null);
   useEffect(() => {
@@ -71,7 +72,7 @@ function usePolled<T extends { id: string }>(
     };
     // The callbacks are stable by construction in the caller.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, refreshKey]);
   // A previous record never shows under a new id while the first answer is on its way.
   return id && value?.id === id ? value : null;
 }
@@ -126,7 +127,7 @@ type ReviewProps = {
 
 /** A prepared suggestion with its text, source and verification differences. */
 export function SuggestionReview({ suggestion, topic, revision, busy, onApply, onReject }: ReviewProps) {
-  const outdated = suggestion.base_revision !== revision;
+  const outdated = suggestion.current_revision !== revision || !suggestion.compatible;
   const change = diffTopic(topic, { ...topic, blocks: suggestion.proposed_blocks });
   const check = suggestion.verification;
   return (
@@ -147,8 +148,8 @@ export function SuggestionReview({ suggestion, topic, revision, busy, onApply, o
           <CircleAlertIcon className="text-warning" />
           <AlertTitle>The notes changed after this suggestion</AlertTitle>
           <AlertDescription>
-            The suggestion is for revision {suggestion.base_revision}, but the notes are now at
-            revision {revision}. It can&apos;t be applied; reject it and ask again.
+            The suggestion is for revision {suggestion.base_revision}, but it cannot be applied
+            to revision {revision}. Reject it and ask again.
           </AlertDescription>
         </Alert>
       )}
@@ -218,6 +219,7 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
     readSuggestion,
     (value) => !["queued", "running"].includes(value.status),
     () => {},
+    revision,
   );
   const settledJob = useCallback(
     (job: VerificationJob) => {

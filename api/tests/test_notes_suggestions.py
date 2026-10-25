@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.note_structure import evidence_gap, topic_structure_issues
-from app.notes import NoteBlock, NotesRun
+from app.notes import NotationEntry, NoteBlock, NotesRun
 from app.notes_revisions import (
     InvalidEdit,
     RevisionConflict,
@@ -271,6 +271,140 @@ def test_apply_stale_suggestion_returns_409(saved_run, client, model):
     assert suggest(client, base=1).status_code == 202
 
 
+def test_ready_suggestion_survives_only_unchanged_verification_chain(clean_run, client, model):
+    directory, _ = clean_run
+    model.suggestion = {"replacements": [replace("T1.1", "Simpler.")], "insertions": []}
+    proposal = made(client)
+    assert proposal["status"] == "ready"
+    before_apply_calls = list(model.calls)
+
+    for base in (0, 1):
+        started = client.post(url("/topics/T1/verify"), json={"base_revision": base})
+        assert started.status_code == 202, started.text
+        job = client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+        assert job["revision"] == base + 1
+        shown = client.get(url(f"/suggestions/{proposal['id']}")).json()
+        assert shown["base_revision"] == 0
+        assert shown["current_revision"] == base + 1
+        assert shown["compatible"] is True
+
+    after_verify_calls = list(model.calls)
+    assert after_verify_calls == before_apply_calls + ["topic_verification"] * 2
+    forged = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 2})
+    assert forged.status_code == 409
+    applied = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0})
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["revision"]["parent"] == 2
+    assert applied.json()["revision"]["origin"] == "ai"
+    assert model.calls == after_verify_calls
+    again = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0})
+    assert again.status_code == 200
+    assert again.json()["revision"]["revision"] == applied.json()["revision"]["revision"]
+    assert RevisionStore(directory).head_revision() == 3
+    assert model.calls == after_verify_calls
+
+
+@pytest.mark.parametrize("change", ["blocks", "evidence", "sources", "notation", "language"])
+def test_verification_origin_with_substantive_change_cannot_rebase(
+    clean_run, client, model, change
+):
+    directory, _ = clean_run
+    model.suggestion = {"replacements": [replace("T1.1", "Simpler.")], "insertions": []}
+    proposal = made(client)
+    store = RevisionStore(directory)
+    with store.locked():
+        current = store.current()
+        document = current.document.model_copy(deep=True)
+        if change == "blocks":
+            document.sections[0].topics[0].blocks[0].content += " Changed."
+        elif change == "evidence":
+            document.sections[0].topics[0].evidence[0].text += " Changed."
+        elif change == "sources":
+            document.sources[0].title += " Changed"
+        elif change == "notation":
+            document.notation.append(NotationEntry(symbol="x", meaning="changed"))
+        else:
+            document.language = "en" if document.language != "en" else "uk"
+        store.commit(current, document, "verification", ["T1"], verification_job=new_id())
+    shown = client.get(url(f"/suggestions/{proposal['id']}")).json()
+    assert shown["compatible"] is False
+    refused = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0})
+    assert refused.status_code == 409
+    assert store.head_revision() == 1
+
+
+def test_restored_identical_bytes_still_stale(clean_run, client, model):
+    directory, _ = clean_run
+    model.suggestion = {"replacements": [replace("T1.1", "Simpler.")], "insertions": []}
+    proposal = made(client)
+    store = RevisionStore(directory)
+    with store.locked():
+        current = store.current()
+        document = current.document.model_copy(deep=True)
+        document.sections[0].topics[0].blocks[0].content += " Changed."
+        edited = store.commit(current, document, "manual", ["T1"])
+        store.commit(edited, current.document, "restore", ["T1"], restored_from=0)
+    assert client.get(url(f"/suggestions/{proposal['id']}")).json()["compatible"] is False
+    assert (
+        client.post(
+            url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0}
+        ).status_code
+        == 409
+    )
+
+
+@pytest.mark.parametrize("change", ["plan", "fingerprint", "scope", "legacy"])
+def test_verification_chain_requires_original_context_and_candidate_identity(
+    clean_run, client, model, change
+):
+    directory, _ = clean_run
+    model.suggestion = {"replacements": [replace("T1.1", "Simpler.")], "insertions": []}
+    proposal = made(client)
+    started = client.post(url("/topics/T1/verify"), json={"base_revision": 0})
+    assert started.status_code == 202
+    assert RevisionStore(directory).head_revision() == 1
+    if change == "plan":
+        (directory / "plan.json").write_text('{"changed":"verifier context"}')
+    else:
+        record = read_suggestion(directory, proposal["id"])
+        if change == "fingerprint":
+            record.fingerprint = "0" * 64
+        elif change == "scope":
+            record.replacements[0].content = "Forged replacement."
+        else:
+            record.compatibility_digest = None
+        write_suggestion(directory, record)
+    shown = client.get(url(f"/suggestions/{proposal['id']}")).json()
+    if change == "legacy":
+        assert shown["compatible"] is True
+        applied = client.post(
+            url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0}
+        )
+        assert applied.status_code == 200, applied.text
+        assert applied.json()["revision"]["parent"] == 1
+        assert RevisionStore(directory).head_revision() == 2
+    else:
+        assert shown["compatible"] is (change == "scope")
+        refused = client.post(
+            url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0}
+        )
+        assert refused.status_code == 409
+        assert RevisionStore(directory).head_revision() == 1
+
+
+def test_malformed_baseline_never_grants_verification_chain_compatibility(clean_run, client, model):
+    directory, _ = clean_run
+    model.suggestion = {"replacements": [replace("T1.1", "Simpler.")], "insertions": []}
+    proposal = made(client)
+    assert client.post(url("/topics/T1/verify"), json={"base_revision": 0}).status_code == 202
+    (directory / "revisions" / "000000" / "document.json").write_text("{broken")
+    shown = client.get(url(f"/suggestions/{proposal['id']}")).json()
+    assert shown["current_revision"] == 1 and shown["compatible"] is False
+    refused = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0})
+    assert refused.status_code == 409
+    assert RevisionStore(directory).head_revision() == 1
+
+
 # Scope and evidence.
 
 
@@ -510,15 +644,18 @@ def test_apply_certifies_only_the_checked_text(clean_run, client, model):
     assert read_suggestion(directory, proposal["id"]).status == "applied"
     assert client.get(url(f"/suggestions/{proposal['id']}")).json()["applied_revision"] == 1
 
-    # Same candidate, but the verified fingerprint no longer matches (evidence changed).
+    # Same candidate, but its stored checked fingerprint no longer matches.
     model.suggestion = {"replacements": [replace("T1.1", "Simplest.")], "insertions": []}
     second = made(client, base=1)
     record = read_suggestion(directory, second["id"])
     record.fingerprint = "0" * 64
     write_suggestion(directory, record)
-    client.post(url(f"/suggestions/{second['id']}/apply"), json={"base_revision": 1})
-    note = topic_of(directory)
-    assert (note.status, note.verification_stale, note.verifier) == ("unresolved", True, None)
+    assert client.get(url(f"/suggestions/{second['id']}")).json()["compatible"] is False
+    before = RevisionStore(directory).current()
+    refused = client.post(url(f"/suggestions/{second['id']}/apply"), json={"base_revision": 1})
+    assert refused.status_code == 409
+    assert RevisionStore(directory).current() == before
+    assert read_suggestion(directory, second["id"]).status == "ready"
 
 
 def test_a_selector_gap_keeps_the_public_flag_unverified_and_visible(saved_run, client, model):
