@@ -413,7 +413,7 @@ export type NotesDocument = {
   models: Record<string, string>;
 };
 
-export type RenderFormat = "html" | "pdf" | "docx";
+export type RenderFormat = "html" | "pdf" | "docx" | "book";
 
 export type RenderedArtifact = {
   format: RenderFormat;
@@ -686,6 +686,10 @@ export function revisionArtifactUrl(
 ): string {
   const scope = topic ? `/topics/${encodeURIComponent(topic)}` : "";
   return `${PUBLIC_API_URL}${notesPath(course, run)}/revisions/${revision}${scope}/artifacts/${kind}`;
+}
+
+export function revisionBookUrl(course: string, run: string, revision: number): string {
+  return `${PUBLIC_API_URL}${notesPath(course, run)}/revisions/${revision}/book/`;
 }
 
 export function notesFileUrl(course: string, run: string, kind: RenderFormat | "qmd"): string {

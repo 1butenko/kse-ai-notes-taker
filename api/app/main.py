@@ -27,6 +27,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def published_book_cors(request, call_next):
+    """Normalize final wire headers only for successfully served book assets."""
+    response = await call_next(request)
+    if (
+        request.method == "GET"
+        and response.status_code == 200
+        and response.headers.get("x-book-published") == "1"
+    ):
+        del response.headers["x-book-published"]
+        response.headers["access-control-allow-origin"] = "*"
+        if "access-control-allow-credentials" in response.headers:
+            del response.headers["access-control-allow-credentials"]
+        if "vary" in response.headers:
+            values = [item.strip() for item in response.headers["vary"].split(",")]
+            values = [item for item in values if item.lower() != "origin"]
+            if values:
+                response.headers["vary"] = ", ".join(values)
+            else:
+                del response.headers["vary"]
+    return response
+
+
 app.include_router(courses.router)
 app.include_router(uploads.router)
 app.include_router(syllabus.router)

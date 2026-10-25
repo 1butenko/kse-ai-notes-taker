@@ -96,6 +96,7 @@ LABELS = {
         "sources": "Sources",
         "contents": "Table of contents",
         "unverified": "Not fully verified",
+        "unverified_status": "This topic has not passed verification for this revision.",
         "no_evidence": "No supporting material was found for this topic.",
         "notation": "Notation",
         "generated": "Generated",
@@ -116,6 +117,7 @@ LABELS = {
         "sources": "Джерела",
         "contents": "Зміст",
         "unverified": "Не повністю перевірено",
+        "unverified_status": "Цю ревізію теми ще не підтверджено перевіркою.",
         "no_evidence": "Для цієї теми не знайдено матеріалів.",
         "notation": "Позначення",
         "generated": "Згенеровано",
@@ -131,6 +133,27 @@ def labels(language: str | None) -> dict[str, str]:
 
 def yaml(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def quarto_language_lines(language: str | None) -> list[str]:
+    """Shared standalone/book Quarto labels; uk needs explicit crossref overrides."""
+    created_label = "Створено" if language == "uk" else "Created"
+    return [
+        f"toc-title: {yaml('Зміст' if language == 'uk' else 'Table of contents')}",
+        "language:",
+        f"  title-block-published: {yaml(created_label)}",
+        f"  section-title-references: {yaml(labels(language)['references'])}",
+        *(
+            [
+                '  crossref-fig-title: "Рисунок"',
+                '  crossref-tbl-title: "Таблиця"',
+                '  crossref-sec-prefix: "Розділ"',
+                '  crossref-eq-prefix: "Рівняння"',
+            ]
+            if language == "uk"
+            else []
+        ),
+    ]
 
 
 def block_markdown(
@@ -174,7 +197,6 @@ def front_matter(
 ) -> str:
     if target not in ("html", "pdf", "docx"):
         raise ValueError(f"Unsupported render format: {target}")
-    created_label = "Створено" if language == "uk" else "Created"
     options = {
         "pdf": [
             "    papersize: a4",
@@ -204,20 +226,7 @@ def front_matter(
             *([f"subtitle: {yaml(subtitle)}"] if subtitle else []),
             f"date: {yaml(date[:10])}",
             f"lang: {yaml(language if language in ('uk', 'en') else 'en')}",
-            f"toc-title: {yaml('Зміст' if language == 'uk' else 'Table of contents')}",
-            "language:",
-            f"  title-block-published: {yaml(created_label)}",
-            f"  section-title-references: {yaml(labels(language)['references'])}",
-            *(
-                [
-                    '  crossref-fig-title: "Рисунок"',
-                    '  crossref-tbl-title: "Таблиця"',
-                    '  crossref-sec-prefix: "Розділ"',
-                    '  crossref-eq-prefix: "Рівняння"',
-                ]
-                if language == "uk"
-                else []
-            ),
+            *quarto_language_lines(language),
             "citeproc: true",
             "references: " + json.dumps(references or [], ensure_ascii=False),
             "execute:",
@@ -246,7 +255,11 @@ def topic_body(
     body = []
     if note.status != "verified" or note.verification_stale or note.open_issues:
         body.append(f"::: {{.callout-caution}}\n## {text['unverified']}\n")
-        body += [f"- {transform(i.detail)}" for i in note.open_issues] or ["-"]
+        body += (
+            [f"- {transform(i.detail)}" for i in note.open_issues]
+            if note.open_issues
+            else [text["unverified_status"]]
+        )
         body.append(":::\n")
     if note.status == "no_evidence":
         body.append(f"*{text['no_evidence']}*\n")

@@ -98,7 +98,7 @@ export function mockRequests(): { schema?: string; model?: string; topic?: strin
 function files(directory: string, match: (name: string) => boolean): string[] {
   if (!fs.existsSync(directory)) return [];
   return fs.readdirSync(directory, { recursive: true, encoding: "utf8" })
-    .filter((name) => match(path.basename(name)))
+    .filter((name) => match(path.basename(name)) && fs.statSync(path.join(directory, name)).isFile())
     .map((name) => path.join(directory, name));
 }
 
@@ -109,7 +109,7 @@ export async function attachDiagnostics(testInfo: TestInfo): Promise<void> {
     await testInfo.attach(`logs/${path.basename(file)}`, { path: file, contentType: "text/plain" });
   }
   const notes = path.join(stack.uploads, COURSE, "notes");
-  for (const file of files(notes, (name) => name === "run.json" || name === "artifacts.json" || name.startsWith("quarto-"))) {
+  for (const file of files(notes, (name) => name === "run.json" || name === "artifacts.json" || /^quarto-(html|pdf|docx|book)\.log$/.test(name))) {
     await testInfo.attach(`runs/${path.relative(notes, file)}`, { path: file, contentType: "text/plain" });
   }
 }

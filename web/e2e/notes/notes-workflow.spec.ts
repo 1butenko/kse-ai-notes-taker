@@ -16,11 +16,7 @@ import {
   type RunView,
 } from "./support";
 
-// Task 12 (P3.3) workflow scenarios. Scenarios whose interfaces have not landed yet are
-// `fixme` (skipped), never passing; see e2e/notes/README.md for their expectations.
-
-const dependsOn = (...tasks: string[]) =>
-  tasks.map((description) => ({ type: "depends-on", description }));
+// Notes editing workflow and the revision-scoped course book against real Quarto.
 
 test.describe.configure({ mode: "serial" });
 test.afterEach(async ({}, testInfo) => attachDiagnostics(testInfo));
@@ -854,10 +850,176 @@ test("History prepares and downloads the exact selected Word revision", async ({
   expect(mockRequests().length, "historical Word export makes no model calls").toBe(calls);
 });
 
-test.fixme(
-  "Course book search from one revision",
-  {
-    annotation: dependsOn("Task 11 / P3.2: book render job, GET .../revisions/{revision}/book/{asset_path}"),
-  },
-  async () => {},
-);
+test("Course book search from one revision", async ({ page, request }, testInfo) => {
+  const run = await generated(request);
+  const before = await head(request, run);
+  if (before.render) await waitForRender(request, run, before.render.id);
+  const h = before.current_revision;
+  const calls = mockRequests().length;
+  const oldBook = await request.post(notesUrl(run, `/revisions/${h}/render`), { data: { formats: ["book"] } });
+  expect(oldBook.status(), await oldBook.text()).toBe(202);
+  expect((await waitForRender(request, run, (await oldBook.json()).id)).status).toBe("done");
+
+  // A later HEAD must not alter a requested historical book snapshot.
+  const blocks = structuredClone(topic(before.document, "T2").blocks);
+  blocks[0].content += "\n\nПерехід [до першої теми](#T1). Книжковий маркер ревізії.";
+  const saved = await request.patch(notesUrl(run, "/topics/T2"), {
+    data: { base_revision: h, blocks },
+  });
+  expect(saved.status(), await saved.text()).toBe(200);
+  await waitForRender(request, run, (await saved.json()).render.id);
+  const base = notesUrl(run, `/revisions/${h}/book/`);
+  const current = notesUrl(run, `/revisions/${h + 1}/book/`);
+  const historical = await request.get(base + "T2.html");
+  expect(historical.status()).toBe(200);
+  expect(await historical.text()).not.toContain("Книжковий маркер ревізії");
+  expect((await request.get(current)).status()).toBe(404);
+
+  await page.goto(`/preview/${COURSE}/${run}`);
+  await expect(page.getByText(`Older course book · revision ${h}`)).toBeVisible();
+  expect(page.locator('iframe[title="Course book"]')).toHaveCount(0);
+
+  const disabled = path.join(path.dirname(stack.uploads), "quarto-disabled");
+  fs.writeFileSync(disabled, "disabled");
+  try {
+    await page.getByRole("button", { name: "Prepare course book" }).click();
+    await expect(page.getByText(`Could not prepare course book for revision ${h + 1}`)).toBeVisible({ timeout: 60_000 });
+    expect((await request.get(current)).status()).toBe(404);
+    expect((await request.get(base)).status()).toBe(200);
+  } finally {
+    fs.rmSync(disabled, { force: true });
+  }
+  await page.getByRole("button", { name: "Retry course book" }).click();
+  await expect(page.getByText(`Preparing course book for revision ${h + 1}.`)).toBeVisible();
+  await expect(page.getByRole("link", { name: new RegExp(`Open course book.*${h + 1}`) })).toBeVisible({ timeout: 180_000 });
+  expect(await (await request.get(current + "T2.html")).text()).toContain("Книжковий маркер ревізії");
+  expect((await head(request, run)).current_revision).toBe(h + 1);
+  expect(mockRequests().length, "book render must not call a model").toBe(calls);
+
+  const readyPath = ((await (await request.get(notesUrl(run))).json()) as RunView)
+    .artifacts.find((a) => a.format === "book" && a.revision === h + 1)?.path;
+  expect(readyPath).toBeTruthy();
+  const privateCanary = "PRIVATE_BOOK_CANARY_NOT_APPROVED";
+  const bookFolder = path.join(stack.uploads, COURSE, "notes", run,
+    "revisions", String(h + 1).padStart(6, "0"), "artifacts", readyPath!);
+  fs.writeFileSync(path.join(bookFolder, "private-canary.html"), privateCanary);
+  fs.writeFileSync(path.join(stack.uploads, COURSE, "notes", run, "private-source.html"), privateCanary);
+  fs.writeFileSync(disabled, "disabled");
+  try {
+    const retry = await request.post(notesUrl(run, `/revisions/${h + 1}/render`), { data: { formats: ["book"] } });
+    expect(retry.status()).toBe(202);
+    expect((await waitForRender(request, run, (await retry.json()).id)).status).toBe("failed");
+    expect((await request.get(current)).status()).toBe(200);
+    const after = (await (await request.get(notesUrl(run))).json()) as RunView;
+    expect(after.artifacts.find((a) => a.format === "book" && a.revision === h + 1)?.path).toBe(readyPath);
+  } finally {
+    fs.rmSync(disabled, { force: true });
+  }
+
+  const search = await request.get(current + "search.json", { headers: { Origin: "null" } });
+  expect(search.status()).toBe(200);
+  expect(search.headers()["access-control-allow-origin"]).toBe("*");
+  expect(search.headers()["access-control-allow-credentials"]).toBeUndefined();
+  const corpus = await search.text();
+  expect(corpus).toContain("T1.html");
+  expect(corpus).toContain("T2.html");
+  expect(corpus).not.toContain("local/reading/");
+  expect(corpus).not.toContain("openrouter.jsonl");
+  expect(corpus).not.toContain(privateCanary);
+  for (const rejected of ["../notes.json", "publication.json", "T1.qmd", "private-canary.html"]) {
+    const response = await request.get(current + rejected, { headers: { Origin: "null" } });
+    expect(response.status(), rejected).toBe(404);
+    expect(response.headers()["access-control-allow-origin"]).not.toBe("*");
+  }
+  expect((await request.get(notesUrl(run, `/revisions/${h + 1}/artifacts/book`))).status()).toBe(404);
+
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("requestfailed", (request) => errors.push(`${request.url()}: ${request.failure()?.errorText}`));
+  await page.getByRole("button", { name: "Course book", exact: true }).click();
+  const iframe = page.locator('iframe[title="Course book"]');
+  await expect(iframe).toHaveAttribute("sandbox", "allow-scripts");
+  await expect(iframe).toHaveAttribute("src", current);
+  const frame = page.frameLocator('iframe[title="Course book"]');
+  await frame.locator(".quarto-search-button").click();
+  await frame.locator(".aa-Input").fill("Власний вектор");
+  await expect(frame.locator(".aa-Panel a").first()).toBeVisible();
+  const result = await frame.locator(".aa-Panel a").first().getAttribute("href");
+  expect(new URL(result!, current).href).toContain(`${current}T2.html`);
+  await testInfo.attach("course-book-search", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  await frame.locator(".aa-Panel a").first().click();
+  await expect(iframe).toHaveAttribute("src", current); // iframe element retains its entry URL
+  await expect(frame.getByText("Книжковий маркер ревізії")).toBeVisible();
+  await expect(frame.getByText("Цю ревізію теми ще не підтверджено перевіркою.")).toBeVisible();
+  await expect(frame.locator(".callout-caution li:empty")).toHaveCount(0);
+  const formula = frame.locator("p").filter({ hasText: "direction under" }).locator("mjx-container");
+  await expect(formula).toBeVisible();
+  const glyph = await formula.evaluate(async (element) => {
+    await document.fonts.ready;
+    const mathjax = (window as unknown as { MathJax?: { startup?: { promise?: Promise<unknown> } } }).MathJax;
+    await mathjax?.startup?.promise;
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    return getComputedStyle(element.querySelector("mjx-c")!, "::before").content;
+  });
+  expect(glyph).toBe('"A"');
+  await testInfo.attach("course-book-chapter", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  const inner = page.frames().find((f) => f !== page.mainFrame())!;
+  expect(inner.url()).toContain(`${current}T2.html`);
+  await frame.getByRole("link", { name: "Topic T1" }).click();
+  await expect.poll(() => inner.url()).toContain(`${current}T1.html#sec-T1`);
+  await frame.locator('.nav-page-next a').click();
+  await expect.poll(() => inner.url()).toContain(`${current}T2.html`);
+  await frame.getByRole("link", { name: "до першої теми" }).click();
+  await expect.poll(() => inner.url()).toContain(`${current}T1.html#sec-T1`);
+  await frame.locator('.nav-page-next a').click();
+  const equationLink = frame.locator('a.quarto-xref[href$="T1.html#eq-t1-sarrus"]');
+  await expect(equationLink).toContainText(/Рівняння\s*2\./);
+  expect(new URL((await equationLink.getAttribute("href"))!, inner.url()).href)
+    .toBe(`${current}T1.html#eq-t1-sarrus`);
+  await equationLink.click();
+  await expect.poll(() => inner.url()).toContain(`${current}T1.html#eq-t1-sarrus`);
+  await frame.locator('a[role="doc-biblioref"]').first().click();
+  await expect.poll(() => inner.url()).toContain(`${current}references.html#ref-src-`);
+  await frame.locator('.nav-page-previous a').click();
+  await expect.poll(() => inner.url()).toContain(`${current}T2.html`);
+  await frame.locator('.nav-page-previous a').click();
+  await expect.poll(() => inner.url()).toContain(`${current}T1.html`);
+  await frame.locator('.nav-page-previous a').click();
+  await expect.poll(() => new URL(inner.url()).pathname).toMatch(/\/book\/(?:index\.html)?$/);
+  await expect(frame.locator("h1").first()).toBeVisible();
+  await testInfo.attach("course-book", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+  expect(errors).toEqual([]);
+  await page.evaluate(() => localStorage.setItem("book-parent-canary", "PARENT_ONLY"));
+  const isolated = await inner.evaluate(() => {
+    const denied = (read: () => unknown) => {
+      try { read(); return "allowed"; } catch (error) { return (error as Error).name; }
+    };
+    return {
+      parentDom: denied(() => window.parent.document.body),
+      parentStorage: denied(() => window.parent.localStorage.getItem("book-parent-canary")),
+      cookie: denied(() => document.cookie),
+      localCanary: localStorage.getItem("book-parent-canary"),
+    };
+  });
+  expect(isolated).toEqual({
+    parentDom: "SecurityError", parentStorage: "SecurityError",
+    cookie: "SecurityError", localCanary: null,
+  });
+  expect(await page.evaluate(() => localStorage.getItem("book-parent-canary"))).toBe("PARENT_ONLY");
+  const direct = await page.context().newPage();
+  await direct.goto(current);
+  expect(await direct.evaluate(() => { try { return document.cookie; } catch (error) { return (error as Error).name; } })).toBe("SecurityError");
+  await direct.close();
+
+  // Serve a parent on the API origin too: the child remains opaque even there.
+  const sameOrigin = await page.context().newPage();
+  await sameOrigin.goto(`${stack.api}/health`);
+  await sameOrigin.setContent(`<iframe id="same-origin-book" sandbox="allow-scripts" src="${current}"></iframe>`);
+  const sameFrame = sameOrigin.frameLocator("#same-origin-book");
+  await expect(sameFrame.locator("h1").first()).toBeVisible();
+  const denied = await sameOrigin.frames().find((f) => f !== sameOrigin.mainFrame())!.evaluate(() => {
+    try { return window.parent.document.body.innerText; } catch (error) { return (error as Error).name; }
+  });
+  expect(denied).toBe("SecurityError");
+  await sameOrigin.close();
+});

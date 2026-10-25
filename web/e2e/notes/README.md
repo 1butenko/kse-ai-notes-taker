@@ -170,18 +170,17 @@ HTML/PDF without calling the mock LLM.
     the newer revision shows Retry only there, then publishes the newer Word file. Revision 0
     can also be selected and prepared. HEAD and the mock model-call count stay unchanged.
 
-## Planned scenarios (`notes-workflow.spec.ts`, currently `fixme`)
+11. **Course book.** A real Quarto book is rendered for an older revision after HEAD advances;
+    the older search corpus stays unchanged. The preview labels that book as old. A disabled
+    Quarto run fails without deleting it, then Retry publishes the current book. The browser
+    opens its sandboxed frame, searches for a Ukrainian term, follows the result, topic,
+    equation, source and previous/next links in the same revision. HTTP checks cover the
+    published search file, blocked source/unlisted files and final CORS headers. A direct open
+    and a same-origin API parent still cannot read cookies or parent DOM/storage.
 
-These follow the Task 12 plan. Each one is skipped until its interfaces land; check the
-landed contracts again before writing the bodies.
-
-1. **Course book.** Depends on Task 11 (book job and `.../revisions/{revision}/book/...`).
-   Render the book → open it → search for a term from T2 → the result opens the right chapter
-   of the same revision. Private textbooks and intermediate AI files do not appear in the
-   search.
-
-Visual QA stays manual, per the Task 12 brief: HTML at 390 px and on desktop, every page of
-the control PDF, DOCX through the office QA compose (contents list, equation numbers, callout titles), and the book with search.
+Remaining Task 12 visual QA stays manual: HTML at 390 px and on desktop, every page of
+the control PDF, and DOCX through the office QA compose (contents list, equation numbers,
+callout titles). The book browser test attaches search and chapter screenshots.
 
 ## Maintaining
 

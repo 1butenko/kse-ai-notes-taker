@@ -198,7 +198,7 @@ class TopicNote(BaseModel):
 
 # The finished document.
 
-RenderFormat = Literal["html", "pdf", "docx"]
+RenderFormat = Literal["html", "pdf", "docx", "book"]
 
 
 class RenderedArtifact(BaseModel):

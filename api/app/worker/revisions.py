@@ -34,6 +34,7 @@ from app.notes_revisions import (
     run_lock,
 )
 from app.worker.config import WorkerSettings
+from app.worker.course_book import build_book_project, render_book
 from app.worker.quarto import render_document
 from app.worker.references import revision_context
 from app.worker.render import to_quarto, topic_to_quarto
@@ -152,7 +153,7 @@ async def render_job(directory: Path, job: RenderJob, settings: WorkerSettings) 
                 destination = output / prefix
                 destination.mkdir(parents=True, exist_ok=True)
                 sources, resources = {}, {}
-                for kind in job.formats:
+                for kind in (item for item in job.formats if item != "book"):
                     try:
                         source = (
                             topic_to_quarto(
@@ -189,6 +190,30 @@ async def render_job(directory: Path, job: RenderJob, settings: WorkerSettings) 
                             f"{artifact.error}"
                         )
 
+            async def book():
+                if "book" not in job.formats:
+                    return
+                try:
+                    project = output / "book-source"
+                    build_book_project(document, project, document.language)
+                    for qmd in project.glob("*.qmd"):
+                        for name, source in asset_resources(
+                            directory, document.assets, qmd.read_text()
+                        ).items():
+                            target = project / name
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copyfile(source, target)
+                    artifact = await render_book(
+                        project, job.revision, settings.quarto_bin, settings.quarto_concurrency
+                    )
+                    if artifact.status == "ready":
+                        artifact.path = f"{job.id}/{artifact.path}"
+                        ready.append(artifact)
+                    else:
+                        job.errors.append(f"Book: {artifact.error}")
+                except Exception as error:
+                    job.errors.append(f"Book: {error}")
+
             outcomes = await asyncio.gather(
                 one(),
                 *(
@@ -197,6 +222,7 @@ async def render_job(directory: Path, job: RenderJob, settings: WorkerSettings) 
                     for note in section.topics
                     if note.status in ("verified", "unresolved")
                 ),
+                book(),
                 return_exceptions=True,
             )
             job.errors.extend(str(error) for error in outcomes if isinstance(error, Exception))

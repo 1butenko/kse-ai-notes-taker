@@ -38,6 +38,7 @@ import {
   getRenderJob,
   renderNotesRevision,
   revisionArtifactUrl,
+  revisionBookUrl,
   previewPath,
   type NotesDocument,
   type NotesRunView,
@@ -67,6 +68,8 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
   const [retrying, setRetrying] = useState(false);
   const [chosenMode, setChosenMode] = useState<Mode | null>(null);
   const [preferredFormat, setPreferredFormat] = useState<"html" | "pdf">("html");
+  const [showBook, setShowBook] = useState(false);
+  const [bookStarting, setBookStarting] = useState(false);
   const { document, current_revision: textRevision, artifacts } = view;
   const withPdf = new Set(view.topic_pdfs);
   const section = document.sections.find((s) => s.topics.some((t) => t.topic_id === topicId));
@@ -89,9 +92,19 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
   const wordCurrent = wordFile?.revision === textRevision;
   const job = view.render;
   const wordJob = job?.formats.includes("docx") ? job : null;
-  const wordOnly = wordJob !== null && wordJob.formats.every((f) => f === "docx");
+  const documentJob = job?.formats.some((f) => f === "html" || f === "pdf") ? job : null;
   const wordPending = wordJob !== null && ["queued", "running"].includes(wordJob.status);
   const wordFailed = wordJob?.status === "failed" && !wordCurrent;
+  const bookFile = artifacts.find((a) => a.topic_id === null && a.format === "book" && a.status === "ready");
+  const bookCurrent = bookFile?.revision === textRevision;
+  const bookJob = job?.formats.includes("book") ? job : null;
+  const bookPending = bookJob !== null && ["queued", "running"].includes(bookJob.status);
+  const bookFailed = bookJob?.status === "failed" && !bookCurrent;
+  const openUrl = showBook && !note && bookFile
+    ? revisionBookUrl(course, run, bookFile.revision)
+    : url;
+  const openLabel = showBook && !note && bookFile ? "Course book" : format.toUpperCase();
+  const openRevision = showBook && !note && bookFile ? bookFile.revision : shownRevision;
   const [wordStarting, setWordStarting] = useState(false);
 
   const draft = useTopicDraft(course, run, note ? note.topic_id : null);
@@ -179,7 +192,8 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
   const retry = async () => {
     setRetrying(true);
     try {
-      await renderNotesRevision(course, run, job?.revision ?? textRevision, job?.formats);
+      await renderNotesRevision(course, run, documentJob?.revision ?? textRevision,
+        documentJob?.formats.filter((f) => f === "html" || f === "pdf") ?? ["html", "pdf"]);
       await refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not start rendering");
@@ -198,6 +212,18 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
       toast.error(error instanceof Error ? error.message : "Could not start preparing Word");
     } finally {
       setWordStarting(false);
+    }
+  };
+
+  const prepareBook = async () => {
+    setBookStarting(true);
+    try {
+      await renderNotesRevision(course, run, textRevision, ["book"]);
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not start the course book");
+    } finally {
+      setBookStarting(false);
     }
   };
 
@@ -250,9 +276,9 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
       </Empty>
     );
 
-  const artifactNote = url && (
+  const artifactNote = openUrl && (
     <span className="text-xs text-muted-foreground">
-      {revisionLine(format.toUpperCase(), shownRevision, textRevision)}
+      {revisionLine(openLabel, openRevision, textRevision)}
     </span>
   );
 
@@ -274,11 +300,11 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
             <LinkIcon />
             Copy link
           </Button>
-          {url && (
-            <a href={url} target="_blank" rel="noreferrer" className={buttonVariants()}>
+          {openUrl && (
+            <a href={openUrl} target="_blank" rel="noreferrer" className={buttonVariants()}>
               <ExternalLinkIcon />
-              Open {format.toUpperCase()}
-              <RevisionTag revision={shownRevision} text={textRevision} />
+              Open {openLabel}
+              <RevisionTag revision={openRevision} text={textRevision} />
             </a>
           )}
         </div>
@@ -368,24 +394,24 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
             </SelectContent>
           </Select>
 
-          {job && !wordOnly && ["queued", "running"].includes(job.status) && (
+          {documentJob && ["queued", "running"].includes(documentJob.status) && (
             <p role="status" className="text-sm text-muted-foreground">
-              Rendering revision {job.revision}. Saved text is safe; the preview keeps its labelled version.
+              Rendering revision {documentJob.revision}. Saved text is safe; the preview keeps its labelled version.
             </p>
           )}
-          {job?.status === "failed" && !wordOnly && (
+          {documentJob?.status === "failed" && (
             <Alert variant="destructive">
-              <AlertTitle>Could not render revision {job.revision}</AlertTitle>
+              <AlertTitle>Could not render revision {documentJob.revision}</AlertTitle>
               <AlertDescription>
                 <p>Your saved text and previous files are kept.</p>
-                {job.errors.map((error, index) => <p key={index}>{error}</p>)}
+                {documentJob.errors.map((error, index) => <p key={index}>{error}</p>)}
                 <Button size="sm" variant="outline" onClick={retry} disabled={retrying}>
                   {retrying ? "Starting…" : "Retry render"}
                 </Button>
               </AlertDescription>
             </Alert>
           )}
-          {(!job || wordOnly) && (!url || shownRevision < textRevision) && (
+          {!documentJob && (!url || shownRevision < textRevision) && (
             <Button size="sm" variant="outline" onClick={retry} disabled={retrying} className="self-start">
               Render revision {textRevision}
             </Button>
@@ -432,22 +458,28 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
                 <div role="group" aria-label="Preview format" className="flex gap-1">
                   <Button
                     size="sm"
-                    variant={format === "html" ? "default" : "outline"}
+                    variant={format === "html" && !showBook ? "default" : "outline"}
                     disabled={!html}
-                    aria-pressed={format === "html"}
-                    onClick={() => setPreferredFormat("html")}
+                    aria-pressed={format === "html" && !showBook}
+                    onClick={() => { setPreferredFormat("html"); setShowBook(false); }}
                   >
                     HTML
                   </Button>
                   <Button
                     size="sm"
-                    variant={format === "pdf" ? "default" : "outline"}
+                    variant={format === "pdf" && !showBook ? "default" : "outline"}
                     disabled={!hasPdf}
-                    aria-pressed={format === "pdf"}
-                    onClick={() => setPreferredFormat("pdf")}
+                    aria-pressed={format === "pdf" && !showBook}
+                    onClick={() => { setPreferredFormat("pdf"); setShowBook(false); }}
                   >
                     PDF · Print
                   </Button>
+                  {!note && bookFile && (
+                    <Button size="sm" variant={showBook ? "default" : "outline"}
+                      aria-pressed={showBook} onClick={() => setShowBook(true)}>
+                      Course book
+                    </Button>
+                  )}
                 </div>
                 {artifactNote}
                 <Separator orientation="vertical" className="hidden h-6 sm:block" />
@@ -493,6 +525,25 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
                   )}
                 </div>
               </div>
+              {!note && (
+                <div role="group" aria-label="Course book" className="flex flex-wrap items-center gap-2">
+                  {bookFile && (
+                    <a href={revisionBookUrl(course, run, bookFile.revision)} target="_blank" rel="noreferrer"
+                      className={buttonVariants({ variant: "outline", size: "sm" })}>
+                      Open course book <RevisionTag revision={bookFile.revision} text={textRevision} />
+                    </a>
+                  )}
+                  {!bookCurrent && (
+                    <Button size="sm" variant="outline" onClick={prepareBook}
+                      disabled={bookPending || bookStarting}>
+                      {bookPending || bookStarting ? "Preparing course book…" : bookFailed ? "Retry course book" : "Prepare course book"}
+                    </Button>
+                  )}
+                  {bookFile && !bookCurrent && <span className="text-xs text-muted-foreground">Older course book · revision {bookFile.revision}</span>}
+                  {bookPending && <span role="status" className="text-xs text-muted-foreground">Preparing course book for revision {bookJob.revision}.</span>}
+                  {bookFailed && <span role="alert" className="text-xs text-destructive">Could not prepare course book for revision {bookJob.revision}. Your saved text and previous files are kept.</span>}
+                </div>
+              )}
               {wordFailed && wordJob && (
                 <Alert variant="destructive">
                   <AlertTitle>Could not prepare Word for revision {wordJob.revision}</AlertTitle>
@@ -504,7 +555,11 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
                   </AlertDescription>
                 </Alert>
               )}
-              {frame(note ? note.title : document.title)}
+              {!note && showBook && bookFile ? (
+                <iframe src={revisionBookUrl(course, run, bookFile.revision)} title="Course book"
+                  sandbox="allow-scripts" referrerPolicy="no-referrer"
+                  className="min-h-0 w-full flex-1 rounded-lg border" />
+              ) : frame(note ? note.title : document.title)}
             </TabsContent>
 
             {note && (

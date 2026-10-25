@@ -5,6 +5,7 @@ import os
 import re
 from pathlib import Path
 from time import time_ns
+from urllib.parse import unquote
 from uuid import uuid4
 
 from pydantic import TypeAdapter
@@ -13,6 +14,20 @@ from app.notes import RenderedArtifact, RenderFormat
 from app.notes_revisions import RenderJob, RevisionNotFound, RevisionStore
 
 JOBS = re.compile(r"[0-9]+-[0-9a-f]{32}\Z")
+BOOK_SUFFIXES = {
+    ".html",
+    ".css",
+    ".js",
+    ".json",
+    ".svg",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".map",
+}
 
 
 def atomic_json(path: Path, value) -> None:
@@ -120,3 +135,39 @@ def artifact_path(directory: Path, revision: int, kind: str, topic: str | None) 
         ):
             return path
     raise RevisionNotFound(f"No {kind} for revision {revision}")
+
+
+def book_asset_path(root: Path, asset_path: str) -> Path:
+    """Only files explicitly published in a ready book, never its source tree."""
+    decoded = unquote(asset_path)
+    if decoded != asset_path or "\\" in decoded or decoded.startswith("/"):
+        raise ValueError("Invalid book asset path")
+    name = decoded.rstrip("/") or "index.html"
+    parts = Path(name).parts
+    if not parts or any(part in (".", "..") or part.startswith((".", "_")) for part in parts):
+        raise ValueError("Invalid book asset path")
+    if name == "publication.json" or Path(name).suffix.lower() not in BOOK_SUFFIXES:
+        raise ValueError("Publication manifest is private")
+    if (root / "publication.json").is_symlink():
+        raise ValueError("Book publication is unavailable")
+    try:
+        published = json.loads((root / "publication.json").read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError("Book publication is unavailable") from error
+    if not isinstance(published, list) or name not in published:
+        raise ValueError("Book asset is not published")
+    path = root / name
+    if not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+        raise ValueError("Book asset leaves its published root")
+    return path
+
+
+def ready_book_root(directory: Path, revision: int) -> Path:
+    RevisionStore(directory).read(revision)
+    root = revision_folder(directory, revision) / "artifacts"
+    for artifact in manifest(directory, revision):
+        if (artifact.topic_id, artifact.format, artifact.status) == (None, "book", "ready"):
+            path = (root / artifact.path).resolve()
+            if path.is_relative_to(root.resolve()) and path.is_dir():
+                return path
+    raise RevisionNotFound("Book not published for this revision")

@@ -1,6 +1,8 @@
 import asyncio
+import mimetypes
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -21,7 +23,14 @@ from app.notes import (
     run_dir,
     topic_pdf,
 )
-from app.notes_artifacts import artifact_path, read_job, revision_jobs, selected_artifacts
+from app.notes_artifacts import (
+    artifact_path,
+    book_asset_path,
+    read_job,
+    ready_book_root,
+    revision_jobs,
+    selected_artifacts,
+)
 from app.notes_revisions import (
     EditResult,
     RenderJob,
@@ -384,6 +393,46 @@ def revision_download(
     except (OSError, ValueError, RevisionConflict) as error:
         raise HTTPException(409, "Stored revision history is unreadable") from error
     return served(path, kind, revision, f"notes-{topic}.{kind}" if topic else f"notes.{kind}")
+
+
+@router.get("/{course}/notes/{run}/revisions/{revision}/book")
+@router.get("/{course}/notes/{run}/revisions/{revision}/book/")
+@router.get("/{course}/notes/{run}/revisions/{revision}/book/{asset_path:path}")
+def download_book_asset(
+    course: str,
+    run: str,
+    revision: int,
+    settings: Annotated[Settings, Depends(get_settings)],
+    asset_path: str = "",
+) -> FileResponse:
+    store = revision_store(settings, course, run)
+    try:
+        path = book_asset_path(ready_book_root(store.directory, revision), asset_path)
+    except (RevisionNotFound, ValueError, OSError):
+        raise HTTPException(404, "Book asset not found") from None
+    base = (
+        f"{settings.public_api_url}/plans/{quote(course, safe='')}/notes/"
+        f"{quote(run, safe='')}/revisions/{revision}/book/"
+    )
+    policy = (
+        "sandbox allow-scripts; default-src 'none'; "
+        f"script-src 'unsafe-inline' {base} "
+        "https://cdn.jsdelivr.net/npm/mathjax@3/; "
+        f"style-src 'unsafe-inline' {base}; img-src data: {base}; "
+        f"font-src data: {base} https://cdn.jsdelivr.net/npm/mathjax@3/; "
+        f"connect-src {base}; base-uri 'none'; form-action 'none'; object-src 'none'"
+    )
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "X-Book-Published": "1",
+        "X-Notes-Revision": str(revision),
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+    }
+    if path.suffix == ".html":
+        headers["Content-Security-Policy"] = policy
+    media, _ = mimetypes.guess_type(path.name)
+    return FileResponse(path, media_type=media or "application/octet-stream", headers=headers)
 
 
 def latest_ready(
