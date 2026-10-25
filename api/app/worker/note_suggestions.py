@@ -25,7 +25,6 @@ from app.notes import (
     PlannedTopic,
     TopicNote,
     Verification,
-    VerificationIssue,
 )
 from app.notes_revisions import (
     EditResult,
@@ -68,8 +67,10 @@ from app.worker.topics import (
     context_text,
     draft_text,
     evidence_text,
+    is_clean,
     registry_text,
     topic_text,
+    verification_issues,
     verify,
 )
 
@@ -211,15 +212,6 @@ def fingerprint(directory: Path, document: NotesDocument, note: TopicNote) -> st
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def is_clean(check: Verification) -> bool:
-    """Only a check with no major issue and no escalation can certify content."""
-    return (
-        check.passed
-        and not check.escalate
-        and not any(issue.severity == "major" for issue in check.issues)
-    )
-
-
 async def verify_topic(
     client: OpenRouterClient,
     models: NotesModels,
@@ -238,18 +230,7 @@ async def verify_topic(
         check = await verify(
             client, spec, plan, section, topic, note.evidence, draft, f"{step}-escalated"
         )
-    issues = [*check.issues, *structure_gaps(note)]
-    if check.escalate:
-        issues.append(
-            VerificationIssue(
-                block=None,
-                kind="unsupported_claim",
-                severity="major",
-                detail="The verifier could not confidently check this topic: "
-                + (check.escalation_reason or "no reason given"),
-                fix="Review the flagged material manually or add supporting course evidence.",
-            )
-        )
+    issues = [*verification_issues(check), *structure_gaps(note)]
     return Verification(
         round=1,
         model=spec.model,

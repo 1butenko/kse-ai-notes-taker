@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { ImageIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -64,6 +64,22 @@ export function FigureDialog({
   const [label, setLabel] = useState(defaultLabel);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const generation = useRef(0);
+  const pending = useRef(false);
+  const insertLatest = useRef(onInsert);
+  useLayoutEffect(() => { insertLatest.current = onInsert; }, [onInsert]);
+  useLayoutEffect(() => () => {
+    generation.current++;
+    pending.current = false;
+  }, [open]);
+
+  const close = (next: boolean) => {
+    if (!next) {
+      generation.current++;
+      pending.current = false;
+    }
+    onOpenChange(next);
+  };
 
   const trimmed = caption.trim();
   const problem = !file
@@ -81,22 +97,29 @@ export function FigureDialog({
               : null;
 
   const insert = async () => {
-    if (!file || problem) return;
+    if (!file || problem || pending.current) return;
+    const attempt = generation.current;
+    pending.current = true;
     setUploading(true);
     setError(null);
     try {
       const uploaded = await uploadNoteAsset(course, run, file);
-      onInsert(`![${trimmed}](${uploaded.markdown_path}){#${label}}`);
-      onOpenChange(false);
+      if (generation.current !== attempt || !pending.current) return;
+      insertLatest.current(`![${trimmed}](${uploaded.markdown_path}){#${label}}`);
+      close(false);
     } catch (err) {
+      if (generation.current !== attempt) return;
       setError(err instanceof ApiError ? err.message : "Couldn't reach the server. Please try again.");
     } finally {
-      setUploading(false);
+      if (generation.current === attempt) {
+        pending.current = false;
+        setUploading(false);
+      }
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={close}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Insert an image into {block}</DialogTitle>
@@ -143,7 +166,7 @@ export function FigureDialog({
           </p>
         )}
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => close(false)}>
             Cancel
           </Button>
           <Button disabled={!!problem || uploading} onClick={insert}>

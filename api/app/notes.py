@@ -5,6 +5,7 @@ import secrets
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from pydantic import BaseModel, ValidationError
 
@@ -13,6 +14,24 @@ from app.schemas import Strict
 from app.syllabus import Transcript
 
 RUN_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
+
+
+SAFE_TOPIC_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
+
+
+def topic_filename(topic_id: str) -> str:
+    """A single reversible filesystem component, including for readable legacy IDs."""
+    if not topic_id:
+        raise ValueError("Empty topic ID")
+    encoded = quote(topic_id, safe="")
+    return encoded.replace(".", "%2E") if encoded in (".", "..") else encoded
+
+
+def validate_topic_ids(ids: list[str]) -> None:
+    if any(not SAFE_TOPIC_ID.fullmatch(item) for item in ids):
+        raise ValueError("Unsafe topic ID in course plan; start a new run")
+    if len(ids) != len(set(ids)):
+        raise ValueError("Duplicate topic IDs in course plan; start a new run")
 
 
 # Inputs: mapped chunks with stable ids, page metadata and the source they came from.

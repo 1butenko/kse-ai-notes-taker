@@ -6,12 +6,11 @@ import shutil
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import quote
 
 from fastapi import HTTPException, status
 
 from app.note_assets import asset_resources
-from app.notes import NotesRun, RenderFormat
+from app.notes import NotesRun, RenderFormat, topic_filename
 from app.notes_artifacts import (
     artifact_path,
     atomic_json,
@@ -149,7 +148,7 @@ async def render_job(directory: Path, job: RenderJob, settings: WorkerSettings) 
             ready = []
 
             async def one(section=None, note=None):
-                prefix = f"topics/{quote(note.topic_id, safe='')}/" if note else ""
+                prefix = f"topics/{topic_filename(note.topic_id)}/" if note else ""
                 destination = output / prefix
                 destination.mkdir(parents=True, exist_ok=True)
                 sources, resources = {}, {}

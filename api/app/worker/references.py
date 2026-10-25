@@ -305,7 +305,8 @@ def normalize_links(
     def destination(token: str) -> str:
         owner = targets[token][0]
         if context.book_chapters is not None:
-            return context.book_chapters[owner.topic_id] + "#" + quote(token, safe="")
+            anchor = reference_id(owner.topic_id) if owner.status == "failed" else token
+            return context.book_chapters[owner.topic_id] + "#" + quote(anchor, safe="")
         base = (
             context.document_url(document)
             if current_topic and owner.topic_id != current_topic
@@ -334,14 +335,20 @@ def normalize_links(
             continue
         # Quarto books resolve numbered equation/figure/table references across
         # chapters and choose the owning chapter URL. Keep their native numbering.
-        if context.book_chapters is not None and token.startswith(("eq-", "fig-", "tbl-")):
+        missing_body = context.book_chapters is not None and target[0].status == "failed"
+        if (
+            context.book_chapters is not None
+            and token.startswith(("eq-", "fig-", "tbl-"))
+            and not missing_body
+        ):
             continue
         external = bool(current_topic and target[0].topic_id != current_topic)
         # Blocks have stable anchors but no section number: use a normal link.
-        if external or token in block_anchors:
-            label = link_text(target[1]) + (
-                " (HTML)" if external and context.book_chapters is None else ""
-            )
+        if external or token in block_anchors or missing_body:
+            label = link_text(target[1])
+            if missing_body:
+                label += " (зміст відсутній)" if document.language == "uk" else " (unavailable)"
+            label += " (HTML)" if external and context.book_chapters is None else ""
             replacement = f"[{label}]({destination(token)}){suffix}"
             content = content[: match.start()] + replacement + content[match.end() :]
 

@@ -19,6 +19,7 @@ from app.notes import (
     TopicNote,
     Verification,
     VerificationIssue,
+    topic_filename,
 )
 from app.schemas import Strict
 from app.worker.artifacts import RunStore
@@ -256,6 +257,31 @@ class TopicCheck(Strict):
     escalation_reason: str | None
 
 
+def is_clean(check: TopicCheck | Verification) -> bool:
+    """The shared certification rule, including a final verifier's uncertainty."""
+    return (
+        check.passed
+        and not check.escalate
+        and not any(issue.severity == "major" for issue in check.issues)
+    )
+
+
+def verification_issues(check: TopicCheck | Verification) -> list[VerificationIssue]:
+    issues = list(check.issues)
+    if check.escalate:
+        issues.append(
+            VerificationIssue(
+                block=None,
+                kind="unsupported_claim",
+                severity="major",
+                detail="The verifier could not confidently check this topic: "
+                + (check.escalation_reason or "no reason given"),
+                fix="Review the flagged material manually or add supporting course evidence.",
+            )
+        )
+    return issues
+
+
 VERIFIER_PROMPT = """\
 You verify one topic of a course's lecture notes against the evidence it was written from.
 
@@ -305,7 +331,7 @@ async def verify(
         spec=spec,
     )
     majors = [i for i in check.issues if i.severity == "major"]
-    check.passed = not majors
+    check.passed = not majors and not check.escalate
     return check
 
 
@@ -365,7 +391,7 @@ async def generate_topic(
     language: str | None,
     revisions: int,
 ) -> TopicNote:
-    folder = f"topics/{topic.id}"
+    folder = f"topics/{topic_filename(topic.id)}"
     with get_client().start_as_current_observation(
         name="generate-topic", input={"topic": topic.title, "objectives": topic.objectives}
     ) as span:
@@ -417,13 +443,13 @@ async def generate_topic(
                 Verification(
                     round=round,
                     model=spec.model,
-                    passed=check.passed,
+                    passed=is_clean(check),
                     issues=check.issues,
                     escalate=check.escalate,
                     escalation_reason=check.escalation_reason,
                 ),
             )
-            if check.passed or round > revisions:
+            if is_clean(check) or round > revisions:
                 break
             if round >= 2:
                 escalated = True
@@ -442,13 +468,13 @@ async def generate_topic(
             )
 
         assert check is not None
-        open_issues = [i for i in check.issues if i.severity == "major"]
+        open_issues = [i for i in verification_issues(check) if i.severity == "major"]
         open_issues += [evidence_gap(gap) for gap in gaps]
         note = to_note(
             topic,
             draft,
             evidence,
-            "verified" if check.passed else "unresolved",
+            "verified" if is_clean(check) else "unresolved",
             round,
             spec.model,
             open_issues,
@@ -456,6 +482,6 @@ async def generate_topic(
         add_structure_issues(note)
         span.update(
             output={"status": note.status, "blocks": len(note.blocks), "rounds": round},
-            level="DEFAULT" if check.passed else "WARNING",
+            level="DEFAULT" if is_clean(check) else "WARNING",
         )
         return note

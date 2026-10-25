@@ -182,6 +182,8 @@ async def generate_notes(
             body.course,
             body.run,
             NotesModels.from_settings(settings),
+            body.plan,
+            body.transcript,
         )
     except RevisionConflict as error:
         ACTIVE.discard(body.course)

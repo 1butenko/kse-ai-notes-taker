@@ -11,7 +11,15 @@ from app.worker.llm import ask, chat
 from app.worker.models import NotesModels
 from app.worker.openrouter import OpenRouterClient
 from app.worker.references import BLANK_LINE, LABEL, math_regions, prose
-from app.worker.topics import DraftBlock, TopicDraft, add_structure_issues, registry_text, verify
+from app.worker.topics import (
+    DraftBlock,
+    TopicDraft,
+    add_structure_issues,
+    is_clean,
+    registry_text,
+    verification_issues,
+    verify,
+)
 
 BATCH_TOPICS = 6
 
@@ -158,9 +166,9 @@ async def recheck_topic(
         note.rounds += 1
         note.verification_stale = False
         note.open_issues = retained + [
-            i for i in check.issues if i.severity == "major" and i not in retained
+            i for i in verification_issues(check) if i.severity == "major" and i not in retained
         ]
-        note.status = "verified" if check.passed and not note.open_issues else "unresolved"
+        note.status = "verified" if is_clean(check) and not note.open_issues else "unresolved"
     except Exception:
         # The saved content remains available even if the verification service fails.
         note.open_issues.append(

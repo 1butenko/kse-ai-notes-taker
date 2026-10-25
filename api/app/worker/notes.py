@@ -1,8 +1,11 @@
 """Notes generation: plan globally, synthesize each topic across sources, verify, compose."""
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
+
+from pydantic import BaseModel
 
 from app.note_assets import asset_resources
 from app.notes import (
@@ -15,9 +18,12 @@ from app.notes import (
     TopicNote,
     now,
     run_dir,
+    topic_filename,
+    validate_topic_ids,
 )
 from app.notes_revisions import RevisionConflict, run_lock
 from app.plan import Plan
+from app.storage import sha256
 from app.syllabus import Transcript
 from app.worker.artifacts import RunStore
 from app.worker.composition import collect, harmonize
@@ -28,7 +34,7 @@ from app.worker.planning import plan_course
 from app.worker.quarto import QuartoError, render_document
 from app.worker.references import revision_context
 from app.worker.render import to_quarto, topic_to_quarto
-from app.worker.sources import Retriever, build_inputs
+from app.worker.sources import Retriever, build_inputs, session_materials
 from app.worker.topics import generate_topic
 from app.worker.tracing import course_trace
 
@@ -37,6 +43,37 @@ COMPLETED_RUN = (
     "This notes run is complete, and resuming it would overwrite its published notes. "
     "Start a new run to regenerate them, or rerender this run to rebuild its outputs."
 )
+
+
+RESUME_PROVENANCE = (
+    "This run's input/context provenance is changed or unknown. "
+    "Start a new run; the existing run and its cached files have been preserved."
+)
+
+
+class GenerationProvenance(BaseModel):
+    version: int = 1
+    fingerprint: str
+    inputs_sha256: str
+    plan: Plan
+    transcript: Transcript
+
+
+def input_fingerprint(course_dir: Path, plan: Plan, transcript: Transcript) -> str:
+    """Include ordering, context, language and all bytes used by extraction, not source IDs."""
+    uploads_dir = course_dir.parent
+    files = {}
+    for material, _ in session_materials(plan, transcript):
+        path = uploads_dir / material.file
+        files[material.file] = sha256(path) if path.is_file() else None
+    value = {"plan": plan.model_dump(), "transcript": transcript.model_dump(), "files": files}
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+def inputs_digest(inputs: Inputs) -> str:
+    return hashlib.sha256(inputs.model_dump_json().encode()).hexdigest()
 
 
 def fail_interrupted(uploads_dir: Path) -> list[str]:
@@ -57,7 +94,14 @@ def fail_interrupted(uploads_dir: Path) -> list[str]:
     return interrupted
 
 
-def open_run(course_dir: Path, course: str, run_id: str, models: NotesModels) -> RunStore:
+def open_run(
+    course_dir: Path,
+    course: str,
+    run_id: str,
+    models: NotesModels,
+    plan: Plan | None = None,
+    transcript: Transcript | None = None,
+) -> RunStore:
     """The store of a new run, or of an earlier unpublished run being resumed.
 
     Admission takes the run lock that edits use: a completed run's notes are published
@@ -71,6 +115,27 @@ def open_run(course_dir: Path, course: str, run_id: str, models: NotesModels) ->
             run = NotesRun.model_validate_json(previous.read_text())
             if run.status == "done" or (directory / "revisions").exists():
                 raise RevisionConflict(COMPLETED_RUN)
+            # Refuse before changing even run.json: positional source IDs only have
+            # meaning under the exact frozen input inventory and original context.
+            store = RunStore(directory, run)
+            try:
+                provenance = store.read("provenance.json", GenerationProvenance)
+                inputs = store.read("inputs.json", Inputs)
+                if (
+                    plan is None
+                    or transcript is None
+                    or provenance is None
+                    or inputs is None
+                    or provenance.version != 1
+                    or provenance.fingerprint != input_fingerprint(course_dir, plan, transcript)
+                    or provenance.inputs_sha256 != inputs_digest(inputs)
+                ):
+                    raise ValueError(RESUME_PROVENANCE)
+                cached = store.read("plan.json", CoursePlan)
+                if cached is not None:
+                    validate_topic_ids([topic.id for _, topic in cached.topics()])
+            except (OSError, ValueError) as error:
+                raise RevisionConflict(RESUME_PROVENANCE) from error
             run.status, run.error, run.warnings = "queued", None, []
         else:
             stamp = now()
@@ -84,6 +149,23 @@ def open_run(course_dir: Path, course: str, run_id: str, models: NotesModels) ->
                 models=models.summary(),
             )
         store = RunStore(directory, run)
+        if not previous.is_file():
+            if plan is None or transcript is None:
+                raise ValueError("Generation requires the source plan and syllabus context")
+            fingerprint = input_fingerprint(course_dir, plan, transcript)
+            inputs = build_inputs(course_dir.parent, course_dir, plan, transcript)
+            if input_fingerprint(course_dir, plan, transcript) != fingerprint:
+                raise RevisionConflict(RESUME_PROVENANCE)
+            store.write("inputs.json", inputs)
+            store.write(
+                "provenance.json",
+                GenerationProvenance(
+                    fingerprint=fingerprint,
+                    inputs_sha256=inputs_digest(inputs),
+                    plan=plan,
+                    transcript=transcript,
+                ),
+            )
         store.save()
     return store
 
@@ -102,10 +184,11 @@ async def topic_notes(
     gate = asyncio.Semaphore(settings.notes_concurrency)
     notes: dict[str, TopicNote] = {}
     topics = plan.topics()
+    validate_topic_ids([topic.id for _, topic in topics])
     store.run.topics_total = len(topics)
 
     async def job(section, topic) -> None:
-        name = f"topics/{topic.id}/note.json"
+        name = f"topics/{topic_filename(topic.id)}/note.json"
         done = store.read(name, TopicNote)
         if done is None or done.status == "failed":
             async with gate:
@@ -155,7 +238,6 @@ async def run_notes(
     transcript: Transcript,
 ) -> None:
     course = store.run.course
-    course_dir = settings.uploads_dir / course
     models = NotesModels.from_settings(settings)
     store.run.status = "running"
     store.run.models = models.summary()
@@ -165,10 +247,17 @@ async def run_notes(
         ) as span:
             async with opener() as client:
                 store.log("inputs", "Collecting mapped chunks")
-                inputs = await asyncio.to_thread(
-                    build_inputs, settings.uploads_dir, course_dir, plan, transcript
-                )
-                store.write("inputs.json", inputs)
+                provenance = store.read("provenance.json", GenerationProvenance)
+                inputs = store.read("inputs.json", Inputs)
+                if (
+                    provenance is None
+                    or inputs is None
+                    or inputs_digest(inputs) != provenance.inputs_sha256
+                ):
+                    raise ValueError(RESUME_PROVENANCE)
+                # Use the context saved alongside these exact source IDs, even if a
+                # caller's in-memory request was modified after admission.
+                plan, transcript = provenance.plan, provenance.transcript
                 for skipped in inputs.skipped:
                     store.warn(skipped)
                 if not inputs.chunks:
@@ -181,6 +270,7 @@ async def run_notes(
                     course_plan = await plan_course(
                         client, models, store, transcript, inputs, settings.notes_plan_rounds
                     )
+                validate_topic_ids([topic.id for _, topic in course_plan.topics()])
                 store.log("planning", f"Plan ready: {len(course_plan.topics())} topics")
 
                 notes = await topic_notes(
@@ -235,7 +325,7 @@ async def render_notes_outputs(
     store.write("artifacts.json", "[]")
 
     async def one(section: NotesSection | None = None, note: TopicNote | None = None):
-        prefix = f"topics/{note.topic_id}/" if note else ""
+        prefix = f"topics/{topic_filename(note.topic_id)}/" if note else ""
         stem = "note" if note else "notes"
         prepared = {}
         resources = {}
@@ -268,7 +358,7 @@ async def render_notes_outputs(
                 )
         results += await render_document(
             prepared,
-            store.directory / prefix,
+            store.path(prefix),
             0,
             settings.quarto_bin,
             resources=resources,

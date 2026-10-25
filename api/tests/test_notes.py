@@ -1181,3 +1181,333 @@ def test_harmonization_rejects_nested_narrative_page_mutation(mock_openrouter, n
 
     body = mock_openrouter(handler).post("/plans/1/notes").json()
     assert body["document"]["sections"][0]["topics"][0]["blocks"][0]["content"] == original
+
+
+@pytest.mark.parametrize(
+    "unsafe", ["../../escaped", "/absolute-topic", "T1/other", r"T1\other", "..", "T1"]
+)
+def test_unsafe_planner_ids_never_reach_topic_sinks(mock_openrouter, no_quarto, unsafe):
+    """Even exhausted, model-approved plans cannot admit paths or duplicate identities."""
+    course(no_quarto)
+    stub, calls = model_stub()
+    malicious = json.loads(json.dumps(PLAN))
+    malicious["sections"][0]["topics"][1]["id"] = unsafe
+
+    def handler(request):
+        if b'"course_plan"' in request.content:
+            return response_with(malicious)
+        return stub(request)
+
+    body = mock_openrouter(handler).post("/plans/1/notes").json()
+    assert body["run"]["status"] == "failed"
+    assert "topic" in body["run"]["error"].lower()
+    assert "evidence_selection" not in [c[0] for c in calls]
+    folder = no_quarto / "1/notes" / body["run"]["id"]
+    assert not (folder / "plan.json").exists()
+    assert not (folder / "topics").exists()
+
+
+@pytest.mark.parametrize(
+    "name", ["../outside.json", "absolute", "topics/../../outside.json", "link/value.json"]
+)
+def test_run_store_contains_reads_and_writes(tmp_path, name):
+    from app.notes import NotesRun
+    from app.worker.artifacts import RunStore
+
+    if name == "absolute":
+        name = str(tmp_path / "outside.json")
+    directory = tmp_path / "run"
+    directory.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"sources": [], "chunks": [], "skipped": []}')
+    (directory / "link").symlink_to(tmp_path, target_is_directory=True)
+    store = RunStore(
+        directory,
+        NotesRun(
+            id="test",
+            course="1",
+            status="failed",
+            stage="test",
+            created_at="x",
+            updated_at="x",
+            models={},
+        ),
+    )
+    from app.notes import Inputs
+
+    for operation in (lambda: store.write(name, "overwrite"), lambda: store.read(name, Inputs)):
+        with pytest.raises(ValueError, match="run"):
+            operation()
+    assert outside.read_text() == '{"sources": [], "chunks": [], "skipped": []}'
+
+
+@pytest.mark.parametrize("uncertain_at", ["initial", "harmonized"])
+def test_escalated_uncertainty_remains_visible_and_unresolved(
+    mock_openrouter, no_quarto, uncertain_at
+):
+    course(no_quarto)
+
+    def verify(model, prompt):
+        uncertain = uncertain_at == "initial" or "Harmonized summary." in prompt
+        return passed(True, escalate=uncertain)
+
+    handler, _ = model_stub(verify)
+    body = mock_openrouter(handler).post("/plans/1/notes").json()
+    assert body["run"]["status"] == "done"
+    note = body["document"]["sections"][0]["topics"][0]
+    assert note["status"] == "unresolved"
+    assert any("Hard proof" in issue["detail"] for issue in note["open_issues"])
+    folder = no_quarto / "1/notes" / body["run"]["id"]
+    qmd = (folder / "topics/T1/sources/html/note.qmd").read_text()
+    assert "Hard proof" in qmd and "Not fully verified" in qmd
+    if uncertain_at == "initial":
+        cached = json.loads((folder / "topics/T1/note.json").read_text())
+        assert cached["status"] == "unresolved"
+        assert any("Hard proof" in issue["detail"] for issue in cached["open_issues"])
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "detach",
+        "reorder",
+        "replace",
+        "content",
+        "missing",
+        "syllabus",
+        "language",
+        "unknown_provenance",
+        "invalid_cached_plan",
+    ],
+)
+def test_resume_refuses_changed_or_unknown_provenance_without_touching_cache(
+    mock_openrouter, no_quarto, change
+):
+    from app.plan import load_plan
+
+    course(no_quarto)
+    plan = load_plan(no_quarto / "1")
+    plan.sessions[0].files.append("1/reading/handout.md")
+    put_plan(no_quarto, "1", plan)
+    stub, calls = model_stub()
+    unavailable = True
+
+    def handler(request):
+        if unavailable and b'"consistency_edits"' in request.content:
+            return httpx2.Response(500, json={"error": {"message": "Composition unavailable"}})
+        return stub(request)
+
+    client = mock_openrouter(handler)
+    first = client.post("/plans/1/notes").json()
+    assert first["run"]["status"] == "failed"
+    folder = no_quarto / "1/notes" / first["run"]["id"]
+    assert (folder / "topics/T1/note.json").is_file()
+    assert not (folder / "notes.json").exists()
+    unavailable = False
+    if change in ("detach", "reorder", "replace"):
+        plan = load_plan(no_quarto / "1")
+        if change == "detach":
+            plan.sessions[0].files.pop(0)
+        elif change == "reorder":
+            plan.sessions[0].files.reverse()
+        else:
+            put(no_quarto, "1/reading/replacement.md", b"A different reading.")
+            plan.sessions[1].files = ["1/reading/replacement.md"]
+        put_plan(no_quarto, "1", plan)
+    elif change == "content":
+        (no_quarto / "1/reading/handout.md").write_text("Changed course evidence")
+    elif change == "missing":
+        (no_quarto / "1/reading/handout.md").unlink()
+    elif change in ("syllabus", "language"):
+        transcript = Transcript.model_validate_json(
+            (no_quarto / "1/syllabus/s.pdf.transcript.json").read_text()
+        )
+        if change == "language":
+            transcript.language = "uk"
+        else:
+            transcript.sessions[0].topic = "Changed syllabus objectives"
+        put_transcript(no_quarto, transcript)
+    elif change == "unknown_provenance":
+        (folder / "provenance.json").unlink(missing_ok=True)
+    else:
+        cached = json.loads((folder / "plan.json").read_text())
+        cached["sections"][0]["topics"][1]["id"] = "../../T1"
+        (folder / "plan.json").write_text(json.dumps(cached))
+    before = {str(p.relative_to(folder)): p.read_bytes() for p in folder.rglob("*") if p.is_file()}
+    calls.clear()
+    response = client.post("/plans/1/notes", json={"resume": first["run"]["id"]})
+    assert response.status_code == 409, response.text
+    assert "new run" in response.json()["detail"].lower()
+    assert not calls
+    assert {
+        str(p.relative_to(folder)): p.read_bytes() for p in folder.rglob("*") if p.is_file()
+    } == before
+
+
+def test_unchanged_resume_keeps_exact_citation_title_page_and_language(mock_openrouter, no_quarto):
+    course(no_quarto)
+    stub, calls = model_stub()
+    unavailable = True
+
+    def handler(request):
+        if unavailable and b'"consistency_edits"' in request.content:
+            return httpx2.Response(500, json={"error": {"message": "Composition unavailable"}})
+        return stub(request)
+
+    client = mock_openrouter(handler)
+    first = client.post("/plans/1/notes").json()
+    folder = no_quarto / "1/notes" / first["run"]["id"]
+    cached = (folder / "topics/T1/note.json").read_bytes()
+    unavailable = False
+    calls.clear()
+    resumed = client.post("/plans/1/notes", json={"resume": first["run"]["id"]}).json()
+    assert resumed["run"]["status"] == "done"
+    assert (folder / "topics/T1/note.json").read_bytes() == cached
+    assert not {"course_plan", "evidence_selection", "topic_draft"} & {c[0] for c in calls}
+    document = resumed["document"]
+    note = document["sections"][0]["topics"][0]
+    assert document["language"] == "en"
+    assert note["blocks"][0]["citations"] == [note["evidence"][0]["chunk_id"]]
+    assert note["evidence"][0]["source"] == document["sources"][0]["id"] == 0
+    assert (
+        note["evidence"][0]["title"]
+        == document["sources"][0]["title"]
+        == "Hefferon. Linear Algebra."
+    )
+    assert document["sources"][0]["file"] == "1/reading/book.pdf"
+    assert note["evidence"][0]["page"] == "PDF p. 1"
+    qmd = (folder / "notes.qmd").read_text()
+    assert "[@src-0, PDF p. 1]" in qmd
+    assert '"title": "Hefferon. Linear Algebra."' in qmd
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("legacy_id", ["..", "../sibling", "/absolute", "space name", "тема"])
+async def test_generation_render_sinks_encode_legacy_topic_identity(tmp_path, legacy_id):
+    from app.notes import NotesRun
+    from app.worker.artifacts import RunStore
+    from app.worker.notes import render_notes_outputs
+    from tests.test_notes_references import cited_document
+    from tests.test_notes_rendering import fake_cli
+
+    document = cited_document()
+    document.sections[0].topics[0].topic_id = legacy_id
+    directory = tmp_path / "run"
+    directory.mkdir()
+    sentinel = tmp_path / "sibling/note.pdf"
+    sentinel.parent.mkdir()
+    sentinel.write_bytes(b"untouched sibling")
+    binary = fake_cli(
+        tmp_path,
+        "from pathlib import Path\nimport sys\n"
+        "Path(sys.argv[sys.argv.index('--output')+1]).write_text('rendered')\n",
+    )
+    store = RunStore(
+        directory,
+        NotesRun(
+            id=document.run,
+            course="1",
+            status="running",
+            stage="rendering",
+            created_at="x",
+            updated_at="x",
+            models={},
+        ),
+    )
+    artifacts = await render_notes_outputs(
+        document, store, WorkerSettings(_env_file=None, uploads_dir=tmp_path, quarto_bin=binary)
+    )
+    assert all(a.status == "ready" for a in artifacts)
+    assert {a.topic_id for a in artifacts} == {None, legacy_id}
+    assert all(
+        (directory / a.path).resolve().is_relative_to(directory.resolve()) for a in artifacts
+    )
+    assert sentinel.read_bytes() == b"untouched sibling"
+
+
+@pytest.mark.anyio
+async def test_generation_render_rejects_symlink_destination_without_touching_sentinel(tmp_path):
+    from app.notes import NotesRun
+    from app.worker.artifacts import RunStore
+    from app.worker.notes import render_notes_outputs
+    from tests.test_notes_references import cited_document
+
+    directory = tmp_path / "run"
+    (directory / "topics").mkdir(parents=True)
+    outside = tmp_path / "sibling"
+    outside.mkdir()
+    sentinel = outside / "note.pdf"
+    sentinel.write_bytes(b"untouched sibling")
+    (directory / "topics/T1").symlink_to(outside, target_is_directory=True)
+    document = cited_document()
+    store = RunStore(
+        directory,
+        NotesRun(
+            id=document.run,
+            course="1",
+            status="running",
+            stage="rendering",
+            created_at="x",
+            updated_at="x",
+            models={},
+        ),
+    )
+    with pytest.raises(ValueError, match="run"):
+        await render_notes_outputs(
+            document,
+            store,
+            WorkerSettings(_env_file=None, uploads_dir=tmp_path, quarto_bin="not-installed"),
+        )
+    assert list(outside.iterdir()) == [sentinel]
+    assert sentinel.read_bytes() == b"untouched sibling"
+
+
+def test_run_store_partial_symlink_cannot_redirect_auxiliary_write(tmp_path):
+    from app.notes import NotesRun
+    from app.worker.artifacts import RunStore
+
+    directory = tmp_path / "run"
+    directory.mkdir()
+    sentinel = tmp_path / "outside.json"
+    sentinel.write_text("untouched sibling")
+    (directory / ".note.json.partial").symlink_to(sentinel)
+    store = RunStore(
+        directory,
+        NotesRun(
+            id="test",
+            course="1",
+            status="failed",
+            stage="test",
+            created_at="x",
+            updated_at="x",
+            models={},
+        ),
+    )
+    store.write("note.json", "new content")
+    assert (directory / "note.json").read_text() == "new content"
+    assert sentinel.read_text() == "untouched sibling"
+    assert [p.name for p in directory.glob("*.partial")] == [".note.json.partial"]
+
+
+@pytest.mark.parametrize("name", ["", "."])
+def test_run_store_cannot_place_a_temporary_file_outside_run_by_targeting_root(tmp_path, name):
+    from app.notes import NotesRun
+    from app.worker.artifacts import RunStore
+
+    directory = tmp_path / "run"
+    directory.mkdir()
+    store = RunStore(
+        directory,
+        NotesRun(
+            id="test",
+            course="1",
+            status="failed",
+            stage="test",
+            created_at="x",
+            updated_at="x",
+            models={},
+        ),
+    )
+    with pytest.raises(ValueError, match="run"):
+        store.write(name, "invalid file destination")
+    assert list(tmp_path.iterdir()) == [directory]

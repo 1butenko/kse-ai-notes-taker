@@ -179,6 +179,10 @@ test("preview shows the notes with rendered math on desktop and 390 px", async (
   const topicUrl = (await page.locator(`iframe[title="${t2.title}"]`).getAttribute("src"))!;
   await direct.goto(topicUrl);
   await expect(direct.locator("mjx-container").first()).toBeVisible({ timeout: 60_000 });
+  await direct.evaluate(async () => {
+    await document.fonts.ready;
+    await (window as unknown as { MathJax?: { startup?: { promise?: Promise<unknown> } } }).MathJax?.startup?.promise;
+  });
   await capture(direct, testInfo, "desktop-topic-T2-html-direct");
 
   await page.setViewportSize({ width: 390, height: 844 });

@@ -4,7 +4,7 @@ import json
 
 from langfuse import get_client
 
-from app.notes import CoursePlan, CoverageIssue, CoverageReview, Inputs
+from app.notes import CoursePlan, CoverageIssue, CoverageReview, Inputs, validate_topic_ids
 from app.syllabus import Transcript
 from app.worker.artifacts import RunStore
 from app.worker.llm import ask, chat
@@ -111,6 +111,10 @@ def check_references(plan: CoursePlan, transcript: Transcript, inputs: Inputs) -
     """Deterministic checks the reviewer would otherwise have to spot."""
     issues = []
     ids = [t.id for _, t in plan.topics()]
+    try:
+        validate_topic_ids(ids)
+    except ValueError as error:
+        issues.append(str(error))
     seen: set[str] = set()
     for _, topic in plan.topics():
         if topic.id in seen:
@@ -207,6 +211,7 @@ async def plan_course(
             store.warn(f"Thin evidence for {', '.join(gap.topics) or 'a topic'}: {gap.detail}")
 
         assert plan is not None
+        validate_topic_ids([topic.id for _, topic in plan.topics()])
         store.write("plan.json", plan)
         span.update(
             output={"topics": [t.title for _, t in plan.topics()], "open_issues": len(blocking)}

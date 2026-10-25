@@ -336,13 +336,94 @@ test("leaving a topic with an unsaved draft asks first and keeps the draft", asy
   await expect(editor(page).getByText("No unsaved changes")).toBeVisible();
 });
 
-test("an uploaded figure goes into the local draft and is published by saving", async ({ page, request }) => {
+test("an uploaded figure goes into the local draft and is published by saving", async ({ page, request }, testInfo) => {
   const run = await generated(request);
   const h = (await head(request, run)).current_revision;
   await openEditor(page, run, "T1");
   const target = "Block 6 (T1.6)";
   const dialog = page.getByRole("dialog", { name: "Insert an image into block 6" });
 
+  // Hold a real asset response until cancellation and subsequent edits/discard have finished.
+  // Compare the entire stored draft so citations and ordering cannot be silently reverted.
+  for (const dismiss of ["Cancel", "Escape", "outside", "discard", "navigation", "unmount"]) {
+    if (dismiss === "unmount") {
+      // Establish real SPA history so Back can navigate while the modal is open.
+      const saved = (await head(request, run)).document;
+      const navigation = page.getByRole("navigation", { name: "Topics" });
+      await navigation.getByRole("link", { name: new RegExp(topic(saved, "T2").title) }).click();
+      await expect(page).toHaveURL(new RegExp(`/preview/${COURSE}/${run}/T2$`));
+      await navigation.getByRole("link", { name: new RegExp(topic(saved, "T1").title) }).click();
+      await expect(page).toHaveURL(new RegExp(`/preview/${COURSE}/${run}/T1$`));
+      await page.getByRole("tab", { name: "Edit", exact: true }).click();
+    }
+    await content(page, target).fill(`Draft before ${dismiss}`);
+    let started!: () => void;
+    const intercepted = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let completed!: () => void;
+    const fulfilled = new Promise<void>((resolve) => { completed = resolve; });
+    const assetUrl = notesUrl(run, "/assets");
+    await page.route(assetUrl, async (route) => {
+      // Chromium interception does not replay the selected file bytes via route.fetch.
+      // Forward this fixture to the real endpoint and hold its actual response.
+      const response = await request.post(assetUrl, { multipart: {
+        file: { name: "figure.png", mimeType: "image/png", buffer: fs.readFileSync(path.join(stack.fixtures, "figure.png")) },
+      } });
+      expect(response.status(), await response.text()).toBe(201);
+      started();
+      await held;
+      try { await route.fulfill({ response }); } finally { completed(); }
+    });
+    await block(page, target).getByRole("button", { name: "Insert image" }).click();
+    await dialog.getByLabel(/^Image/).setInputFiles(path.join(stack.fixtures, "figure.png"));
+    await dialog.getByLabel("Caption").fill(`Cancelled ${dismiss}`);
+    await dialog.getByRole("button", { name: "Upload and insert" }).click();
+    await intercepted;
+    if (dismiss === "unmount") {
+      await page.goBack();
+      await expect(page).toHaveURL(new RegExp(`/preview/${COURSE}/${run}/T2$`));
+      await expect(dialog).toBeHidden();
+      await page.goForward();
+      await expect(page).toHaveURL(new RegExp(`/preview/${COURSE}/${run}/T1$`));
+      await page.getByRole("tab", { name: "Edit", exact: true }).click();
+    } else if (dismiss === "Escape") await page.keyboard.press("Escape");
+    else if (dismiss === "outside") await page.mouse.click(5, 5);
+    else await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    if (dismiss === "discard" || dismiss === "navigation" || dismiss === "unmount") {
+      await editor(page).getByRole("button", { name: "Discard draft" }).last().click();
+      await page.getByRole("dialog", { name: "Discard your draft of T1?" }).getByRole("button", { name: "Discard", exact: true }).click();
+      await expect(editor(page).getByText("No unsaved changes")).toBeVisible();
+      if (dismiss === "navigation") await page.getByRole("tab", { name: "Preview", exact: true }).click();
+    } else {
+      await content(page, target).fill(`Unique text typed after ${dismiss}`);
+      await title(page, "Block 1 (T1.1)").fill(`Latest unrelated title ${dismiss}`);
+      await block(page, "Block 1 (T1.1)").getByRole("checkbox").first().uncheck();
+      await block(page, "Block 1 (T1.1)").getByRole("button", { name: "Move block down" }).click();
+    }
+    const before = await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([key]) => key.startsWith("kse-notes:draft:"))));
+    release();
+    await fulfilled;
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage).filter(([key]) => key.startsWith("kse-notes:draft:"))))).toEqual(before);
+    await page.unroute(assetUrl);
+    if (dismiss === "Cancel" || dismiss === "discard") {
+      if (dismiss === "discard") await page.getByRole("dialog", { name: "Discard your draft of T1?", includeHidden: true }).waitFor({ state: "detached" });
+      await content(page, target).scrollIntoViewIfNeeded();
+      await capture(page, testInfo, dismiss === "Cancel"
+        ? "cancelled-upload-keeps-latest-text-citations-order"
+        : "cancelled-upload-does-not-recreate-discarded-draft");
+    }
+    if (dismiss === "navigation") await page.getByRole("tab", { name: "Edit", exact: true }).click();
+    if (dismiss !== "discard" && dismiss !== "navigation" && dismiss !== "unmount") {
+      await expect(content(page, target)).toHaveValue(`Unique text typed after ${dismiss}`);
+      await editor(page).getByRole("button", { name: "Discard draft" }).last().click();
+      await page.getByRole("dialog", { name: "Discard your draft of T1?" }).getByRole("button", { name: "Discard", exact: true }).click();
+    }
+  }
+
+  await content(page, target).fill("Draft before accepted upload");
   await block(page, target).getByRole("button", { name: "Insert image" }).click();
   await expect(dialog.getByLabel("Label", { exact: true })).toHaveValue("fig-t1-1");
   await dialog.getByLabel(/^Image/).setInputFiles({
@@ -354,9 +435,34 @@ test("an uploaded figure goes into the local draft and is published by saving", 
   await dialog.getByRole("button", { name: "Upload and insert" }).click();
   await expect(dialog.getByRole("alert")).toContainText("Malformed, truncated or oversized image");
 
+  let acceptedStarted!: () => void;
+  const acceptedIntercepted = new Promise<void>((resolve) => { acceptedStarted = resolve; });
+  let accept!: () => void;
+  const acceptedHeld = new Promise<void>((resolve) => { accept = resolve; });
+  await page.route(notesUrl(run, "/assets"), async (route) => {
+    const response = await request.post(notesUrl(run, "/assets"), { multipart: {
+      file: { name: "figure.png", mimeType: "image/png", buffer: fs.readFileSync(path.join(stack.fixtures, "figure.png")) },
+    } });
+    expect(response.status()).toBe(201);
+    acceptedStarted();
+    await acceptedHeld;
+    await route.fulfill({ response });
+  });
   await dialog.getByLabel(/^Image/).setInputFiles(path.join(stack.fixtures, "figure.png"));
   await dialog.getByRole("button", { name: "Upload and insert" }).click();
+  await acceptedIntercepted;
+  const draftKey = `kse-notes:draft:${[COURSE, run, "T1"].map(encodeURIComponent).join("/")}@${h}`;
+  const latestBlocks = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)!).blocks, draftKey);
+  accept();
   await expect(dialog).toBeHidden();
+  await expect(content(page, target)).toHaveValue(/Draft before accepted upload/);
+  const storedBlocks = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)!).blocks, draftKey);
+  expect(storedBlocks.slice(0, 5)).toEqual(latestBlocks.slice(0, 5));
+  expect(storedBlocks[5].citations).toEqual(latestBlocks[5].citations);
+  expect((storedBlocks[5].content.match(/!\[/g) ?? []).length).toBe(1);
+  await page.unroute(notesUrl(run, "/assets"));
+  await content(page, target).scrollIntoViewIfNeeded();
+  await capture(page, testInfo, "accepted-upload-inserts-once-into-latest-draft");
   const figure = /!\[Схема методу Гаусса\]\((assets\/[0-9a-f]{64}\.png)\)\{#fig-t1-1\}$/;
   await expect(content(page, target)).toHaveValue(figure);
   expect((await head(request, run)).current_revision, "an upload commits nothing").toBe(h);
@@ -877,7 +983,7 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   await waitForRender(request, run, (await saved.json()).render.id);
   const base = notesUrl(run, `/revisions/${h}/book/`);
   const current = notesUrl(run, `/revisions/${h + 1}/book/`);
-  const historical = await request.get(base + "T2.html");
+  const historical = await request.get(base + "topic-T2.html");
   expect(historical.status()).toBe(200);
   expect(await historical.text()).not.toContain("Книжковий маркер ревізії");
   expect((await request.get(current)).status()).toBe(404);
@@ -899,7 +1005,7 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   await page.getByRole("button", { name: "Retry course book" }).click();
   await expect(page.getByText(`Preparing course book for revision ${h + 1}.`)).toBeVisible();
   await expect(page.getByRole("link", { name: new RegExp(`Open course book.*${h + 1}`) })).toBeVisible({ timeout: 180_000 });
-  expect(await (await request.get(current + "T2.html")).text()).toContain("Книжковий маркер ревізії");
+  expect(await (await request.get(current + "topic-T2.html")).text()).toContain("Книжковий маркер ревізії");
   expect((await head(request, run)).current_revision).toBe(h + 1);
   expect(mockRequests().length, "book render must not call a model").toBe(calls);
 
@@ -932,12 +1038,12 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   expect(search.headers()["access-control-allow-origin"]).toBe("*");
   expect(search.headers()["access-control-allow-credentials"]).toBeUndefined();
   const corpus = await search.text();
-  expect(corpus).toContain("T1.html");
-  expect(corpus).toContain("T2.html");
+  expect(corpus).toContain("topic-T1.html");
+  expect(corpus).toContain("topic-T2.html");
   expect(corpus).not.toContain("local/reading/");
   expect(corpus).not.toContain("openrouter.jsonl");
   expect(corpus).not.toContain(privateCanary);
-  for (const rejected of ["../notes.json", "publication.json", "T1.qmd", "private-canary.html"]) {
+  for (const rejected of ["../notes.json", "publication.json", "topic-T1.qmd", "private-canary.html"]) {
     const response = await request.get(current + rejected, { headers: { Origin: "null" } });
     expect(response.status(), rejected).toBe(404);
     expect(response.headers()["access-control-allow-origin"]).not.toBe("*");
@@ -956,7 +1062,7 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   await frame.locator(".aa-Input").fill("Власний вектор");
   await expect(frame.locator(".aa-Panel a").first()).toBeVisible();
   const result = await frame.locator(".aa-Panel a").first().getAttribute("href");
-  expect(new URL(result!, current).href).toContain(`${current}T2.html`);
+  expect(new URL(result!, current).href).toContain(`${current}topic-T2.html`);
   await capture(page, testInfo, "desktop-course-book-search");
   await frame.locator(".aa-Panel a").first().click();
   await expect(iframe).toHaveAttribute("src", current); // iframe element retains its entry URL
@@ -975,26 +1081,26 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   expect(glyph).toBe('"A"');
   await capture(page, testInfo, "desktop-course-book-chapter");
   const inner = page.frames().find((f) => f !== page.mainFrame())!;
-  expect(inner.url()).toContain(`${current}T2.html`);
+  expect(inner.url()).toContain(`${current}topic-T2.html`);
   await frame.getByRole("link", { name: "Topic T1" }).click();
-  await expect.poll(() => inner.url()).toContain(`${current}T1.html#sec-T1`);
+  await expect.poll(() => inner.url()).toContain(`${current}topic-T1.html#sec-T1`);
   await frame.locator('.nav-page-next a').click();
-  await expect.poll(() => inner.url()).toContain(`${current}T2.html`);
+  await expect.poll(() => inner.url()).toContain(`${current}topic-T2.html`);
   await frame.getByRole("link", { name: "до першої теми" }).click();
-  await expect.poll(() => inner.url()).toContain(`${current}T1.html#sec-T1`);
+  await expect.poll(() => inner.url()).toContain(`${current}topic-T1.html#sec-T1`);
   await frame.locator('.nav-page-next a').click();
-  const equationLink = frame.locator('a.quarto-xref[href$="T1.html#eq-t1-sarrus"]');
+  const equationLink = frame.locator('a.quarto-xref[href$="topic-T1.html#eq-t1-sarrus"]');
   await expect(equationLink).toContainText(/Рівняння\s*2\./);
   expect(new URL((await equationLink.getAttribute("href"))!, inner.url()).href)
-    .toBe(`${current}T1.html#eq-t1-sarrus`);
+    .toBe(`${current}topic-T1.html#eq-t1-sarrus`);
   await equationLink.click();
-  await expect.poll(() => inner.url()).toContain(`${current}T1.html#eq-t1-sarrus`);
+  await expect.poll(() => inner.url()).toContain(`${current}topic-T1.html#eq-t1-sarrus`);
   await frame.locator('a[role="doc-biblioref"]').first().click();
   await expect.poll(() => inner.url()).toContain(`${current}references.html#ref-src-`);
   await frame.locator('.nav-page-previous a').click();
-  await expect.poll(() => inner.url()).toContain(`${current}T2.html`);
+  await expect.poll(() => inner.url()).toContain(`${current}topic-T2.html`);
   await frame.locator('.nav-page-previous a').click();
-  await expect.poll(() => inner.url()).toContain(`${current}T1.html`);
+  await expect.poll(() => inner.url()).toContain(`${current}topic-T1.html`);
   await frame.locator('.nav-page-previous a').click();
   await expect.poll(() => new URL(inner.url()).pathname).toMatch(/\/book\/(?:index\.html)?$/);
   await expect(frame.locator("h1").first()).toBeVisible();

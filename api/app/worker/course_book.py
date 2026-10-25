@@ -11,10 +11,11 @@ from pathlib import Path
 from app.notes import NotesDocument, RenderedArtifact
 from app.notes_artifacts import BOOK_SUFFIXES
 from app.worker.quarto import QUARTO_TIMEOUT, QuartoError, subprocess_gate, validate_markdown
-from app.worker.references import ReferenceContext, build_reference_data, reference_id
+from app.worker.references import ReferenceContext, reference_id
 from app.worker.render import (
     bibliography,
     checked_document,
+    checked_references,
     footer,
     labels,
     quarto_language_lines,
@@ -31,18 +32,16 @@ def build_book_project(document: NotesDocument, directory: Path, language: str) 
     if language not in ("uk", "en") or document.language != language:
         raise ValueError("Book language must match the saved document")
     directory.mkdir(parents=True, exist_ok=True)
-    # A failed topic can lack labels referenced by a later chapter. Preserve its status
-    # page and the later chapter instead of failing the whole book.
-    references = build_reference_data(document)
-    for item in references:
-        validate_markdown(item["title"])
+    # Validate the same source/label contract as standalone formats. Only known
+    # targets in a failed topic may link to its explicit status page (see normalize_links).
+    references = checked_references(document)
     validate_markdown(document.title)
     topics = [(section, topic) for section in document.sections for topic in section.topics]
     ids = [topic.topic_id for _, topic in topics]
     if len(ids) != len(set(ids)):
         raise ValueError("Book topic IDs must be distinct")
-    # reference_id is a reversible filename-safe encoding of the stable topic ID.
-    chapters = {item: f"{reference_id(item)[4:]}.html" for item in ids}
+    # Prefix every chapter: legacy IDs must never replace index/references.
+    chapters = {item: f"topic-{reference_id(item)[4:]}.html" for item in ids}
     context = ReferenceContext(book_chapters=chapters)
     text = labels(language)
     index = checked_document("", [footer(document, text)], document.title)

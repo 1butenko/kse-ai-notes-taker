@@ -120,11 +120,18 @@ export function TopicEditor({ course, run, revision, document, topic, draft, ref
     }
   };
 
+  // Async insertions and consecutive events must edit today's stored draft,
+  // including its citation/order changes, rather than a captured render snapshot.
+  const latestWorking = (): TopicDraft => currentDraft(course, run, topicId) ?? {
+    base_revision: revision, blocks: saved, language: null, updated_at: "",
+  };
   const update = (change: Partial<Pick<TopicDraft, "blocks" | "language">>) =>
-    commit({ ...working, ...change, updated_at: new Date().toISOString() });
+    commit({ ...latestWorking(), ...change, updated_at: new Date().toISOString() });
 
-  const setBlocks = (edit: (blocks: DraftBlock[]) => DraftBlock[]) =>
-    update({ blocks: edit([...working.blocks]) });
+  const setBlocks = (edit: (blocks: DraftBlock[]) => DraftBlock[]) => {
+    const latest = latestWorking();
+    commit({ ...latest, blocks: edit([...latest.blocks]), updated_at: new Date().toISOString() });
+  };
 
   const addBlock = (at: number) =>
     setBlocks((blocks) => {
@@ -400,6 +407,7 @@ export function TopicEditor({ course, run, revision, document, topic, draft, ref
 
       {figureFor !== null && figureBlock >= 0 && (
         <FigureDialog
+          key={`${course}/${run}/${topicId}/${figureFor}`}
           course={course}
           run={run}
           open
