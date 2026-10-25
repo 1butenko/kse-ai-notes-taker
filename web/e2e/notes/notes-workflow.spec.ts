@@ -7,6 +7,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 import {
   COURSE,
+  LEGACY_RUN,
   attachDiagnostics,
   capture,
   mockRequests,
@@ -661,6 +662,150 @@ function suggestionRecords(run: string): SuggestionRecord[] {
 }
 
 const schemaCount = (schema: string) => mockRequests().filter((call) => call.schema === schema).length;
+
+test("a held Verify response from another run cannot occupy this topic", async ({ page, request }) => {
+  const run = await generated(request);
+  await openEditor(page, run, "T2");
+  const planPath = path.join(stack.uploads, COURSE, "plan.json");
+  const originalPlan = fs.readFileSync(planPath);
+  let releasePost!: () => void;
+  const postGate = new Promise<void>((resolve) => { releasePost = resolve; });
+  let postCount = 0;
+  await page.route(`**/notes/${run}/topics/T2/verify`, async (route) => {
+    postCount += 1;
+    await postGate;
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "old-run-job", topic_id: "T2", status: "queued" }),
+    });
+  });
+  try {
+    const verify = page.getByRole("region", { name: "AI suggestions" })
+      .getByRole("button", { name: "Verify this topic again" });
+    await verify.click();
+    await expect(verify).toBeDisabled();
+    await expect.poll(() => postCount).toBe(1);
+
+    // The synthetic seed has assigned readings but no book match, so Notes is gated.
+    // Mark its isolated plan as mapped to use the real dashboard Links for SPA navigation.
+    const plan = JSON.parse(originalPlan.toString("utf8"));
+    plan.books = [{ material: 0, raw: "e2e navigation", file: null, confirmed: true }];
+    fs.writeFileSync(planPath, JSON.stringify(plan));
+    await page.getByRole("link", { name: "KSE Notes" }).click();
+    await page.getByRole("tab", { name: "Notes" }).click();
+    await page.getByRole("combobox", { name: "Notes run" }).click();
+    await page.getByRole("option").last().click();
+    await page.getByRole("link", { name: "Read notes" }).click();
+    await page.getByRole("navigation", { name: "Topics" }).getByRole("link", { name: /^T2 / }).click();
+    await expect(page).toHaveURL(new RegExp(`/preview/${COURSE}/${LEGACY_RUN}/T2$`));
+    await page.getByRole("tab", { name: "Edit" }).click();
+    const current = page.getByRole("region", { name: "AI suggestions" });
+    await expect(current).toBeVisible();
+
+    const oldResponse = page.waitForResponse((response) =>
+      response.url().endsWith(`/notes/${run}/topics/T2/verify`) && response.request().method() === "POST");
+    releasePost();
+    await oldResponse;
+    await page.evaluate(() => new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(current.getByRole("button", { name: "Verify this topic again" })).toBeEnabled();
+    await expect(current.getByRole("button", { name: "Verify this topic again" })).toHaveAttribute("aria-busy", "false");
+    await expect(current.getByRole("group", { name: "Verification result" })).toHaveCount(0);
+  } finally {
+    releasePost();
+    fs.writeFileSync(planPath, originalPlan);
+  }
+});
+
+test("Verify responds immediately, survives creation failure and the first slow poll", async ({ page, request }) => {
+  const run = await generated(request);
+  const start = await head(request, run);
+  await openEditor(page, run, "T2");
+  const ai = page.getByRole("region", { name: "AI suggestions" });
+  const verify = ai.getByRole("button", { name: "Verify this topic again" });
+  const result = ai.getByRole("group", { name: "Verification result" });
+  let releasePost!: () => void;
+  const postGate = new Promise<void>((resolve) => { releasePost = resolve; });
+  let releaseGet!: () => void;
+  const getGate = new Promise<void>((resolve) => { releaseGet = resolve; });
+  let releaseRepeat!: () => void;
+  const repeatGate = new Promise<void>((resolve) => { releaseRepeat = resolve; });
+  let postCount = 0;
+  let getCount = 0;
+  await page.route("**/topics/T2/verify", async (route) => {
+    postCount += 1;
+    if (postCount === 1) {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Temporary verification error" }) });
+      return;
+    }
+    if (postCount === 3) {
+      await repeatGate;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Temporary verification error" }) });
+      return;
+    }
+    await postGate;
+    await route.continue();
+  });
+  await page.route("**/verification-jobs/*", async (route) => {
+    getCount += 1;
+    if (getCount === 1) {
+      await getGate;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: route.request().url().split("/").at(-1), topic_id: "T2",
+          base_revision: start.current_revision, status: "queued", verification: null,
+          verified: false, blocking: [], revision: null, conflict: false, error: null,
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+  try {
+    await verify.click();
+    await expect(ai.getByText("Temporary verification error")).toBeVisible();
+    await expect(verify).toBeEnabled();
+    expect(postCount).toBe(1);
+
+    await verify.click();
+    await expect(verify).toBeDisabled();
+    await expect(verify).toHaveAttribute("aria-busy", "true");
+    await expect(ai.locator('p[role="status"]')).toContainText("Checking the saved text of T2 against its sources.");
+    await expect(result).toHaveCount(0);
+    const bounds = await verify.boundingBox();
+    expect(bounds).not.toBeNull();
+    await page.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+    expect(postCount, "the pending POST must not be duplicated").toBe(2);
+
+    releasePost();
+    await expect.poll(() => getCount).toBe(1);
+    await expect(verify).toBeDisabled();
+    await expect(verify).toHaveAttribute("aria-busy", "true");
+    await expect(result).toHaveCount(0);
+    releaseGet();
+    await expect(result).toBeVisible({ timeout: 60_000 });
+    await expect(result).toContainText("Not verified");
+    await expect(verify).toBeEnabled();
+    await expect(verify).toHaveAttribute("aria-busy", "false");
+    expect(postCount).toBe(2);
+    expect(getCount).toBeGreaterThan(1);
+
+    await verify.click();
+    await expect(result, "the previous result must not appear as the active check").toHaveCount(0);
+    await expect(verify).toBeDisabled();
+    expect(postCount).toBe(3);
+    releaseRepeat();
+    await expect(ai.getByText("Temporary verification error")).toBeVisible();
+    await expect(verify).toBeEnabled();
+  } finally {
+    releasePost();
+    releaseGet();
+    releaseRepeat();
+  }
+});
 
 test("AI suggestions are reviewed: reject, apply, stale conflict and a manual recheck", async ({ page, request }, testInfo) => {
   const run = await generated(request);

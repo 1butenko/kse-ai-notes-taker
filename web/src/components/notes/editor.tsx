@@ -356,7 +356,7 @@ export function TopicEditor({ course, run, revision, document, topic, draft, ref
       )}
 
       <AiAssist
-        key={topicId}
+        key={`${course}/${run}/${topicId}`}
         course={course}
         run={run}
         revision={revision}

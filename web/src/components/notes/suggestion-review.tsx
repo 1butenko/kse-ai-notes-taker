@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckIcon, CircleAlertIcon, ShieldCheckIcon, SparklesIcon, XIcon } from "lucide-react";
 import { toast } from "sonner";
 
@@ -205,6 +205,8 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
   const [instruction, setInstruction] = useState("");
   const [suggestionId, setSuggestionId] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [verifyPending, setVerifyPending] = useState(false);
+  const verifyPendingRef = useRef(false);
   const [starting, setStarting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -219,6 +221,8 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
   );
   const settledJob = useCallback(
     (job: VerificationJob) => {
+      verifyPendingRef.current = false;
+      setVerifyPending(false);
       if (job.revision !== null) {
         toast.success(`Verification recorded as revision ${job.revision}`);
         refresh();
@@ -232,7 +236,7 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
   // Another topic or a new run starts clean; a suggestion for a different topic never shows.
   const shown = suggestion && suggestion.topic_id === topicId ? suggestion : null;
   const waiting = shown && ["queued", "running"].includes(shown.status);
-  const checking = job && ["queued", "running"].includes(job.status);
+  const checking = verifyPending || !!(job && ["queued", "running"].includes(job.status));
 
   const ask = async () => {
     setStarting(true);
@@ -288,12 +292,18 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
   };
 
   const verify = async () => {
+    if (verifyPendingRef.current) return;
+    verifyPendingRef.current = true;
+    setVerifyPending(true);
+    setJobId(null);
     setError(null);
     try {
       const started = await verifyNotesTopic(course, run, topicId, revision);
       setJobId(started.id);
     } catch (err) {
       setError(errorMessage(err));
+      verifyPendingRef.current = false;
+      setVerifyPending(false);
     }
   };
 
@@ -385,7 +395,7 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
               {starting ? <Spinner /> : <SparklesIcon />}
               Request suggestion
             </Button>
-            <Button variant="outline" disabled={hasDraft || !!checking || noBlocks} onClick={verify}>
+            <Button variant="outline" disabled={hasDraft || checking || noBlocks} aria-busy={checking} onClick={verify}>
               {checking ? <Spinner /> : <ShieldCheckIcon />}
               Verify this topic again
             </Button>
