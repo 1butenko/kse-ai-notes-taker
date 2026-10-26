@@ -33,6 +33,28 @@ const PRESETS = [
   "Clarify the proof step by step",
 ];
 const POLL_MS = 800;
+const MAX_INSTRUCTION = 2000;
+
+function actionable(issue: VerificationIssue, topic: TopicNote) {
+  return !!issue.fix.trim() &&
+    (issue.block === null || (Number.isInteger(issue.block) && issue.block >= 0 && issue.block < topic.blocks.length));
+}
+
+function fixRequest(issues: VerificationIssue[], topic: TopicNote) {
+  const blocks = issues.map((issue) => issue.block);
+  const block_ids = blocks.includes(null) ? [] : [...new Set(blocks.map((index) => topic.blocks[index!].id))];
+  const instruction = [
+    "Using only this topic's listed evidence, make the smallest source-supported changes needed for these verification findings. Do not invent claims or sources. If the evidence cannot support a fix, leave that claim unresolved.",
+    ...issues.map((issue, index) => [
+      `Finding ${index + 1} (${issue.kind}; ${issue.block === null ? "whole topic" : `block ${topic.blocks[issue.block!].id}`}):`,
+      `Detail: ${issue.detail}`,
+      `Suggested fix: ${issue.fix}`,
+    ].join("\n")),
+    `Available evidence: ${topic.evidence.map((item, index) => `E${index} (source ${item.source})`).join(", ")}.`,
+    "Cite only the relevant evidence numbers E0, E1, etc. from this topic; preserve existing valid citations and unrelated text.",
+  ].join("\n\n");
+  return { block_ids, instruction };
+}
 
 function errorMessage(err: unknown) {
   return err instanceof ApiError ? err.message : "Couldn't reach the server. Please try again.";
@@ -45,6 +67,7 @@ function usePolled<T extends { id: string }>(
   done: (value: T) => boolean,
   onSettled: (value: T) => void,
   refreshKey?: number,
+  onRead?: (value: T) => void,
 ) {
   const [value, setValue] = useState<T | null>(null);
   useEffect(() => {
@@ -56,6 +79,7 @@ function usePolled<T extends { id: string }>(
         const next = await read(id);
         if (cancelled) return;
         setValue(next);
+        onRead?.(next);
         if (done(next)) {
           onSettled(next);
           return;
@@ -84,27 +108,54 @@ function checkIsClean(check: Verification) {
 }
 
 /** Substantive findings from the check, then standing gaps. */
-function Issues({ check, blocking }: { check: Verification; blocking: VerificationIssue[] }) {
-  const issues = [...check.issues.filter((issue) => issue.severity === "major" ||
-    issue.kind === "citation" || issue.kind === "unsupported_claim"), ...blocking];
+function Issues({ issues, topic, onFix, disabled, disabledReason, check }: {
+  issues: VerificationIssue[];
+  topic?: TopicNote;
+  onFix?: (issues: VerificationIssue[]) => void;
+  disabled?: boolean;
+  disabledReason?: string;
+  check?: Verification;
+}) {
+  const available = topic ? issues.filter((issue) => actionable(issue, topic) && fixRequest([issue], topic).instruction.length <= MAX_INSTRUCTION) : [];
+  const allFits = topic && available.length === issues.length && fixRequest(available, topic).instruction.length <= MAX_INSTRUCTION;
   return (
-    <ul aria-label="Verification issues" className="flex flex-col gap-2 text-sm">
+    <div className="flex min-w-0 flex-col gap-2">
+      {onFix && issues.length > 1 && (
+        <div>
+          <Button size="sm" variant="outline" disabled={disabled || !allFits} onClick={() => onFix(issues)}>
+            Generate suggested fixes
+          </Button>
+          {!allFits && <p className="text-xs text-muted-foreground">The combined request is too long or contains a finding without a valid block. Generate individual fixes below.</p>}
+        </div>
+      )}
+    <ul aria-label="Verification issues" className="flex min-w-0 flex-col gap-2 text-sm">
       {issues.map((issue, index) => (
-        <li key={index} className="rounded-md border border-warning/40 p-2">
+        <li key={index} className="min-w-0 rounded-md border border-warning/40 p-2">
           <p className="font-medium break-words">
             {issue.block === null ? "Whole topic" : `Block ${issue.block + 1}`} · {issue.kind}
           </p>
           <p className="break-words">{issue.detail}</p>
           <p className="text-xs break-words text-muted-foreground">Suggested fix: {issue.fix}</p>
+          {onFix && topic && <div className="mt-2">
+            <Button size="sm" variant="outline" disabled={disabled || !available.includes(issue)} onClick={() => onFix([issue])}
+              aria-label={`Generate fix for finding ${index + 1}`}>
+              Generate fix
+            </Button>
+            {!available.includes(issue) && <p className="text-xs text-muted-foreground">
+              {actionable(issue, topic) ? "This finding exceeds the 2000 character request limit." : "This finding has no actionable text or valid block in this revision."}
+            </p>}
+          </div>}
         </li>
       ))}
-      {check.escalate && issues.length === 0 && (
+      {check?.escalate && issues.length === 0 && (
         <li className="rounded-md border border-warning/40 p-2">
           The verifier could not confidently check this text
           {check.escalation_reason ? `: ${check.escalation_reason}` : "."}
         </li>
       )}
     </ul>
+      {disabledReason && onFix && <p className="text-xs text-muted-foreground">{disabledReason}</p>}
+    </div>
   );
 }
 
@@ -179,7 +230,7 @@ export function SuggestionReview({ suggestion, topic, revision, busy, onApply, o
                 ? "A fresh check of this exact text found no new problems, but a standing gap keeps the topic from being verified."
                 : "A fresh check of this exact text did not verify it."}
           </p>
-          {!suggestion.verified && <Issues check={check} blocking={suggestion.blocking} />}
+          {!suggestion.verified && <Issues check={check} issues={[...check.issues.filter((issue) => issue.severity === "major" || issue.kind === "citation" || issue.kind === "unsupported_claim"), ...suggestion.blocking]} />}
           {!suggestion.verified && (
             <p className="text-xs text-muted-foreground">
               If you apply it, the topic stays Unresolved and these issues stay visible.
@@ -221,6 +272,7 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
   const [verifyPending, setVerifyPending] = useState(false);
   const verifyPendingRef = useRef(false);
   const [starting, setStarting] = useState(false);
+  const suggestionPendingRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const topicId = topic.topic_id;
@@ -232,6 +284,10 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
     (value) => !["queued", "running"].includes(value.status),
     () => {},
     revision,
+    () => {
+      suggestionPendingRef.current = false;
+      setStarting(false);
+    },
   );
   const settledJob = useCallback(
     (job: VerificationJob) => {
@@ -252,22 +308,32 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
   const waiting = shown && ["queued", "running"].includes(shown.status);
   const checking = verifyPending || !!(job && ["queued", "running"].includes(job.status));
 
-  const ask = async () => {
+  const requestSuggestion = async (block_ids: string[], requestInstruction: string) => {
+    if (suggestionPendingRef.current || hasDraft || checking || busy ||
+      (shown && !["failed", "rejected", "applied"].includes(shown.status)) ||
+      !requestInstruction.trim() || requestInstruction.length > MAX_INSTRUCTION) return;
+    suggestionPendingRef.current = true;
     setStarting(true);
     setError(null);
     try {
       const created = await createNotesSuggestion(course, run, {
         base_revision: revision,
         topic_id: topicId,
-        block_ids: selected,
-        instruction: instruction.trim(),
+        block_ids,
+        instruction: requestInstruction.trim(),
       });
       setSuggestionId(created.id);
     } catch (err) {
       setError(errorMessage(err));
-    } finally {
+      suggestionPendingRef.current = false;
       setStarting(false);
     }
+  };
+  const ask = () => requestSuggestion(selected, instruction);
+  const generateFix = (issues: VerificationIssue[]) => {
+    if (!issues.length || issues.some((issue) => !actionable(issue, topic))) return;
+    const request = fixRequest(issues, topic);
+    void requestSuggestion(request.block_ids, request.instruction);
   };
 
   const apply = async () => {
@@ -306,7 +372,8 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
   };
 
   const verify = async () => {
-    if (verifyPendingRef.current) return;
+    if (verifyPendingRef.current || suggestionPendingRef.current || hasDraft || busy ||
+      (shown && !["failed", "rejected", "applied"].includes(shown.status))) return;
     verifyPendingRef.current = true;
     setVerifyPending(true);
     setJobId(null);
@@ -323,8 +390,18 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
 
   const toggle = (id: string, on: boolean) =>
     setSelected((prev) => (on ? [...prev.filter((x) => x !== id), id] : prev.filter((x) => x !== id)));
-  const canAsk = !hasDraft && !starting && !waiting && instruction.trim().length > 0;
+  const reviewOpen = !!shown && !["failed", "rejected", "applied"].includes(shown.status);
+  const controlsDisabled = hasDraft || checking || starting || !!waiting || reviewOpen || busy;
+  const disabledReason = hasDraft ? "Save or discard the draft first." : checking ? "Wait for the check to finish." :
+    starting || waiting ? "A suggestion is being prepared." : reviewOpen ? "Apply or reject the current suggestion first." :
+      busy ? "Wait for the current action to finish." : undefined;
+  const canAsk = !controlsDisabled && instruction.trim().length > 0;
   const noBlocks = topic.blocks.length === 0 || topic.evidence.length === 0;
+  const jobCurrent = job?.status === "done" && !job.conflict && job.topic_id === topicId &&
+    job.revision === revision && !topic.verification_stale;
+  const persistedIssues = !topic.verification_stale && !jobCurrent ? topic.open_issues : [];
+  const jobIssues = job?.verification ? [...job.verification.issues.filter((issue) => issue.severity === "major" ||
+    issue.kind === "citation" || issue.kind === "unsupported_claim"), ...job.blocking] : [];
 
   return (
     <section aria-label="AI suggestions" className="flex min-w-0 flex-col gap-3 rounded-lg border p-3">
@@ -359,7 +436,7 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
               <AlertDescription>{shown.error ?? "The request failed."} The notes are unchanged.</AlertDescription>
             </Alert>
           )}
-          <fieldset className="flex flex-col gap-1.5" disabled={hasDraft || noBlocks}>
+          <fieldset className="flex flex-col gap-1.5" disabled={controlsDisabled || noBlocks}>
             <legend className="mb-1.5 text-sm font-medium">Blocks to change</legend>
             {topic.blocks.map((block, index) => (
               <label key={block.id} className="flex items-start gap-2 text-sm">
@@ -388,7 +465,7 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
                   key={preset}
                   size="xs"
                   variant="outline"
-                  disabled={hasDraft}
+                  disabled={controlsDisabled}
                   onClick={() => setInstruction(preset)}
                 >
                   {preset}
@@ -398,18 +475,18 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
             <textarea
               id={`suggest-${topicId}`}
               value={instruction}
-              maxLength={2000}
-              disabled={hasDraft}
+              maxLength={MAX_INSTRUCTION}
+              disabled={controlsDisabled}
               onChange={(event) => setInstruction(event.target.value)}
               className="min-h-16 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button disabled={!canAsk || noBlocks} onClick={ask}>
+            <Button disabled={!canAsk || noBlocks} aria-busy={starting} onClick={ask}>
               {starting ? <Spinner /> : <SparklesIcon />}
               Request suggestion
             </Button>
-            <Button variant="outline" disabled={hasDraft || checking || noBlocks} aria-busy={checking} onClick={verify}>
+            <Button variant="outline" disabled={controlsDisabled || noBlocks} aria-busy={checking} onClick={verify}>
               {checking ? <Spinner /> : <ShieldCheckIcon />}
               Verify this topic again
             </Button>
@@ -430,6 +507,14 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
           onReject={reject}
         />
       )}
+
+      {starting && !shown && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Spinner />Preparing a suggestion. The notes are unchanged.</p>}
+
+      {persistedIssues.length > 0 && <div aria-label="Saved verification issues" className="flex flex-col gap-2 text-sm">
+        <p className="font-medium">Current saved verification findings</p>
+        <Issues issues={persistedIssues} topic={topic} onFix={generateFix} disabled={controlsDisabled || noBlocks}
+          disabledReason={disabledReason} />
+      </div>}
 
       {checking && (
         <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -463,9 +548,12 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
                   {job.verified ? "" : "The topic stays Unresolved with these issues."}
                 </span>
               </div>
+              {!jobCurrent && <p className="text-xs text-muted-foreground">This result belongs to an older revision. Refresh or verify the current topic before using its findings.</p>}
               {job.refresh_note && <p className="text-xs text-muted-foreground">{job.refresh_note}</p>}
               {!job.verified && job.verification && (
-                <Issues check={job.verification} blocking={job.blocking} />
+                <Issues check={job.verification} issues={jobIssues} topic={topic} onFix={generateFix}
+                  disabled={controlsDisabled || noBlocks || !jobCurrent}
+                  disabledReason={jobCurrent ? disabledReason : "These findings cannot be used for the current revision."} />
               )}
             </>
           )}
