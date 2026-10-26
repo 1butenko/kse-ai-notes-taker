@@ -5,6 +5,7 @@ from typing import Literal
 
 from langfuse import get_client
 
+from app.note_quality import normalized, substantive
 from app.note_structure import evidence_gap, structure_gaps
 from app.note_verification_identity import (
     TopicDraft,
@@ -37,6 +38,7 @@ from app.worker.sources import Retriever
 
 TOPIC_CANDIDATES = 24
 OTHER_CANDIDATES = 8
+MAX_SELECTED_EVIDENCE = 16
 
 
 # Evidence selection.
@@ -83,11 +85,36 @@ def candidates_for(topic: PlannedTopic, inputs: Inputs, retriever: Retriever) ->
         if source.id in topic.sources
         for chunk_id in source.chunk_ids
     }
-    found = retriever.search(query, TOPIC_CANDIDATES, own) if own else []
-    others = retriever.search(query, OTHER_CANDIDATES + len(found))
-    seen = {c.id for c in found}
-    found += [c for c in others if c.id not in seen][:OTHER_CANDIDATES]
-    return found
+    found: list[Chunk] = []
+    seen: set[str] = set()
+
+    def add(candidates: list[Chunk], limit: int) -> None:
+        for chunk in candidates:
+            if len(found) >= limit:
+                return
+            if chunk.id not in seen:
+                found.append(chunk)
+                seen.add(chunk.id)
+
+    # Reserve distinct objectives before the broad title query. Each subquery is bounded;
+    # even a long plan cannot cause more than the fixed candidate budget of searches.
+    objective_queries = list(dict.fromkeys([*topic.objectives, *topic.key_terms]))[:12]
+    if own:
+        for objective in objective_queries:
+            add(retriever.search(objective, 2, own), TOPIC_CANDIDATES)
+        add(retriever.search(query, TOPIC_CANDIDATES, own), TOPIC_CANDIDATES)
+    others: list[Chunk] = []
+    other_seen = set(seen)
+    for objective in objective_queries[:4]:
+        for chunk in retriever.search(objective, 2):
+            if chunk.id not in other_seen and len(others) < OTHER_CANDIDATES:
+                others.append(chunk)
+                other_seen.add(chunk.id)
+    for chunk in retriever.search(query, TOPIC_CANDIDATES + OTHER_CANDIDATES):
+        if chunk.id not in other_seen and len(others) < OTHER_CANDIDATES:
+            others.append(chunk)
+            other_seen.add(chunk.id)
+    return [*found, *others]
 
 
 async def select_evidence(
@@ -129,7 +156,9 @@ async def select_evidence(
             reason=choice.reason,
             text=candidates[i].text,
         )
-        for i, choice in sorted(chosen.items(), key=lambda c: (-c[1].relevance, c[0]))
+        for i, choice in sorted(chosen.items(), key=lambda c: (-c[1].relevance, c[0]))[
+            :MAX_SELECTED_EVIDENCE
+        ]
     ]
     return evidence, result.gaps
 
@@ -205,20 +234,16 @@ class TopicCheck(Strict):
 
 def is_clean(check: TopicCheck | Verification) -> bool:
     """The shared certification rule, including a final verifier's uncertainty."""
-    return (
-        check.passed
-        and not check.escalate
-        and not any(issue.severity == "major" for issue in check.issues)
-    )
+    return check.passed and not check.escalate and not any(substantive(i) for i in check.issues)
 
 
 def verification_issues(check: TopicCheck | Verification) -> list[VerificationIssue]:
-    issues = list(check.issues)
+    issues = normalized(check.issues)
     if check.escalate:
         issues.append(
             VerificationIssue(
                 block=None,
-                kind="unsupported_claim",
+                kind="clarity",
                 severity="major",
                 detail="The verifier could not confidently check this topic: "
                 + (check.escalation_reason or "no reason given"),
@@ -233,7 +258,8 @@ You verify one topic of a course's lecture notes against the evidence it was wri
 
 Check every block (B0, B1, ...):
 - Each claim, formula and example is supported by the evidence it cites; citations point at
-  evidence that says it (unsupported_claim, citation).
+  evidence that states the actual claim (unsupported_claim, citation). Related subject
+  matter or a valid evidence ID alone does not support a claim. Evidence may be missing.
 - Equations, derivations and worked examples are mathematically correct (math_error).
 - Theorems state all their assumptions (assumption).
 - Notation and terms follow the shared registry (notation).
@@ -242,9 +268,10 @@ Check every block (B0, B1, ...):
   available evidence; do not require a theorem in every topic. Missing evidence is a visible
   gap, never a reason to invent material to complete a template.
 - The explanation is clear enough for a student (clarity).
-For each problem give the block number, what is wrong and the exact fix. severity "major"
-when a student would learn something false or miss an objective; "minor" otherwise.
-passed is true only when there are no major issues. Set escalate to true, with a reason,
+For each problem give the block number, what is wrong and the exact fix. A citation or
+unsupported_claim issue is major because source support is missing; ordinary clarity and
+style issues can be minor. passed is true only when there are no major issues. Set escalate
+to true, with a reason,
 when a proof or derivation is too hard to check confidently, when sources conflict, or when
 you are unsure an error is real. Material missing from the course readings is a known gap,
 not a reason to escalate: report what it leaves unsupported as citation issues.
@@ -276,6 +303,7 @@ async def verify(
         step=step,
         spec=spec,
     )
+    check.issues = normalized(check.issues)
     majors = [i for i in check.issues if i.severity == "major"]
     check.passed = not majors and not check.escalate
     return check

@@ -79,12 +79,14 @@ function usePolled<T extends { id: string }>(
 
 /** Whether the check itself found nothing wrong, whatever else blocks "verified". */
 function checkIsClean(check: Verification) {
-  return check.passed && !check.escalate && !check.issues.some((issue) => issue.severity === "major");
+  return check.passed && !check.escalate && !check.issues.some((issue) =>
+    issue.severity === "major" || issue.kind === "citation" || issue.kind === "unsupported_claim");
 }
 
-/** The check's major issues, then the topic's standing gaps that block verification. */
+/** Substantive findings from the check, then standing gaps. */
 function Issues({ check, blocking }: { check: Verification; blocking: VerificationIssue[] }) {
-  const issues = [...check.issues.filter((issue) => issue.severity === "major"), ...blocking];
+  const issues = [...check.issues.filter((issue) => issue.severity === "major" ||
+    issue.kind === "citation" || issue.kind === "unsupported_claim"), ...blocking];
   return (
     <ul aria-label="Verification issues" className="flex flex-col gap-2 text-sm">
       {issues.map((issue, index) => (
@@ -130,6 +132,7 @@ export function SuggestionReview({ suggestion, topic, revision, busy, onApply, o
   const outdated = suggestion.current_revision !== revision || !suggestion.compatible;
   const change = diffTopic(topic, { ...topic, blocks: suggestion.proposed_blocks });
   const check = suggestion.verification;
+  const unsafe = suggestion.unsafe_citations ?? [];
   return (
     <section aria-label="Suggestion review" className="flex min-w-0 flex-col gap-3 rounded-lg border p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -150,6 +153,15 @@ export function SuggestionReview({ suggestion, topic, revision, busy, onApply, o
           <AlertDescription>
             The suggestion is for revision {suggestion.base_revision}, but it cannot be applied
             to revision {revision}. Reject it and ask again.
+          </AlertDescription>
+        </Alert>
+      )}
+      {unsafe.length > 0 && (
+        <Alert className="border-warning/40">
+          <CircleAlertIcon className="text-warning" />
+          <AlertTitle>Changed blocks cite unsupported sources</AlertTitle>
+          <AlertDescription>
+            Refresh the topic&apos;s evidence with Verify this topic again, or request another suggestion.
           </AlertDescription>
         </Alert>
       )}
@@ -176,7 +188,7 @@ export function SuggestionReview({ suggestion, topic, revision, busy, onApply, o
         </div>
       )}
       <div className="flex flex-wrap gap-2">
-        <Button disabled={busy || outdated} onClick={onApply}>
+        <Button disabled={busy || outdated || unsafe.length > 0} onClick={onApply}>
           {busy ? <Spinner /> : <CheckIcon />}
           Apply suggestion
         </Button>
@@ -451,6 +463,7 @@ export function AiAssist({ course, run, revision, topic, hasDraft, refresh }: As
                   {job.verified ? "" : "The topic stays Unresolved with these issues."}
                 </span>
               </div>
+              {job.refresh_note && <p className="text-xs text-muted-foreground">{job.refresh_note}</p>}
               {!job.verified && job.verification && (
                 <Issues check={job.verification} blocking={job.blocking} />
               )}

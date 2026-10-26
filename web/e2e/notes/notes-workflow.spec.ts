@@ -652,7 +652,7 @@ test("saved and restored revisions get their own ready HTML/PDF artifacts", asyn
   expect(mockRequests().length, "save, restore and retry never call a model").toBe(calls);
 });
 
-type SuggestionRecord = { id: string; status: string; topic_id: string };
+type SuggestionRecord = { id: string; status: string; topic_id: string; proposed_blocks: Block[] };
 
 /** The worker's own records of suggestions: the one place that shows a rejected proposal. */
 function suggestionRecords(run: string): SuggestionRecord[] {
@@ -1249,6 +1249,21 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   await expect(iframe).toHaveAttribute("sandbox", "allow-scripts");
   await expect(iframe).toHaveAttribute("src", current);
   const frame = page.frameLocator('iframe[title="Course book"]');
+  const inner = page.frames().find((candidate) => candidate !== page.mainFrame())!;
+  const waitForBookDocument = async () => {
+    await inner.waitForLoadState("load");
+    await inner.waitForFunction(() => {
+      const script = document.querySelector('script[src*="mathjax"]');
+      return !script || !!(window as unknown as { MathJax?: { startup?: { promise?: Promise<unknown> } } }).MathJax?.startup?.promise;
+    });
+    await inner.evaluate(async () => {
+      const mathjax = (window as unknown as { MathJax?: { startup?: { promise?: Promise<unknown> } } }).MathJax;
+      await mathjax?.startup?.promise;
+      await document.fonts.ready;
+    });
+  };
+  await expect.poll(() => inner.url()).toContain(current);
+  await waitForBookDocument();
   await frame.locator(".quarto-search-button").click();
   await frame.locator(".aa-Input").fill("Власний вектор");
   await expect(frame.locator(".aa-Panel a").first()).toBeVisible();
@@ -1257,6 +1272,8 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   await capture(page, testInfo, "desktop-course-book-search");
   await frame.locator(".aa-Panel a").first().click();
   await expect(iframe).toHaveAttribute("src", current); // iframe element retains its entry URL
+  await expect.poll(() => inner.url()).toContain(`${current}topic-T2.html`);
+  await waitForBookDocument();
   await expect(frame.getByText("Книжковий маркер ревізії")).toBeVisible();
   await expect(frame.getByText("Цю ревізію теми ще не підтверджено перевіркою.")).toBeVisible();
   await expect(frame.locator(".callout-caution li:empty")).toHaveCount(0);
@@ -1271,29 +1288,38 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
   });
   expect(glyph).toBe('"A"');
   await capture(page, testInfo, "desktop-course-book-chapter");
-  const inner = page.frames().find((f) => f !== page.mainFrame())!;
   expect(inner.url()).toContain(`${current}topic-T2.html`);
   await frame.getByRole("link", { name: "Topic T1" }).click();
   await expect.poll(() => inner.url()).toContain(`${current}topic-T1.html#sec-T1`);
+  await waitForBookDocument();
   await frame.locator('.nav-page-next a').click();
   await expect.poll(() => inner.url()).toContain(`${current}topic-T2.html`);
+  await waitForBookDocument();
   await frame.getByRole("link", { name: "до першої теми" }).click();
   await expect.poll(() => inner.url()).toContain(`${current}topic-T1.html#sec-T1`);
+  await waitForBookDocument();
   await frame.locator('.nav-page-next a').click();
+  await expect.poll(() => inner.url()).toContain(`${current}topic-T2.html`);
+  await waitForBookDocument();
   const equationLink = frame.locator('a.quarto-xref[href$="topic-T1.html#eq-t1-sarrus"]');
   await expect(equationLink).toContainText(/Рівняння\s*2\./);
   expect(new URL((await equationLink.getAttribute("href"))!, inner.url()).href)
     .toBe(`${current}topic-T1.html#eq-t1-sarrus`);
   await equationLink.click();
   await expect.poll(() => inner.url()).toContain(`${current}topic-T1.html#eq-t1-sarrus`);
+  await waitForBookDocument();
   await frame.locator('a[role="doc-biblioref"]').first().click();
   await expect.poll(() => inner.url()).toContain(`${current}references.html#ref-src-`);
+  await waitForBookDocument();
   await frame.locator('.nav-page-previous a').click();
   await expect.poll(() => inner.url()).toContain(`${current}topic-T2.html`);
+  await waitForBookDocument();
   await frame.locator('.nav-page-previous a').click();
   await expect.poll(() => inner.url()).toContain(`${current}topic-T1.html`);
+  await waitForBookDocument();
   await frame.locator('.nav-page-previous a').click();
   await expect.poll(() => new URL(inner.url()).pathname).toMatch(/\/book\/(?:index\.html)?$/);
+  await waitForBookDocument();
   await expect(frame.locator("h1").first()).toBeVisible();
   await capture(page, testInfo, "desktop-course-book-home");
   expect(errors).toEqual([]);
@@ -1345,4 +1371,76 @@ test("Course book search from one revision", async ({ page, request }, testInfo)
     await (window as unknown as { MathJax?: { startup?: { promise?: Promise<unknown> } } }).MathJax?.startup?.promise;
   });
   await capture(page, testInfo, "mobile-390-course-book-chapter");
+});
+
+test("cached source warning is visible, Verify explains refresh, and corrected citation applies", async ({ page, request }) => {
+  const run = await generated(request);
+  const before = await head(request, run);
+  const targetId = "T1.1";
+  expect(topic(before.document, "T1").blocks.some((block) => block.id === targetId)).toBe(true);
+  await openEditor(page, run, "T1");
+  const ai = page.getByRole("region", { name: "AI suggestions" });
+  const review = page.getByRole("region", { name: "Suggestion review" });
+  let seeded = false;
+  let seededId: string | null = null;
+  await page.route("**/suggestions/*", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const shown = await response.json();
+    if (shown.status === "ready" && !seeded) {
+      seeded = true;
+      seededId = shown.id;
+      const record = path.join(stack.uploads, COURSE, "notes", run, "suggestions", `${shown.id}.json`);
+      const saved = JSON.parse(fs.readFileSync(record, "utf8"));
+      const changed = saved.replacements[0].id;
+      const index = saved.proposed_blocks.findIndex((block: Block) => block.id === changed);
+      saved.verification.issues.push({
+        block: index, kind: "citation", severity: "minor",
+        detail: "This cited excerpt does not support the changed claim.",
+        fix: "Use an excerpt that states the claim.",
+      });
+      saved.verification.passed = true;
+      saved.verified = true;
+      fs.writeFileSync(record, JSON.stringify(saved));
+      return route.fulfill({ response: await route.fetch() });
+    }
+    return route.fulfill({ response });
+  });
+
+  await ai.getByLabel(/^Select block \d+ \(T1\.1\)$/).check();
+  await ai.getByRole("button", { name: "Explain this more simply" }).click();
+  await ai.getByRole("button", { name: "Request suggestion" }).click();
+  await expect(review).toBeVisible({ timeout: 60_000 });
+  await expect(review).toContainText("This cited excerpt does not support the changed claim.");
+  await expect(review).toContainText("Changed blocks cite unsupported sources");
+  await expect(review.getByRole("button", { name: "Apply suggestion" })).toBeDisabled();
+  expect(seededId).not.toBeNull();
+  const refused = await request.post(notesUrl(run, `/suggestions/${seededId}/apply`), {
+    data: { base_revision: before.current_revision },
+  });
+  expect(refused.status()).toBe(422);
+  expect((await head(request, run)).current_revision).toBe(before.current_revision);
+  await review.getByRole("button", { name: "Reject suggestion" }).click();
+  await page.unroute("**/suggestions/*");
+
+  await ai.getByRole("button", { name: "Verify this topic again" }).click();
+  const result = ai.getByRole("group", { name: "Verification result" });
+  await expect(result).toBeVisible({ timeout: 60_000 });
+  await expect(result).toContainText(/excerpt.*frozen|frozen.*excerpt|No new excerpt/);
+  const checked = await head(request, run);
+  expect(topic(checked.document, "T1").blocks).toEqual(topic(before.document, "T1").blocks);
+
+  await ai.getByRole("button", { name: "Request suggestion" }).click();
+  await expect(review).toBeVisible({ timeout: 60_000 });
+  await expect(review).toContainText("Verified against the sources");
+  const corrected = suggestionRecords(run)
+    .filter((record) => record.status === "ready")
+    .sort((left, right) => left.id.localeCompare(right.id)).at(-1)!;
+  const checkedTarget = topic(checked.document, "T1").blocks.find((block) => block.id === targetId);
+  const correctedTarget = corrected.proposed_blocks.find((block) => block.id === targetId);
+  expect(checkedTarget?.citations.length).toBeGreaterThan(0);
+  expect(correctedTarget?.citations).toEqual(checkedTarget?.citations);
+  await review.getByRole("button", { name: "Apply suggestion" }).click();
+  await expect(page.getByText(/Applied as revision/)).toBeVisible();
+  expect(topic((await head(request, run)).document, "T1").status).toBe("verified");
 });

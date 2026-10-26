@@ -40,6 +40,7 @@ from app.notes_revisions import (
     RevisionStore,
     RevisionView,
     TopicPatch,
+    find_topic,
 )
 from app.notes_suggestions import (
     NoteSuggestion,
@@ -303,7 +304,10 @@ def get_suggestion(
     try:
         record = read_suggestion(store.directory, suggestion)
         head = store.head_revision()
-        return record.public(head, compatible_revision(store, record, head))
+        base_note = find_topic(store.read(record.base_revision).document, record.topic_id)
+        if base_note is None:
+            raise RevisionNotFound("Topic not found")
+        return record.public(head, compatible_revision(store, record, head), base_note.blocks)
     except (RevisionNotFound, OSError, ValueError) as error:
         raise HTTPException(404, "Suggestion not found") from error
 

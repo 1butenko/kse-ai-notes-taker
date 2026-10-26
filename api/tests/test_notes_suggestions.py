@@ -13,7 +13,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.note_structure import evidence_gap, topic_structure_issues
-from app.notes import NotationEntry, NoteBlock, NotesRun
+from app.note_verification_identity import verification_inputs
+from app.notes import (
+    Chunk,
+    CoursePlan,
+    EvidenceItem,
+    Inputs,
+    NotationEntry,
+    NoteBlock,
+    NotesRun,
+    PlannedTopic,
+    Source,
+    VerificationIssue,
+)
 from app.notes_revisions import (
     InvalidEdit,
     RevisionConflict,
@@ -29,6 +41,8 @@ from app.notes_suggestions import (
     write_suggestion,
     write_verification_job,
 )
+from app.plan import Plan, PlanSession, Proposal
+from app.syllabus import Session, Transcript
 from app.worker.config import WorkerSettings
 from app.worker.main import app as worker_app
 from app.worker.note_suggestions import (
@@ -37,12 +51,17 @@ from app.worker.note_suggestions import (
     create_suggestion,
     create_verification,
     fail_interrupted_jobs,
+    refresh_inputs,
     reject_suggestion,
     run_suggestion,
     run_verification,
     transition,
 )
+from app.worker.notes import GenerationProvenance, input_fingerprint, inputs_digest
 from app.worker.openrouter import get_openrouter_client, get_openrouter_opener
+from app.worker.sources import Retriever, build_inputs
+from app.worker.topics import candidates_for, page_of
+from tests.test_notes import text_pdf
 from tests.test_notes_revisions import (
     PROCESSES,
     blocks_of,
@@ -74,6 +93,7 @@ class Model:
         self.prompts: list[str] = []
         self.suggestion: dict | Callable[[], dict] = {"replacements": [], "insertions": []}
         self.verification: dict | list[dict] = CLEAN
+        self.selection: dict = {"selected": [], "gaps": []}
         self.during_check: Callable[[], None] | None = None
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
@@ -89,6 +109,8 @@ class Model:
             answer = self.verification
             if isinstance(answer, list):
                 answer = answer.pop(0)
+        elif name == "evidence_selection":
+            answer = self.selection
         else:
             return httpx2.Response(500, json={"error": {"message": f"Unexpected {name}"}})
         return httpx2.Response(
@@ -156,6 +178,689 @@ def made(client, **kwargs) -> dict:
 
 def topic_of(directory: Path, topic: int = 0):
     return RevisionStore(directory).current().document.sections[0].topics[topic]
+
+
+def frozen_f3_run(saved_run):
+    directory, document = saved_run
+    source = document.sources[0]
+    source.file = "1/private.pdf"
+    source.pdf_start = source.pdf_end = None
+    source.chunk_ids.append("definition")
+    (directory.parent.parent / "private.pdf").write_bytes(b"frozen synthetic source")
+    inputs = Inputs(
+        sources=[source.model_copy(deep=True)],
+        chunks=[
+            Chunk(
+                id="c1", source=1, file=source.file, pdf_page=10, printed_page="10", text="Private"
+            ),
+            Chunk(
+                id="c2", source=1, file=source.file, pdf_page=11, printed_page="11", text="Private"
+            ),
+            Chunk(
+                id="definition",
+                source=1,
+                file=source.file,
+                pdf_page=51,
+                printed_page="42",
+                text="The transpose of an n by m matrix is m by n; rows become columns.",
+            ),
+        ],
+        skipped=[],
+    )
+    plan = Plan(sessions=[PlanSession(id="s1", label="One", number=1, files=[source.file])])
+    transcript = Transcript(
+        language="en",
+        learning_materials=[],
+        sessions=[
+            Session(
+                label="One",
+                number=1,
+                date=None,
+                topic="Matrices",
+                subtopics=[],
+                required_readings=[],
+                optional_readings=[],
+            ),
+        ],
+        notes=None,
+        source_path="1/syllabus.pdf",
+        source_sha256="synthetic",
+        model="synthetic",
+        created_at="2026-10-25",
+    )
+    generated, _, _ = verification_inputs(directory, document, document.sections[0].topics[0])
+    generated.sections[0].topics[0].sources = [1]
+    generated.sections[0].topics[0].key_terms = ["transpose"]
+    generated.sections[0].topics[0].objectives = ["Define the transpose dimension rule"]
+    (directory / "plan.json").write_text(generated.model_dump_json())
+    (directory / "inputs.json").write_text(inputs.model_dump_json())
+    (directory / "provenance.json").write_text(
+        GenerationProvenance(
+            fingerprint=input_fingerprint(directory.parent.parent, plan, transcript),
+            inputs_sha256=inputs_digest(inputs),
+            plan=plan,
+            transcript=transcript,
+        ).model_dump_json()
+    )
+    (directory / "notes.json").write_text(document.model_dump_json())
+    return directory, document
+
+
+def overlapping_f3_run(saved_run, duplicate_path=False):
+    """Exercise build_inputs' real global chunk dedup for overlapping PDF excerpts."""
+    directory, document = saved_run
+    course = directory.parent.parent
+    text_pdf(
+        course / "book.pdf",
+        [
+            "First page defines matrix addition.",
+            "Shared page defines matrix transpose and its dimensions.",
+            "Third page illustrates a matrix example.",
+        ],
+    )
+    book = "1/book.pdf"
+    second_book = "1/clone.pdf" if duplicate_path else book
+    if duplicate_path:
+        (course / "clone.pdf").write_bytes((course / "book.pdf").read_bytes())
+    excerpts = ["1/a.pdf", "1/b.pdf"]
+    plan = Plan(
+        sessions=[
+            PlanSession(id=f"s{i}", label=f"Week {i}", number=i, files=[excerpts[i - 1]])
+            for i in (1, 2)
+        ],
+        proposals=[
+            Proposal(
+                id=f"p{i}",
+                session_id=f"s{i}",
+                reading="Book",
+                book=book if i == 1 else second_book,
+                label=f"Range {i}",
+                pdf_start=i,
+                pdf_end=i + 1,
+                printed=None,
+                method="pages",
+                status="approved",
+                excerpt=excerpts[i - 1],
+            )
+            for i in (1, 2)
+        ],
+    )
+    transcript = Transcript(
+        language="en",
+        learning_materials=[],
+        sessions=[
+            Session(
+                label=f"Week {i}",
+                number=i,
+                date=None,
+                topic="Matrices",
+                subtopics=[],
+                required_readings=[],
+                optional_readings=[],
+            )
+            for i in (1, 2)
+        ],
+        notes=None,
+        source_path="1/syllabus.pdf",
+        source_sha256="synthetic",
+        model="synthetic",
+        created_at="2026-10-25",
+    )
+    inputs = build_inputs(course.parent, course, plan, transcript)
+    shared = next(iter(set(inputs.sources[0].chunk_ids) & set(inputs.sources[1].chunk_ids)))
+    chunk = next(c for c in inputs.chunks if c.id == shared)
+    assert chunk.source == inputs.sources[0].id and chunk.pdf_page == 2
+    document.sources = [s.model_copy(deep=True) for s in inputs.sources]
+    note = document.sections[0].topics[0]
+    note.evidence = [
+        EvidenceItem(
+            chunk_id=shared,
+            source=chunk.source,
+            title=inputs.sources[0].title,
+            page=page_of(chunk),
+            role="definition",
+            relevance=5,
+            reason="Shared page",
+            text=chunk.text,
+        )
+    ]
+    note.blocks[0].citations = [shared]
+    generated, _, _ = verification_inputs(directory, document, note)
+    generated.sections[0].topics[0].sources = [0, 1]
+    generated.sections[0].topics[0].key_terms = ["transpose"]
+    (directory / "plan.json").write_text(generated.model_dump_json())
+    (directory / "inputs.json").write_text(inputs.model_dump_json())
+    (directory / "provenance.json").write_text(
+        GenerationProvenance(
+            fingerprint=input_fingerprint(course, plan, transcript),
+            inputs_sha256=inputs_digest(inputs),
+            plan=plan,
+            transcript=transcript,
+        ).model_dump_json()
+    )
+    (directory / "notes.json").write_text(document.model_dump_json())
+    return directory, document, inputs, shared
+
+
+def test_f3_overlapping_excerpt_inventory_is_valid(saved_run):
+    directory, document, inputs, shared = overlapping_f3_run(saved_run)
+    assert shared in inputs.sources[0].chunk_ids and shared in inputs.sources[1].chunk_ids
+    assert refresh_inputs(directory, document, document.sections[0].topics[0]) is not None
+
+
+def test_f3_byte_identical_uploads_share_a_valid_chunk(saved_run):
+    directory, document, inputs, shared = overlapping_f3_run(saved_run, duplicate_path=True)
+    assert inputs.sources[0].file != inputs.sources[1].file
+    assert shared in inputs.sources[1].chunk_ids
+    assert refresh_inputs(directory, document, document.sections[0].topics[0]) is not None
+
+
+@pytest.mark.parametrize(
+    "corruption", ["cross_file", "different_upload", "wrong_range", "missing_owner"]
+)
+def test_f3_overlapping_excerpt_rejects_invalid_membership(saved_run, corruption):
+    directory, document, inputs, shared = overlapping_f3_run(saved_run)
+    provenance = GenerationProvenance.model_validate_json(
+        (directory / "provenance.json").read_text()
+    )
+    if corruption == "cross_file":
+        next(c for c in inputs.chunks if c.id == shared).file = "1/another.pdf"
+    elif corruption == "different_upload":
+        text_pdf(
+            directory.parent.parent / "different.pdf",
+            ["Other first page.", "Other second page.", "Other third page."],
+        )
+        inputs.sources[1].file = "1/different.pdf"
+        provenance.plan.proposals[1].book = "1/different.pdf"
+        provenance.fingerprint = input_fingerprint(
+            directory.parent.parent, provenance.plan, provenance.transcript
+        )
+    elif corruption == "wrong_range":
+        inputs.sources[1].pdf_start = 3
+    else:
+        inputs.sources[0].chunk_ids.remove(shared)
+    document.sources = [s.model_copy(deep=True) for s in inputs.sources]
+    (directory / "notes.json").write_text(document.model_dump_json())
+    (directory / "inputs.json").write_text(inputs.model_dump_json())
+    provenance.inputs_sha256 = inputs_digest(inputs)
+    (directory / "provenance.json").write_text(provenance.model_dump_json())
+
+    with pytest.raises(InvalidEdit, match="inventory|evidence"):
+        refresh_inputs(directory, document, document.sections[0].topics[0])
+
+
+def test_f3_retrieval_reserves_distinct_objective_evidence():
+    broad_terms = (
+        "matrix operations rows columns eigenvalues determinants linear systems "
+        + " ".join(f"backgroundterm{i}" for i in range(20))
+    )
+    broad = [
+        Chunk(
+            id=f"b{i}", source=0, file="book", pdf_page=i + 1, printed_page=None, text=broad_terms
+        )
+        for i in range(40)
+    ]
+    unrelated = [
+        Chunk(
+            id=f"z{i}",
+            source=0,
+            file="book",
+            pdf_page=i + 60,
+            printed_page=None,
+            text="Unrelated vector space proof",
+        )
+        for i in range(100)
+    ]
+    transpose = Chunk(
+        id="definition",
+        source=0,
+        file="book",
+        pdf_page=51,
+        printed_page="42",
+        text="The transpose of an n by m matrix is an m by n matrix: its rows become columns.",
+    )
+    distractor = Chunk(
+        id="permutation",
+        source=1,
+        file="other",
+        pdf_page=2,
+        printed_page=None,
+        text="A transposition swaps two elements of a permutation.",
+    )
+    chunks = [*broad, *unrelated, transpose, distractor]
+    inputs = Inputs(
+        sources=[
+            Source(
+                id=0,
+                file="book",
+                title="Book",
+                label=None,
+                pdf_start=None,
+                pdf_end=None,
+                sessions=[],
+                outline=[],
+                chunk_ids=[c.id for c in [*broad, *unrelated, transpose]],
+            ),
+            Source(
+                id=1,
+                file="other",
+                title="Other",
+                label=None,
+                pdf_start=None,
+                pdf_end=None,
+                sessions=[],
+                outline=[],
+                chunk_ids=[distractor.id],
+            ),
+        ],
+        chunks=chunks,
+        skipped=[],
+    )
+    topic = PlannedTopic(
+        id="T1",
+        title=broad_terms,
+        sessions=[],
+        objectives=[
+            "Explain matrix rows and columns",
+            "Define the transpose of a matrix and its dimensions",
+        ],
+        success_criteria=[],
+        prerequisites=[],
+        sources=[0],
+        key_terms=["matrix", "transpose"],
+    )
+
+    retriever = Retriever(chunks)
+    old_query = " ".join([topic.title, *topic.key_terms, *topic.objectives])
+    assert "definition" not in {
+        c.id for c in retriever.search(old_query, 24, set(inputs.sources[0].chunk_ids))
+    }
+    found = candidates_for(topic, inputs, retriever)
+
+    assert len(found) <= 32
+    assert len({c.id for c in found}) == len(found)
+    assert "definition" in {c.id for c in found}
+    assert "permutation" not in {c.id for c in found[:24]}
+
+
+def test_f3_minor_unsupported_changed_block_refused(clean_run, client, model):
+    directory, _ = clean_run
+    model.suggestion = {
+        "replacements": [replace("T1.1", "Transpose changes dimensions.")],
+        "insertions": [],
+    }
+    model.verification = {
+        "passed": True,
+        "issues": [
+            {
+                "block": 0,
+                "kind": "citation",
+                "severity": "minor",
+                "detail": "The cited source only describes multiplication, not transpose.",
+                "fix": "Add a source that defines transpose.",
+            }
+        ],
+        "escalate": False,
+        "escalation_reason": None,
+    }
+
+    proposal = made(client)
+
+    assert proposal["status"] == "failed"
+    assert "transpose" in proposal["error"].lower()
+    assert RevisionStore(directory).head_revision() == 0
+
+
+def test_f3_verify_refreshes_frozen_evidence_without_rewriting_authored_blocks(
+    saved_run, client, model
+):
+    directory, document = frozen_f3_run(saved_run)
+    model.selection = {
+        "selected": [
+            {
+                "candidate": 0,
+                "role": "definition",
+                "relevance": 5,
+                "reason": "Defines transpose and its dimensions.",
+            }
+        ],
+        "gaps": [],
+    }
+    model.verification = {
+        "passed": True,
+        "issues": [
+            {
+                "block": 0,
+                "kind": "citation",
+                "severity": "minor",
+                "detail": "The old citation does not define transpose.",
+                "fix": "Cite the definition excerpt.",
+            }
+        ],
+        "escalate": False,
+        "escalation_reason": None,
+    }
+    store = RevisionStore(directory)
+    store.commit_topic("T1", TopicPatch(**patch_for(document, "The transpose changes dimensions.")))
+    before = store.current().document.sections[0].topics[0]
+
+    started = client.post(url("/topics/T1/verify"), json={"base_revision": 1})
+    job = client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+
+    assert job["status"] == "done" and job["revision"] == 2
+    assert job["verified"] is False
+    assert job["refresh_note"].startswith("Added 1 excerpt")
+    after = topic_of(directory)
+    assert after.blocks == before.blocks
+    assert [e.chunk_id for e in after.evidence] == ["c1", "definition"]
+    assert after.evidence[0] == before.evidence[0]
+    assert [i.detail for i in after.open_issues] == ["The old citation does not define transpose."]
+    assert after.open_issues[0].severity == "major"
+    assert "No excerpt proves the claim" not in [i.detail for i in after.open_issues]
+
+    model.suggestion = {
+        "replacements": [replace("T1.1", "The transpose is m by n.", (1,))],
+        "insertions": [],
+    }
+    model.verification = CLEAN
+    proposal = made(client, base=2)
+    assert proposal["status"] == "ready" and proposal["verified"] is True
+    applied = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 2})
+    assert applied.status_code == 200
+    assert topic_of(directory).status == "verified"
+    assert topic_of(directory).blocks[0].citations == ["definition"]
+
+
+def test_f3_cached_ready_minor_source_issue_blocks_apply_without_revision_conflict(
+    clean_run, client, model
+):
+    directory, _ = clean_run
+    model.suggestion = {"replacements": [replace("T1.1", "New claim.")], "insertions": []}
+    proposal = made(client)
+    record = read_suggestion(directory, proposal["id"])
+    record.verification.issues.append(
+        VerificationIssue(
+            block=0,
+            kind="citation",
+            severity="minor",
+            detail="No source supports this claim.",
+            fix="Cite a supporting excerpt.",
+        )
+    )
+    record.verification.passed = True
+    record.verified = True
+    write_suggestion(directory, record)
+
+    shown = client.get(url(f"/suggestions/{proposal['id']}")).json()
+    assert shown["status"] == "ready" and shown["compatible"] is True
+    assert shown["verified"] is False and shown["unsafe_citations"][0]["block"] == 0
+    response = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0})
+    assert response.status_code == 422 and "unsupported citations" in response.text
+    assert RevisionStore(directory).head_revision() == 0
+
+
+def test_f3_unchanged_source_issue_visible_but_scoped_improvement_applies(clean_run, client, model):
+    directory, _ = clean_run
+    model.suggestion = {
+        "replacements": [replace("T1.1", "Clearer supported claim.")],
+        "insertions": [],
+    }
+    model.verification = {
+        "passed": True,
+        "issues": [
+            {
+                "block": 1,
+                "kind": "citation",
+                "severity": "minor",
+                "detail": "The unchanged summary lacks support.",
+                "fix": "Add a summary source.",
+            }
+        ],
+        "escalate": False,
+        "escalation_reason": None,
+    }
+    proposal = made(client)
+    assert proposal["status"] == "ready" and proposal["verified"] is False
+    assert proposal["unsafe_citations"] == []
+    assert proposal["verification"]["issues"][0]["severity"] == "major"
+    applied = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0})
+    assert applied.status_code == 200
+    assert topic_of(directory).status == "unresolved"
+    assert topic_of(directory).open_issues[0].detail == "The unchanged summary lacks support."
+
+
+def test_f3_minor_clarity_remains_nonblocking(clean_run, client, model):
+    model.suggestion = {"replacements": [replace("T1.1", "Clearer version.")], "insertions": []}
+    model.verification = {
+        "passed": True,
+        "issues": [
+            {
+                "block": 0,
+                "kind": "clarity",
+                "severity": "minor",
+                "detail": "Could be shorter.",
+                "fix": "Shorten this sentence.",
+            }
+        ],
+        "escalate": False,
+        "escalation_reason": None,
+    }
+    proposal = made(client)
+    assert proposal["status"] == "ready" and proposal["verified"] is True
+
+
+def test_f3_empty_selection_cannot_erase_gap(saved_run, client, model):
+    directory, _ = frozen_f3_run(saved_run)
+    model.selection = {"selected": [], "gaps": []}
+    started = client.post(url("/topics/T1/verify"), json={"base_revision": 0})
+    job = client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+    assert job["status"] == "done" and job["verified"] is False
+    assert "No new excerpt" in job["refresh_note"]
+    assert [e.chunk_id for e in topic_of(directory).evidence] == ["c1"]
+    assert [i.detail for i in topic_of(directory).open_issues] == ["No excerpt proves the claim"]
+
+
+def test_f3_old_only_selection_records_new_gap_before_clean_verifier(clean_run, client, model):
+    directory, _ = frozen_f3_run(clean_run)
+    inputs = Inputs.model_validate_json((directory / "inputs.json").read_text())
+    planned = CoursePlan.model_validate_json((directory / "plan.json").read_text())
+    _, topic = next((s, t) for s, t in planned.topics() if t.id == "T1")
+    topic.key_terms = ["Private", "transpose"]
+    (directory / "plan.json").write_text(planned.model_dump_json())
+    old_index = next(
+        i
+        for i, chunk in enumerate(candidates_for(topic, inputs, Retriever(inputs.chunks)))
+        if chunk.id == "c1"
+    )
+    model.selection = {
+        "selected": [
+            {
+                "candidate": old_index,
+                "role": "background",
+                "relevance": 3,
+                "reason": "Existing evidence.",
+            }
+        ],
+        "gaps": ["The selected excerpts do not define transpose."],
+    }
+    model.verification = CLEAN
+
+    started = client.post(url("/topics/T1/verify"), json={"base_revision": 0})
+    job = client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+
+    assert job["status"] == "done" and job["verified"] is False
+    assert [i["detail"] for i in job["blocking"]] == [
+        "The selected excerpts do not define transpose."
+    ]
+    assert topic_of(directory).status == "unresolved"
+    assert [e.chunk_id for e in topic_of(directory).evidence] == ["c1"]
+    assert [i.detail for i in topic_of(directory).open_issues] == [
+        "The selected excerpts do not define transpose."
+    ]
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_f3_noop_replacement_with_real_edit_keeps_existing_issue_scoped(
+    clean_run, client, model, cached
+):
+    directory, _ = clean_run
+    original = topic_of(directory)
+    first = original.blocks[0]
+    model.suggestion = {
+        "replacements": [
+            {
+                "block_id": first.id,
+                "kind": first.kind,
+                "title": first.title,
+                "content": first.content,
+                "citations": [0],
+            },
+            replace("T1.2", "A supported new summary.", (), kind="summary"),
+        ],
+        "insertions": [],
+    }
+    finding = {
+        "block": 0,
+        "kind": "citation",
+        "severity": "minor",
+        "detail": "The old first block cites an unrelated excerpt.",
+        "fix": "Correct that block separately.",
+    }
+    if not cached:
+        model.verification = {
+            "passed": True,
+            "issues": [finding],
+            "escalate": False,
+            "escalation_reason": None,
+        }
+    proposal = made(client, block_ids=("T1.1", "T1.2"))
+    if cached:
+        record = read_suggestion(directory, proposal["id"])
+        assert record.verification is not None
+        record.verification.issues.append(VerificationIssue.model_validate(finding))
+        record.verification.passed = True
+        record.verified = True
+        write_suggestion(directory, record)
+        proposal = client.get(url(f"/suggestions/{proposal['id']}")).json()
+
+    assert proposal["status"] == "ready"
+    assert proposal["verified"] is False and proposal["unsafe_citations"] == []
+    applied = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0})
+    assert applied.status_code == 200
+    assert topic_of(directory).blocks[0] == first
+    assert topic_of(directory).blocks[1].content == "A supported new summary."
+    assert topic_of(directory).status == "unresolved"
+    assert topic_of(directory).open_issues[0].detail == finding["detail"]
+
+
+def test_f3_corrupt_frozen_context_leaves_notes_unchanged(saved_run, client, model):
+    directory, _ = frozen_f3_run(saved_run)
+    provenance = json.loads((directory / "provenance.json").read_text())
+    provenance["plan"]["sessions"][0]["files"] = ["../../outside.pdf"]
+    (directory / "provenance.json").write_text(json.dumps(provenance))
+    before = files(directory)
+    started = client.post(url("/topics/T1/verify"), json={"base_revision": 0})
+    job = client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+    assert job["status"] == "failed" and "provenance" in job["error"]
+    assert RevisionStore(directory).head_revision() == 0
+    assert topic_of(directory).evidence == saved_run[1].sections[0].topics[0].evidence
+    assert (directory / "notes.json").read_bytes() == before["notes.json"]
+    assert model.calls == []
+
+
+@pytest.mark.parametrize("corruption", ["inputs_digest", "source_registry", "symlink"])
+def test_f3_refresh_rejects_tampered_sources(saved_run, client, model, corruption):
+    directory, document = frozen_f3_run(saved_run)
+    if corruption == "inputs_digest":
+        inputs = json.loads((directory / "inputs.json").read_text())
+        inputs["chunks"][-1]["text"] = "tampered definition"
+        (directory / "inputs.json").write_text(json.dumps(inputs))
+    elif corruption == "source_registry":
+        document.sources[0].title = "changed title"
+        (directory / "notes.json").write_text(document.model_dump_json())
+    else:
+        source = directory.parent.parent / "private.pdf"
+        target = directory.parent.parent / "real.pdf"
+        target.write_bytes(source.read_bytes())
+        source.unlink()
+        source.symlink_to(target)
+    before = (directory / "notes.json").read_bytes()
+
+    started = client.post(url("/topics/T1/verify"), json={"base_revision": 0})
+    job = client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+    assert job["status"] == "failed" and job["revision"] is None
+    assert RevisionStore(directory).head_revision() == 0
+    assert (directory / "notes.json").read_bytes() == before
+    assert model.calls == []
+
+
+def test_f3_refresh_invalidates_prior_f1_candidate(saved_run, client, model):
+    directory, _ = frozen_f3_run(saved_run)
+    model.suggestion = {"replacements": [replace("T1.1", "Supported edit.")], "insertions": []}
+    proposal = made(client)
+    assert proposal["status"] == "ready" and proposal["compatible"] is True
+    model.selection = {
+        "selected": [
+            {"candidate": 0, "role": "definition", "relevance": 5, "reason": "Definition."}
+        ],
+        "gaps": [],
+    }
+    started = client.post(url("/topics/T1/verify"), json={"base_revision": 0})
+    job = client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+    assert job["revision"] == 1
+    assert [e.chunk_id for e in topic_of(directory).evidence] == ["c1", "definition"]
+    shown = client.get(url(f"/suggestions/{proposal['id']}")).json()
+    assert shown["compatible"] is False
+    applied = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0})
+    assert applied.status_code == 409
+
+
+def test_f3_concurrent_edit_rejects_refreshed_check(saved_run, client, model):
+    directory, document = frozen_f3_run(saved_run)
+    model.selection = {
+        "selected": [
+            {"candidate": 0, "role": "definition", "relevance": 5, "reason": "Definition."}
+        ],
+        "gaps": [],
+    }
+    store = RevisionStore(directory)
+
+    def edit_meanwhile() -> None:
+        store.commit_topic("T1", TopicPatch(**patch_for(document, "Changed during refresh")))
+
+    model.during_check = edit_meanwhile
+    started = client.post(url("/topics/T1/verify"), json={"base_revision": 0})
+    job = client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+    assert job["conflict"] is True and job["revision"] is None
+    assert store.head_revision() == 1
+    assert topic_of(directory).blocks[0].content == "Changed during refresh"
+    assert [e.chunk_id for e in topic_of(directory).evidence] == ["c1"]
+
+
+def test_f3_concurrent_source_change_rejects_refreshed_check(saved_run, client, model):
+    directory, _ = frozen_f3_run(saved_run)
+    model.selection = {
+        "selected": [
+            {"candidate": 0, "role": "definition", "relevance": 5, "reason": "Definition."}
+        ],
+        "gaps": [],
+    }
+    model.during_check = lambda: (directory.parent.parent / "private.pdf").write_bytes(b"changed")
+    started = client.post(url("/topics/T1/verify"), json={"base_revision": 0})
+    job = client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+    assert job["status"] == "failed" and "provenance" in job["error"]
+    assert RevisionStore(directory).head_revision() == 0
+    assert [e.chunk_id for e in topic_of(directory).evidence] == ["c1"]
+
+
+def test_f3_legacy_check_explains_limited_refresh(saved_run, client, model):
+    directory, _ = saved_run
+    started = client.post(url("/topics/T1/verify"), json={"base_revision": 0})
+    job = client.get(url(f"/verification-jobs/{started.json()['id']}")).json()
+    assert job["status"] == "done" and job["verified"] is False
+    assert "no validated frozen source context" in job["refresh_note"]
+    assert model.calls == ["topic_verification"]
+    assert [i.detail for i in topic_of(directory).open_issues] == ["No excerpt proves the claim"]
 
 
 # The proposal is separate from the notes.
@@ -575,15 +1280,12 @@ def test_unsupported_suggestion_is_not_marked_verified(clean_run, client, model)
 
     proposal = made(client)
 
-    assert proposal["status"] == "ready" and proposal["verified"] is False
+    assert proposal["status"] == "failed" and proposal["verified"] is False
     assert proposal["verification"]["issues"][0]["detail"] == MAJOR["detail"]
     applied = client.post(url(f"/suggestions/{proposal['id']}/apply"), json={"base_revision": 0})
-    assert applied.status_code == 200
+    assert applied.status_code == 409
     note = topic_of(directory)
-    assert note.status == "unresolved"  # Major issues are visible, not hidden.
-    assert [i.detail for i in note.open_issues] == [MAJOR["detail"]]
-    assert note.verification_stale is False  # The result is a check of exactly this text.
-    assert note.verifier == "openai/gpt-6-luna"
+    assert note.blocks[0].content != "Unsupported claim."
 
 
 def test_escalated_or_structure_flagged_results_never_verify(saved_run, client, model):

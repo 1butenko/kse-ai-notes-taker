@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from app.note_quality import changed_block_ids, changed_source_issues, substantive
 from app.note_verification_identity import fingerprint
 from app.notes import NoteBlock, NotesDocument, Verification, VerificationIssue
 from app.notes_artifacts import atomic_json
@@ -58,6 +59,9 @@ class NoteSuggestion(BaseModel):
     # and no standing evidence gap in the topic (those are listed in `blocking`).
     verified: bool = False
     blocking: list[VerificationIssue] = []
+    # Source-support findings in changed blocks, derived again from stored checks for
+    # pre-policy ready records rather than trusting their old `verified` flag.
+    unsafe_citations: list[VerificationIssue] = []
     applied_revision: int | None = None
     # Read-time hint for the revision observed by the API. Apply checks again under lock.
     current_revision: int | None = None
@@ -82,11 +86,30 @@ class SuggestionRecord(NoteSuggestion):
     compatibility_digest: str | None = None
 
     def public(
-        self, current_revision: int | None = None, compatible: bool = False
+        self,
+        current_revision: int | None = None,
+        compatible: bool = False,
+        base_blocks: list[NoteBlock] | None = None,
     ) -> NoteSuggestion:
+        changed = (
+            changed_block_ids(base_blocks, self.proposed_blocks)
+            if base_blocks is not None
+            else {b.id for b in self.replacements} | {i.block.id for i in self.insertions}
+        )
+        unsafe = changed_source_issues(self.verification, self.proposed_blocks, changed)
         return NoteSuggestion.model_validate(
             self.model_dump(include=set(NoteSuggestion.model_fields))
-            | {"current_revision": current_revision, "compatible": compatible}
+            | {
+                "current_revision": current_revision,
+                "compatible": compatible,
+                "unsafe_citations": unsafe,
+                "verified": self.verified
+                and not self.blocking
+                and self.verification is not None
+                and self.verification.passed
+                and not self.verification.escalate
+                and not any(substantive(issue) for issue in self.verification.issues),
+            }
         )
 
 
@@ -172,6 +195,7 @@ class VerificationJob(BaseModel):
     conflict: bool = False
     error: str | None = None
     fingerprint: str | None = None
+    refresh_note: str | None = None
 
 
 def new_id() -> str:

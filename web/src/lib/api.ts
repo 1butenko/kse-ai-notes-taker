@@ -506,6 +506,7 @@ export type NoteSuggestion = {
   verified: boolean;
   /** Standing evidence gaps that keep the topic from being verified by any check. */
   blocking: VerificationIssue[];
+  unsafe_citations: VerificationIssue[];
   applied_revision: number | null;
   /** Read-time compatibility hint for the reported current revision; Apply rechecks under lock. */
   current_revision: number | null;
@@ -525,6 +526,7 @@ export type VerificationJob = {
   /** The notes changed while the check ran, so the result was not recorded. */
   conflict: boolean;
   error: string | null;
+  refresh_note: string | null;
 };
 
 function notesPath(course: string, run: string): string {
