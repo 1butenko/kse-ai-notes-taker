@@ -56,6 +56,10 @@ export function originLabel(info: RevisionInfo): string {
       return "AI suggestion";
     case "verification":
       return "Verification recorded";
+    case "teacher_approval":
+      return "Teacher approved";
+    case "teacher_revocation":
+      return "Teacher revoked approval";
   }
 }
 
@@ -219,6 +223,12 @@ export function RevisionHistory({ course, run, revision, document, drafts, refre
             revision={selected.revision}
             refresh={refresh}
           />
+          {selected.teacher_decision && (
+            <div className="rounded-lg border p-3 text-sm">
+              <p>{selected.teacher_decision.decision === "approved" ? "Approved" : "Approval revoked"} for {selected.teacher_topic} by {selected.teacher_decision.reviewer} on {when(selected.teacher_decision.at)}.</p>
+              {selected.teacher_decision.comment && <p className="mt-1 whitespace-pre-wrap">{selected.teacher_decision.comment}</p>}
+            </div>
+          )}
           {selected.parent === null ? (
             <p className="text-sm text-muted-foreground">
               The notes as generated. Later revisions are compared with the one before them.

@@ -497,6 +497,8 @@ def test_language_patch_only_fills_unknown_language(saved_run, client):
         "restored_from": None,
         "suggestion": None,
         "verification_job": None,
+        "teacher_topic": None,
+        "teacher_decision": None,
     }
     run = client.get(url()).json()
     assert run["document"]["language"] == "uk"

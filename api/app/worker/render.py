@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 
+from app.note_approval import is_teacher_approved
 from app.notes import NoteBlock, NotesDocument, NotesSection, RenderFormat, TopicNote
 from app.worker.quarto import QuartoError, render_document, validate_markdown
 from app.worker.references import (
@@ -253,7 +254,9 @@ def topic_body(
 ) -> list[str]:
     transform = typst_safe if target == "pdf" else str
     body = []
-    if note.status != "verified" or note.verification_stale or note.open_issues:
+    if (
+        note.status != "verified" or note.verification_stale or note.open_issues
+    ) and not is_teacher_approved(document, note):
         body.append(f"::: {{.callout-caution}}\n## {text['unverified']}\n")
         body += (
             [f"- {transform(i.detail)}" for i in note.open_issues]

@@ -22,6 +22,7 @@ from app.notes_artifacts import (
     write_job,
 )
 from app.notes_revisions import (
+    ApprovalAction,
     EditResult,
     InvalidEdit,
     RenderJob,
@@ -65,6 +66,10 @@ async def revise(directory: Path, topic: str, patch: TopicPatch) -> EditResult:
 
 async def restore(directory: Path, revision: int, base_revision: int) -> EditResult:
     return await transact(lambda store: store.restore(revision, base_revision), directory)
+
+
+async def decide(directory: Path, topic: str, action: ApprovalAction) -> EditResult:
+    return await transact(lambda store: store.decide(topic, action), directory)
 
 
 def enqueue_render(directory: Path, revision: int, formats: list[RenderFormat]) -> RenderJob:

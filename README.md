@@ -237,7 +237,7 @@ notes.json               final structured notes with provenance
 notes.qmd, notes.pdf     the Quarto document and its PDF (quarto.log on failure)
 ```
 
-`POST /plans/{course}/notes` with `{"resume": "<run>"}` continues a failed run that was never published. A run that is `done` is refused with `409`: its notes are revision 0 and may already be edited (see [Editing and publishing notes](#editing-and-publishing-notes)), so generate again in a new run. It reuses the plan and every finished topic, retries failed topics, then composes again. Resume requires the original ordered attachments, source bytes, syllabus context and language; changes or missing provenance return `409` with a new-run instruction and preserve all cached files. New runs freeze extracted inputs and context in `inputs.json` and `provenance.json`; older published notes remain readable, while an unpublished legacy run without that provenance must be regenerated in a new run. A topic whose model call fails is marked `failed` without stopping the run, and a topic still failing verification is kept as `unresolved`, flagged in each rendered format with its open issues. A final verifier that still requests escalation also stays unresolved with its reason visible.
+`POST /plans/{course}/notes` with `{"resume": "<run>"}` continues a failed run that was never published. A run that is `done` is refused with `409`: its notes are revision 0 and may already be edited (see [Editing and publishing notes](#editing-and-publishing-notes)), so generate again in a new run. It reuses the plan and every finished topic, retries failed topics, then composes again. Resume requires the original ordered attachments, source bytes, syllabus context and language; changes or missing provenance return `409` with a new-run instruction and preserve all cached files. New runs freeze extracted inputs and context in `inputs.json` and `provenance.json`; older published notes remain readable, while an unpublished legacy run without that provenance must be regenerated in a new run. A topic whose model call fails is marked `failed` without stopping the run, and a topic still failing verification is kept as `unresolved`, flagged in rendered formats with its open issues unless a teacher approves that saved topic for students (see [Teacher approval](#teacher-approval)). A final verifier that still requests escalation also stays unresolved with its reason visible.
 
 | Endpoint | What it does |
 |----------|--------------|
@@ -272,7 +272,7 @@ uploads/<course>/notes/<run>/
   assets/<sha256>.png|jpg          uploaded figures (immutable)
   revisions/000000/                frozen copy of revision 0 (created by the first edit)
   revisions/NNNNNN/document.json   the whole document at that revision
-  revisions/NNNNNN/revision.json   parent, origin (manual, restore, ai, verification), changed topics
+  revisions/NNNNNN/revision.json   parent, origin (manual, restore, ai, verification, teacher approval/revocation), changed topics and decision audit
   revisions/NNNNNN/jobs/           render jobs of the revision
   revisions/NNNNNN/artifacts/      manifest.json and one folder per render job
   suggestions/, verification-jobs/ AI suggestions and manual rechecks (not part of any snapshot)
@@ -289,6 +289,12 @@ Open `/preview/<course>/<run>/<topic>` and use the **Edit** tab: change a block'
 - **Insert image** uploads a PNG or JPEG (up to 10 MiB and 20 megapixels) and adds `![caption](assets/<sha256>.png){#fig-label}` to the draft. Uploading alone changes no revision; the file is published when a saved revision references it. Only images uploaded this way can be used.
 - Notes generated before the language was recorded may have none: pick Ukrainian or English in the editor before saving; it is never guessed. Rendering such a revision fails with that instruction until you do.
 
+### Teacher approval
+
+In a saved, nonempty topic's **Edit** tab, review the AI findings, enter your name and an optional comment, then choose **Approve for students**. The name is provided by the reviewer; this app does not authenticate teacher identities. Save or discard a draft first. **Revoke approval** records a later decision. The **History** tab shows each action, reviewer, server time and comment in an immutable revision; the AI status and findings stay visible and unchanged. Approval and revocation use no model.
+
+Approval omits only the automatic AI-verification caution from that topic in student HTML, PDF, Word and course-book chapters. Authored warning callouts and notices for failed or empty topics remain. Approval belongs to the exact saved text, citations, evidence, relevant sources and figures, language and heading context. Changing those clears it; changing another topic or recording a verification result with identical text and evidence keeps it. Restore copies authored text only and cannot bring back an old approval. If a render fails, the decision remains saved and the previous files retain their own revision labels. Word and course books are prepared on demand for the chosen revision, so historical files use the decision recorded in that revision.
+
 ### Render jobs and retry
 
 Every save, restore and applied suggestion queues a render job for the new revision (HTML and PDF, full notes and each written topic). The preview shows both the **text revision** and the revision of each shown file; a file that is older than the text is labelled "Older artifact" and is never presented as current. Files are served per revision and never fall back to another one:
@@ -297,6 +303,7 @@ Every save, restore and applied suggestion queues a render job for the new revis
 |----------|--------------|
 | `GET /plans/{course}/notes/{run}/revisions` / `.../revisions/{n}` | History (newest first) / one revision with its document |
 | `PATCH /plans/{course}/notes/{run}/topics/{topic}` | Body `{"base_revision", "blocks", "language"?}`: save a topic. Empty block `id` adds a block. `409` stale base or run not done, `422` unknown block, evidence or figure |
+| `POST .../topics/{topic}/approval` | Body `{"base_revision", "action": "approve" \| "revoke", "reviewer", "comment"?}`: record a teacher decision and queue HTML/PDF. `409` on a stale base; `422` for invalid or ineligible decisions |
 | `POST .../revisions/{n}/restore` | Body `{"base_revision"}`: restore revision *n*'s text as a new revision |
 | `POST .../revisions/{n}/render` | Body `{"formats": ["html", "pdf", "docx", "book"]}`: queue a render job (`202`), also to retry. The requested formats can be a subset |
 | `GET .../render-jobs/{job}` | `queued`, `running`, `done` or `failed`, with `errors` |

@@ -34,6 +34,7 @@ from app.worker.openrouter import (
 from app.worker.tracing import course_trace, init_langfuse
 from app.worker.transcribe import EmptyDocument, build_messages, drop_bad_refs
 from app.worker_contract import (
+    ApprovalRequest,
     MapRequest,
     MapResponse,
     NotesRequest,
@@ -226,6 +227,19 @@ async def restore_notes(
     """Copy an earlier revision's content into a new revision, without a model."""
     directory = run_directory(settings, body.course, body.run)
     result = await revisions.restore(directory, body.revision, body.base_revision)
+    if result.render:
+        background.add_task(revisions.render_revision, directory, result.render.id, settings)
+    return result
+
+
+@app.post("/notes/approval")
+async def decide_notes(
+    body: ApprovalRequest,
+    background: BackgroundTasks,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+) -> EditResult:
+    directory = run_directory(settings, body.course, body.run)
+    result = await revisions.decide(directory, body.topic, body.action)
     if result.render:
         background.add_task(revisions.render_revision, directory, result.render.id, settings)
     return result

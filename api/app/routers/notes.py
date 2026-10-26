@@ -32,6 +32,7 @@ from app.notes_artifacts import (
     selected_artifacts,
 )
 from app.notes_revisions import (
+    ApprovalAction,
     EditResult,
     RenderJob,
     RevisionConflict,
@@ -54,6 +55,7 @@ from app.notes_suggestions import (
 from app.routers.plans import course_dir, current
 from app.worker_client import WorkerClient, get_worker_client
 from app.worker_contract import (
+    ApprovalRequest,
     NotesRequest,
     RenderRequest,
     RestoreRequest,
@@ -235,6 +237,21 @@ async def save_topic(
 
 class RestoreBody(BaseModel):
     base_revision: int = Field(ge=0)
+
+
+@router.post("/{course}/notes/{run}/topics/{topic}/approval")
+async def decide_topic(
+    course: str,
+    run: str,
+    topic: str,
+    action: ApprovalAction,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> EditResult:
+    find_run(settings, course, run)
+    return await worker.decide_notes(
+        ApprovalRequest(course=course, run=run, topic=topic, action=action)
+    )
 
 
 @router.post("/{course}/notes/{run}/revisions/{revision}/restore")
