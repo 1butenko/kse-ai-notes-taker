@@ -385,6 +385,15 @@ export type TopicNote = {
   open_issues: VerificationIssue[];
   error: string | null;
   verification_stale: boolean;
+  teacher_decision?: TeacherDecision | null;
+};
+
+export type TeacherDecision = {
+  decision: "approved" | "revoked";
+  reviewer: string;
+  at: string;
+  comment: string | null;
+  fingerprint: string | null;
 };
 
 export type NotesSource = {
@@ -448,12 +457,14 @@ export type RevisionInfo = {
   revision: number;
   parent: number | null;
   created_at: string;
-  origin: "generation" | "manual" | "restore" | "ai" | "verification";
+  origin: "generation" | "manual" | "restore" | "ai" | "verification" | "teacher_approval" | "teacher_revocation";
   changed_topics: string[];
   restored_from: number | null;
   /** Older stored revisions have neither field. */
   suggestion?: string | null;
   verification_job?: string | null;
+  teacher_topic?: string | null;
+  teacher_decision?: TeacherDecision | null;
 };
 
 export type RevisionView = {
@@ -578,6 +589,18 @@ export function restoreNotesRevision(
   return request(
     `${notesPath(course, run)}/revisions/${revision}/restore`,
     sendJson("POST", { base_revision: baseRevision }),
+  );
+}
+
+export function decideNotesTopic(
+  course: string,
+  run: string,
+  topic: string,
+  body: { base_revision: number; action: "approve" | "revoke"; reviewer: string; comment?: string | null },
+): Promise<EditResult> {
+  return request(
+    `${notesPath(course, run)}/topics/${encodeURIComponent(topic)}/approval`,
+    sendJson("POST", body),
   );
 }
 

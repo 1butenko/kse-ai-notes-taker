@@ -19,8 +19,9 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from app.note_approval import approval_fingerprint, is_teacher_approved
 from app.note_assets import ASSET_PATH, image_references, load_asset
 from app.note_structure import evidence_gaps, structure_gaps
 from app.notes import (
@@ -28,6 +29,7 @@ from app.notes import (
     NotesDocument,
     NotesRun,
     RenderFormat,
+    TeacherDecision,
     TopicNote,
     load_document,
     now,
@@ -38,12 +40,22 @@ class RevisionInfo(BaseModel):
     revision: int
     parent: int | None
     created_at: str
-    origin: Literal["generation", "manual", "restore", "ai", "verification"]
+    origin: Literal[
+        "generation",
+        "manual",
+        "restore",
+        "ai",
+        "verification",
+        "teacher_approval",
+        "teacher_revocation",
+    ]
     changed_topics: list[str]
     restored_from: int | None = None
     # Provenance, staged with the revision so a crash after HEAD can be reconciled.
     suggestion: str | None = None
     verification_job: str | None = None
+    teacher_topic: str | None = None
+    teacher_decision: TeacherDecision | None = None
 
 
 class RevisionView(BaseModel):
@@ -58,6 +70,28 @@ class TopicPatch(BaseModel):
     blocks: list[NoteBlock]
     # Only fills an unknown document language; it never translates or switches it.
     language: Literal["uk", "en"] | None = None
+
+
+class ApprovalAction(BaseModel):
+    base_revision: int = Field(ge=0)
+    action: Literal["approve", "revoke"]
+    reviewer: str = Field(min_length=1, max_length=120)
+    comment: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("reviewer", mode="before")
+    @classmethod
+    def valid_reviewer(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        clean = value.strip()
+        if not clean:
+            raise ValueError("Reviewer name is required")
+        return clean
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def clean_comment(cls, value: object) -> object:
+        return value.strip() or None if isinstance(value, str) else value
 
 
 class RenderJob(BaseModel):
@@ -320,15 +354,38 @@ class RevisionStore:
         self,
         current: RevisionView,
         document: NotesDocument,
-        origin: Literal["manual", "restore", "ai", "verification"],
+        origin: Literal[
+            "manual", "restore", "ai", "verification", "teacher_approval", "teacher_revocation"
+        ],
         changed: list[str],
         restored_from: int | None = None,
         suggestion: str | None = None,
         verification_job: str | None = None,
+        teacher_topic: str | None = None,
+        teacher_decision: TeacherDecision | None = None,
     ) -> RevisionView:
         """Publish `document` as the next revision. Call inside `transaction`/`locked`."""
         if self._baseline() is None:
             self._publish(current if current.info.revision == 0 else self._original())
+        # All mutation paths converge here. Only this transaction may introduce a
+        # decision; other commits inherit the current one while its identity matches.
+        for section in document.sections:
+            for topic in section.topics:
+                previous = find_topic(current.document, topic.topic_id)
+                if teacher_topic == topic.topic_id and teacher_decision is not None:
+                    topic.teacher_decision = teacher_decision
+                elif previous and approval_fingerprint(
+                    current.document, previous
+                ) == approval_fingerprint(document, topic):
+                    topic.teacher_decision = previous.teacher_decision
+                else:
+                    topic.teacher_decision = None
+                if (
+                    topic.teacher_decision
+                    and topic.teacher_decision.decision == "approved"
+                    and not is_teacher_approved(document, topic)
+                ):
+                    topic.teacher_decision = None
         view = RevisionView(
             info=RevisionInfo(
                 revision=self._allocate(),
@@ -339,6 +396,8 @@ class RevisionStore:
                 restored_from=restored_from,
                 suggestion=suggestion,
                 verification_job=verification_job,
+                teacher_topic=teacher_topic,
+                teacher_decision=teacher_decision,
             ),
             document=document,
         )
@@ -401,6 +460,39 @@ class RevisionStore:
                 "restore",
                 [topic.topic_id for topic in restored],
                 restored_from=target_revision,
+            )
+
+    def decide(self, topic_id: str, action: ApprovalAction) -> RevisionView:
+        with self.transaction(action.base_revision) as current:
+            document = current.document.model_copy(deep=True)
+            topic = find_topic(document, topic_id)
+            if topic is None:
+                raise RevisionNotFound("Topic not found")
+            valid = approval_fingerprint(document, topic)
+            if action.action == "approve":
+                if valid is None:
+                    raise InvalidEdit(
+                        "Only a saved, nonempty topic with registered evidence "
+                        "and assets can be approved"
+                    )
+                if is_teacher_approved(document, topic):
+                    raise InvalidEdit("This topic is already approved")
+            elif not is_teacher_approved(document, topic):
+                raise InvalidEdit("This topic has no active approval to revoke")
+            decision = TeacherDecision(
+                decision="approved" if action.action == "approve" else "revoked",
+                reviewer=action.reviewer,
+                at=now(),
+                comment=action.comment,
+                fingerprint=valid if action.action == "approve" else None,
+            )
+            return self.commit(
+                current,
+                document,
+                "teacher_approval" if action.action == "approve" else "teacher_revocation",
+                [],
+                teacher_topic=topic_id,
+                teacher_decision=decision,
             )
 
     # Last: inside the class body this name shadows the builtin used in annotations above.

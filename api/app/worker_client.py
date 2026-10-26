@@ -9,6 +9,7 @@ from app.config import Settings, get_settings
 from app.notes_revisions import EditResult, RenderJob
 from app.notes_suggestions import NoteSuggestion, VerificationJob
 from app.worker_contract import (
+    ApprovalRequest,
     MapRequest,
     MapResponse,
     NotesRequest,
@@ -45,6 +46,9 @@ class WorkerClient:
 
     async def restore_notes(self, request: RestoreRequest) -> EditResult:
         return await self.call("/notes/restore", request, EditResult)
+
+    async def decide_notes(self, request: ApprovalRequest) -> EditResult:
+        return await self.call("/notes/approval", request, EditResult)
 
     async def render_notes(self, request: RenderRequest) -> RenderJob:
         return await self.call("/notes/render", request, RenderJob)

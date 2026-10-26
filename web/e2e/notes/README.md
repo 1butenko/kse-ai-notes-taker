@@ -188,6 +188,10 @@ its PDF and convert its DOCX through a math-enabled office viewer; the DOCX XML 
 alone does not establish visual fidelity. The book test checks live MathJax and font
 readiness and attaches search/chapter screenshots on desktop and 390 px.
 
+## Teacher approval (`teacher-approval.spec.ts`)
+
+This case seeds a unique completed run from the synthetic control document in the isolated stack, imports its figure through the real API, and checks the teacher panel on unresolved T2. It exercises the draft guard, approve/revoke, separate AI findings and status, immutable History audit, two-tab refresh, stale-base `409`, actual rendered HTML before and after revocation, and unchanged mock model-call count. It retains 390 px screenshots of the full panel and History. The backend native counterpart is `api/tests/test_notes_approval_native.py` with `QUARTO_TEST_BIN`; it renders approved and historical full/topic HTML, PDF, DOCX and course-book chapters with real Quarto.
+
 ## Maintaining
 
 - **Fixtures.** There is no generator script, so edit the JSON directly. `api/tests/test_notes_fixtures.py`

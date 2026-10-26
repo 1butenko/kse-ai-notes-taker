@@ -56,6 +56,7 @@ import {
 import { FigureDialog, figureLabels, nextFigureLabel } from "./figure-dialog";
 import { TopicDiff } from "./revision-diff";
 import { AiAssist } from "./suggestion-review";
+import { TeacherApproval } from "./teacher-approval";
 
 const LANGUAGES = [
   { value: "uk", label: "Ukrainian (uk)" },
@@ -357,6 +358,15 @@ export function TopicEditor({ course, run, revision, document, topic, draft, ref
 
       <AiAssist
         key={`${course}/${run}/${topicId}`}
+        course={course}
+        run={run}
+        revision={revision}
+        topic={topic}
+        hasDraft={draft !== null}
+        refresh={refresh}
+      />
+
+      <TeacherApproval
         course={course}
         run={run}
         revision={revision}

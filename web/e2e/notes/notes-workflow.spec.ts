@@ -28,7 +28,7 @@ type Topic = {
   title: string;
   status: string;
   verification_stale: boolean;
-  open_issues: { detail: string }[];
+  open_issues: { block: number | null; kind: string; severity: string; detail: string; fix: string }[];
   blocks: Block[];
 };
 type Document = {
@@ -662,6 +662,130 @@ function suggestionRecords(run: string): SuggestionRecord[] {
 }
 
 const schemaCount = (schema: string) => mockRequests().filter((call) => call.schema === schema).length;
+
+test("saved verifier findings generate scoped, reviewed fixes after reload", async ({ page, request }, testInfo) => {
+  const run = `20261026-000000-${crypto.randomBytes(2).toString("hex")}`;
+  const directory = path.join(stack.uploads, COURSE, "notes", run);
+  const document = JSON.parse(fs.readFileSync(path.join(stack.fixtures, "control.json"), "utf8"));
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "notes.json"), JSON.stringify({ ...document, run }));
+  fs.copyFileSync(path.join(stack.fixtures, "course-plan.json"), path.join(directory, "plan.json"));
+  const stamp = "2026-10-26T00:00:00+00:00";
+  fs.writeFileSync(path.join(directory, "run.json"), JSON.stringify({ id: run, course: COURSE, status: "done", stage: "done", created_at: stamp, updated_at: stamp, models: {} }));
+  const before = await head(request, run);
+  const t2 = topic(before.document, "T2");
+  expect(t2.verification_stale).toBe(false);
+  const issue = t2.open_issues[0];
+  expect(issue).toBeTruthy();
+  const issueIndex = issue.block!;
+  const targetId = t2.blocks[issueIndex].id;
+  await openEditor(page, run, "T2");
+  await page.reload();
+  await page.getByRole("tab", { name: "Edit" }).click();
+  const ai = page.getByRole("region", { name: "AI suggestions" });
+  const saved = ai.getByLabel("Saved verification issues");
+  await expect(saved.getByText(issue.detail)).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await saved.scrollIntoViewIfNeeded();
+  await capture(saved, testInfo, "mobile-390-saved-verifier-fixes");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const fix = saved.getByRole("button", { name: "Generate fix for finding 1" });
+  const draftField = content(page, "Block 1 (T2.1)");
+  await draftField.fill(`${await draftField.inputValue()}\n\nUnsaved draft.`);
+  await expect(fix).toBeDisabled();
+  await editor(page).getByRole("button", { name: "Discard draft" }).last().click();
+  await page.getByRole("dialog", { name: "Discard your draft of T2?" }).getByRole("button", { name: "Discard", exact: true }).click();
+  await expect(fix).toBeEnabled();
+
+  let releasePost!: () => void;
+  let releaseGet!: () => void;
+  const postGate = new Promise<void>((resolve) => { releasePost = resolve; });
+  const getGate = new Promise<void>((resolve) => { releaseGet = resolve; });
+  let posts = 0;
+  let firstGet = true;
+  await page.route(`**/plans/${COURSE}/notes/${run}/suggestions`, async (route) => {
+    if (route.request().method() === "POST") {
+      posts++;
+      if (posts === 1) {
+        await route.fulfill({ status: 503, json: { detail: "Mock admission denied; retry this request." } });
+        return;
+      }
+      await postGate;
+    }
+    await route.continue();
+  });
+  await page.route(`**/plans/${COURSE}/notes/${run}/suggestions/*`, async (route) => {
+    if (firstGet) {
+      firstGet = false;
+      await getGate;
+    }
+    await route.continue();
+  });
+  await fix.click();
+  await expect(ai.getByText("Mock admission denied; retry this request.")).toBeVisible();
+  await expect(fix).toBeEnabled();
+  await fix.click();
+  await expect(ai.getByText("Preparing a suggestion. The notes are unchanged.")).toBeVisible();
+  await expect(fix).toBeDisabled();
+  await fix.evaluate((button: HTMLElement) => button.click());
+  expect(posts).toBe(2);
+  releasePost();
+  await expect.poll(() => firstGet).toBe(false);
+  await expect(ai.getByText("Preparing a suggestion. The notes are unchanged.")).toBeVisible();
+  await fix.evaluate((button: HTMLElement) => button.click());
+  expect(posts).toBe(2);
+  releaseGet();
+  const review = ai.getByRole("region", { name: "Suggestion review" });
+  await expect(review).toBeVisible({ timeout: 60_000 });
+  const record = suggestionRecords(run).find((item) => item.topic_id === "T2" && item.status === "ready")!;
+  expect(record).toBeTruthy();
+  const response = await request.get(notesUrl(run, `/suggestions/${record.id}`));
+  const proposal = await response.json();
+  expect(proposal.block_ids).toEqual([targetId]);
+  expect(proposal.instruction).toContain(issue.detail);
+  expect(proposal.instruction).toContain(issue.fix);
+  expect(proposal.instruction).toContain("E0 (source");
+  expect((await head(request, run)).current_revision).toBe(before.current_revision);
+  await review.getByRole("button", { name: "Reject suggestion" }).click();
+  await expect(review).toHaveCount(0);
+  expect((await head(request, run)).current_revision).toBe(before.current_revision);
+  await page.unrouteAll();
+
+  // A combined request uses one proposal and the exact union of the displayed blocks.
+  const second = { block: 0, kind: "citation", severity: "major", detail: "Check the opening definition against the source.", fix: "Correct its citation." };
+  await page.route(`**/plans/${COURSE}/notes/${run}`, async (route) => {
+    const original = await route.fetch();
+    const data = await original.json();
+    topic(data.document, "T2").open_issues.push(second);
+    await route.fulfill({ response: original, json: data });
+  });
+  await page.reload();
+  await page.getByRole("tab", { name: "Edit" }).click();
+  const combined = page.getByRole("region", { name: "AI suggestions" }).getByLabel("Saved verification issues");
+  await expect(combined.getByText(second.detail)).toBeVisible();
+  await combined.getByRole("button", { name: "Generate suggested fixes" }).click();
+  await expect(page.getByRole("region", { name: "Suggestion review" })).toBeVisible({ timeout: 60_000 });
+  const combinedRecord = suggestionRecords(run).find((item) => item.topic_id === "T2" && item.status === "ready")!;
+  const combinedResponse = await request.get(notesUrl(run, `/suggestions/${combinedRecord.id}`));
+  const combinedProposal = await combinedResponse.json();
+  expect(combinedProposal.block_ids).toEqual([targetId, t2.blocks[0].id]);
+  expect(combinedProposal.instruction).toContain(second.detail);
+  expect(combinedProposal.instruction).toContain(second.fix);
+  expect((await head(request, run)).current_revision).toBe(before.current_revision);
+  await page.getByRole("region", { name: "Suggestion review" }).getByRole("button", { name: "Apply suggestion" }).click();
+  await expect(page.getByText("Applied as revision 1")).toBeVisible();
+  const applied = await head(request, run);
+  expect(applied.current_revision).toBe(1);
+  expect((await revisions(request, run)).at(-1)).toMatchObject({ origin: "ai", changed_topics: ["T2"] });
+  expect(topic(applied.document, "T1")).toEqual(topic(before.document, "T1"));
+  const updated = topic(applied.document, "T2");
+  for (const block of updated.blocks) {
+    if (!combinedProposal.block_ids.includes(block.id)) expect(block).toEqual(t2.blocks.find((old) => old.id === block.id));
+  }
+  expect(updated.blocks.some((block) => combinedProposal.block_ids.includes(block.id) &&
+    block.content !== t2.blocks.find((old) => old.id === block.id)?.content)).toBe(true);
+});
 
 test("a held Verify response from another run cannot occupy this topic", async ({ page, request }) => {
   const run = await generated(request);

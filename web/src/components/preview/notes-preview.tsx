@@ -351,9 +351,10 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
                         <span className="text-muted-foreground">{t.topic_id}</span> {t.title}
                       </ItemTitle>
                     </ItemContent>
-                    {(t.status !== "verified" || drafts.has(t.topic_id)) && (
+                    {(t.status !== "verified" || drafts.has(t.topic_id) || t.teacher_decision?.decision === "approved") && (
                       <ItemActions>
                         {drafts.has(t.topic_id) && <Badge variant="outline">Draft</Badge>}
+                        {t.teacher_decision?.decision === "approved" && <Badge>Teacher approved</Badge>}
                         {t.status !== "verified" && (
                           <Badge className={TOPIC_STATUS[t.status].className}>
                             {TOPIC_STATUS[t.status].label}
@@ -434,6 +435,7 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
                   {TOPIC_STATUS[note.status].label}
                 </Badge>
               )}
+              {note?.teacher_decision?.decision === "approved" && <Badge>Teacher approved</Badge>}
               {note?.verification_stale && (
                 <Badge variant="outline" title="Edited after its last check">
                   Verification outdated

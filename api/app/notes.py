@@ -201,6 +201,14 @@ class Verification(BaseModel):
 TopicStatus = Literal["verified", "unresolved", "no_evidence", "failed"]
 
 
+class TeacherDecision(BaseModel):
+    decision: Literal["approved", "revoked"]
+    reviewer: str
+    at: str
+    comment: str | None = None
+    fingerprint: str | None = None
+
+
 class TopicNote(BaseModel):
     objectives: list[str] = []
     topic_id: str
@@ -213,6 +221,7 @@ class TopicNote(BaseModel):
     open_issues: list[VerificationIssue]
     error: str | None = None
     verification_stale: bool = False
+    teacher_decision: TeacherDecision | None = None
 
 
 # The finished document.
