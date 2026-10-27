@@ -1,14 +1,13 @@
-import { AppSidebar } from "@/components/dashboard/app-sidebar";
+import { AppHeader } from "@/components/dashboard/app-header";
 import { MoodleCourseProvider } from "@/components/dashboard/moodle-course-context";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 
 export default function DashboardLayout({ children }: LayoutProps<"/">) {
   return (
     <MoodleCourseProvider>
-      <SidebarProvider>
-        <AppSidebar />
-        <SidebarInset>{children}</SidebarInset>
-      </SidebarProvider>
+      <AppHeader />
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 py-8 sm:px-6 sm:py-10">
+        {children}
+      </main>
     </MoodleCourseProvider>
   );
 }

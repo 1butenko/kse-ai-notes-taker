@@ -113,7 +113,7 @@ function when(iso: string) {
   });
 }
 
-function isActive(run: NotesRun) {
+export function isActive(run: NotesRun) {
   return run.status === "queued" || run.status === "running";
 }
 
@@ -127,7 +127,7 @@ function percent(run: NotesRun) {
   return 4;
 }
 
-function RunProgress({ run }: { run: NotesRun }) {
+export function RunProgress({ run }: { run: NotesRun }) {
   const last = run.events.at(-1);
   return (
     <div className="flex flex-col gap-2 rounded-lg border p-4">

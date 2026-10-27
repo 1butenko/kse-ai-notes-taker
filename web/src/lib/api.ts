@@ -164,6 +164,15 @@ export function getTranscript(path: string): Promise<Transcript> {
   return request(`/syllabus/transcript?path=${encodeURIComponent(path)}`);
 }
 
+/** Saves the lecturer's edits to a stored transcript: renamed, removed or added sessions. */
+export function saveTranscript(path: string, transcript: Transcript): Promise<Transcript> {
+  return request(`/syllabus/transcript?path=${encodeURIComponent(path)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(transcript),
+  });
+}
+
 export type CourseFiles = {
   syllabus: SavedFile[];
   reading: SavedFile[];
@@ -220,10 +229,36 @@ export type PlanView = {
   unassigned: FileView[];
   books: BookView[];
   mapped: boolean;
+  /** Fingerprint of the files attached to the sessions; a run records the one it used. */
+  materials: string;
 };
 
 export function courseKey(courseId?: number): string {
   return courseId ? String(courseId) : "local";
+}
+
+export type CourseInfo = {
+  course: string;
+  name: string;
+  created_at: string;
+};
+
+/** Every course with a name, newest first. */
+export function listCourseInfo(): Promise<CourseInfo[]> {
+  return request("/course-info");
+}
+
+export function saveCourseInfo(course: string, name: string): Promise<CourseInfo> {
+  return request(`/course-info/${course}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+/** Deletes everything stored for the course: files, plan, transcripts and notes. */
+export function deleteCourse(course: string): Promise<void> {
+  return request(`/course-info/${course}`, { method: "DELETE" });
 }
 
 export function listCourseFiles(course: string): Promise<CourseFiles> {
@@ -342,6 +377,8 @@ export type NotesRun = {
   warnings: string[];
   error: string | null;
   events: NotesRunEvent[];
+  /** The plan's materials fingerprint when the run started. */
+  materials?: string | null;
 };
 
 export type VerificationIssue = {
@@ -451,6 +488,8 @@ export type NotesRunView = {
   pdf: boolean;
   topic_pdfs: string[];
   artifacts: RenderedArtifact[];
+  /** Each planned topic's syllabus session indices; empty before planning. */
+  topic_sessions?: Record<string, number[]>;
 };
 
 export type RevisionInfo = {

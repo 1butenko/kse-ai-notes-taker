@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { DownloadIcon, ExternalLinkIcon, FileTextIcon, LinkIcon, PencilLineIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -284,9 +285,15 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
 
   return (
     <div className="flex h-svh flex-col">
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3">
-        <Link href="/" onNavigate={guard.onNavigate("/")} className="text-lg font-semibold tracking-tight">
-          KSE Notes
+      <header className="flex min-h-16 flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-2">
+        <Link
+          href="/"
+          onNavigate={guard.onNavigate("/")}
+          aria-label="KSE Notes"
+          className="flex items-center gap-3 rounded-sm"
+        >
+          <Image src="/kse-logo-black.svg" alt="" width={112} height={28} unoptimized priority />
+          <span className="border-l pl-3 text-lg font-medium">Notes</span>
         </Link>
         <Separator orientation="vertical" className="hidden h-6 sm:block" />
         <div className="order-3 min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-auto">
@@ -331,7 +338,7 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
           </Item>
           {document.sections.map((s, i) => (
             <div key={i} className="flex flex-col gap-1">
-              <p className="px-3 text-xs font-medium text-muted-foreground uppercase">{s.title}</p>
+              <p className="px-3 text-xs font-medium text-muted-foreground">{s.title}</p>
               <ItemGroup className="gap-1">
                 {s.topics.map((t) => (
                   <Item

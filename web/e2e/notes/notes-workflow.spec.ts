@@ -817,7 +817,9 @@ test("a held Verify response from another run cannot occupy this topic", async (
     plan.books = [{ material: 0, raw: "e2e navigation", file: null, confirmed: true }];
     fs.writeFileSync(planPath, JSON.stringify(plan));
     await page.getByRole("link", { name: "KSE Notes" }).click();
-    await page.getByRole("tab", { name: "Notes" }).click();
+    // The wizard's Notes tab became the course menu's Previous generations.
+    await page.getByRole("button", { name: "Course menu" }).click();
+    await page.getByRole("menuitem", { name: "Previous generations" }).click();
     await page.getByRole("combobox", { name: "Notes run" }).click();
     await page.getByRole("option").last().click();
     await page.getByRole("link", { name: "Read notes" }).click();
