@@ -205,7 +205,7 @@ export function AddMaterialDialog({
                           value={start}
                           onChange={(event) => setStart(event.target.value)}
                         />
-                        <span>–</span>
+                        <span>to</span>
                         <Input
                           aria-label="Last PDF page"
                           inputMode="numeric"

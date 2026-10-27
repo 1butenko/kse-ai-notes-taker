@@ -98,7 +98,7 @@ export function SessionBlock({
         </ul>
       )}
       {children && hasReadings && (
-        <span className="text-xs font-semibold uppercase text-muted-foreground">
+        <span className="text-xs font-medium text-muted-foreground">
           From syllabus
         </span>
       )}
