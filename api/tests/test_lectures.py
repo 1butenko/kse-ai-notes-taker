@@ -8,8 +8,10 @@ from pathlib import Path
 import httpx2
 import pytest
 
+from app.config import Settings
 from app.notes import Inputs
 from app.plan import UnknownSession, load_plan, scope_to_session, session_fingerprint
+from app.routers.plans import reading_paths
 from app.syllabus import Transcript
 from tests.test_notes import PLAN, course, model_stub, no_quarto, topic
 
@@ -192,3 +194,81 @@ def test_lecture_run_resumes_only_from_its_lecture(mock_openrouter, no_quarto: P
     assert again["id"] == run["id"] and again["status"] == "done"
     assert again["session_id"] == "s2"
     assert "course_plan" not in [c[0] for c in calls]
+
+
+# Lecture-only files
+
+
+def upload_lecture_file(client, session_id: str, name: str, data: bytes):
+    return client.post(
+        f"/plans/1/sessions/{session_id}/lecture-files",
+        files=[("files", (name, data, "text/markdown"))],
+    )
+
+
+def test_lecture_file_is_stored_attached_and_flagged(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    client = mock_openrouter(lecture_stub()[0])
+
+    response = upload_lecture_file(client, "s2", "slides.md", b"# Slides\nInner products.")
+
+    assert response.status_code == 200, response.text
+    sessions = {s["id"]: s for s in response.json()["sessions"]}
+    files = {f["path"]: f["lecture_only"] for f in sessions["s2"]["files"]}
+    assert files == {"1/reading/handout.md": False, "1/lecture/s2/slides.md": True}
+    assert (no_quarto / "1/lecture/s2/slides.md").read_bytes() == b"# Slides\nInner products."
+    assert all(not f["lecture_only"] for f in sessions["s1"]["files"])
+    assert upload_lecture_file(client, "nope", "x.md", b"x").status_code == 404
+
+
+def test_lecture_file_stays_out_of_readings_matching_and_other_lectures(
+    mock_openrouter, no_quarto: Path
+) -> None:
+    course(no_quarto)
+    handler, _, _ = lecture_stub()
+    client = mock_openrouter(handler)
+    upload_lecture_file(client, "s2", "slides.md", b"# Slides\nInner products are bilinear.")
+    path = "1/lecture/s2/slides.md"
+
+    assert path not in [f["path"] for f in client.get("/uploads/1").json()["reading"]]
+    assert path not in reading_paths(Settings(uploads_dir=no_quarto), "1")
+    assert client.post("/plans/1/sessions/s1/files", json={"path": path}).status_code == 400
+
+    other = client.post("/plans/1/sessions/s1/notes").json()["run"]
+    inputs = Inputs.model_validate_json(
+        (no_quarto / "1/notes" / other["id"] / "inputs.json").read_text()
+    )
+    assert path not in [s.file for s in inputs.sources]
+
+    own = client.post("/plans/1/sessions/s2/notes").json()["run"]
+    inputs = Inputs.model_validate_json(
+        (no_quarto / "1/notes" / own["id"] / "inputs.json").read_text()
+    )
+    assert [s.file for s in inputs.sources] == ["1/reading/handout.md", path]
+
+
+def test_detaching_a_lecture_file_deletes_it(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    client = mock_openrouter(lecture_stub()[0])
+    before = client.get("/plans/1").json()["sessions"][1]["materials"]
+    after = upload_lecture_file(client, "s2", "slides.md", b"x").json()["sessions"][1]
+    assert after["materials"] != before
+
+    path = after["files"][1]["path"]
+    response = client.delete("/plans/1/sessions/s2/files", params={"path": path})
+
+    assert response.status_code == 200
+    assert [f["path"] for f in response.json()["sessions"][1]["files"]] == ["1/reading/handout.md"]
+    assert response.json()["sessions"][1]["materials"] == before
+    assert not (no_quarto / "1/lecture/s2/slides.md").exists()
+    assert (no_quarto / "1/reading/handout.md").is_file()
+
+
+def test_lecture_file_opens_in_the_viewer(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    client = mock_openrouter(lecture_stub()[0])
+    upload_lecture_file(client, "s2", "slides.md", b"# Slides")
+
+    response = client.get("/files", params={"path": "1/lecture/s2/slides.md"})
+
+    assert response.status_code == 200 and response.content == b"# Slides"

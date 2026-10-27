@@ -7,7 +7,7 @@ from app.config import Settings, get_settings
 
 router = APIRouter(prefix="/files", tags=["files"])
 
-VIEWABLE = {"syllabus", "reading", "excerpts"}
+VIEWABLE = {"syllabus", "reading", "excerpts", "lecture"}
 
 
 @router.get("")
