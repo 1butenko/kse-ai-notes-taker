@@ -53,6 +53,7 @@ from app.notes_suggestions import (
     read_suggestion,
     read_verification_job,
 )
+from app.plan import UnknownSession, scope_to_session
 from app.routers.plans import course_dir, current
 from app.worker_client import WorkerClient, get_worker_client
 from app.worker_contract import (
@@ -175,11 +176,45 @@ async def generate_notes(
         raise HTTPException(status.HTTP_409_CONFLICT, "Attach materials to the sessions first")
 
     run_id = body.resume if body and body.resume else new_run_id()
-    if body and body.resume:
-        find_run(settings, course, run_id)
+    if body and body.resume and find_run(settings, course, run_id).session_id is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This is a lecture's run; resume it from its lecture"
+        )
 
     started = await worker.generate_notes(
         NotesRequest(course=course, run=run_id, plan=plan, transcript=transcript)
+    )
+    run = load_run(course_dir(settings, course), started.id) or started
+    return view(settings, course, run)
+
+
+@router.post("/{course}/sessions/{session_id}/notes", status_code=status.HTTP_202_ACCEPTED)
+async def generate_lecture_notes(
+    course: str,
+    session_id: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+    body: NotesRunRequest | None = None,
+) -> NotesRunView:
+    """Write the note of one lecture from its own readings, or resume its earlier run."""
+    plan, transcript = current(settings, course)
+    if transcript is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Transcribe a syllabus first")
+    try:
+        scoped, syllabus = scope_to_session(plan, transcript, session_id)
+    except UnknownSession as error:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Lecture not found") from error
+    if not scoped.sessions[0].files:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Add readings to this lecture first")
+
+    run_id = body.resume if body and body.resume else new_run_id()
+    if body and body.resume and find_run(settings, course, run_id).session_id != session_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This run belongs to another lecture")
+
+    started = await worker.generate_notes(
+        NotesRequest(
+            course=course, run=run_id, plan=scoped, transcript=syllabus, session_id=session_id
+        )
     )
     run = load_run(course_dir(settings, course), started.id) or started
     return view(settings, course, run)

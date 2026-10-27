@@ -78,6 +78,53 @@ def materials_fingerprint(plan: Plan) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def session_fingerprint(plan: Plan, session_id: str) -> str:
+    """One lecture's readings: its files and, for excerpts, the book pages they were cut from.
+
+    Pages count because an excerpt cut again from other pages may reuse its file name.
+    """
+    entry = next(s for s in plan.sessions if s.id == session_id)
+    excerpts = {p.excerpt: p for p in plan.proposals if p.excerpt}
+    value = sorted(
+        [path]
+        + (
+            [excerpts[path].book, excerpts[path].pdf_start, excerpts[path].pdf_end]
+            if path in excerpts
+            else []
+        )
+        for path in set(entry.files)
+    )
+    return hashlib.sha256(json.dumps(value).encode()).hexdigest()
+
+
+class UnknownSession(LookupError):
+    pass
+
+
+def scope_to_session(
+    plan: Plan, transcript: Transcript, session_id: str
+) -> tuple[Plan, Transcript]:
+    """One lecture's slice of an aligned plan and transcript: its entry and syllabus session,
+    with the excerpt proposals and book titles its files need. Inside, it is session S0.
+
+    Only what this lecture reads is kept, so changes elsewhere in the course never alter
+    the slice (and never block resuming the lecture's run).
+    """
+    index = next((i for i, s in enumerate(plan.sessions) if s.id == session_id), None)
+    if index is None:
+        raise UnknownSession(session_id)
+    entry = plan.sessions[index]
+    proposals = [p for p in plan.proposals if p.excerpt and p.excerpt in entry.files]
+    read = {p.book for p in proposals} | set(entry.files)
+    scoped = Plan(
+        primary=plan.primary,
+        sessions=[entry.model_copy(deep=True)],
+        books=[b.model_copy() for b in plan.books if b.file in read],
+        proposals=[p.model_copy() for p in proposals],
+    )
+    return scoped, transcript.model_copy(update={"sessions": [transcript.sessions[index]]})
+
+
 def normalize(label: str) -> str:
     return re.sub(r"\s+", " ", label).strip().casefold()
 

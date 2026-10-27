@@ -126,10 +126,35 @@ def seed(uploads: Path) -> None:
 
 
 def topic_of(prompt: str) -> str | None:
+    """The control topic a prompt is about, found by its title: a lecture run numbers its
+    topics from T1, so the second lecture's topic is T1 there and control topic T2 here."""
+    for _, topic in course_plan().topics():
+        if re.search(rf"Topic T\d+: {re.escape(topic.title)}", prompt):
+            return topic.id
     for topic in ("T1", "T2"):
         if f"Topic {topic}:" in prompt:
             return topic
     return None
+
+
+def lecture_plan(prompt: str) -> dict:
+    """The plan of one lecture (its transcript is S0 alone): the control topic it teaches."""
+    plan = course_plan()
+    found = next(
+        ((section, t) for section, t in plan.topics() if f": {t.title}" in prompt.split("S0:")[1]),
+        None,
+    )
+    if found is None:
+        raise UnknownRequest("No control topic for this lecture")
+    section, topic = found
+    single = topic.model_copy(update={"id": "T1", "sessions": [0], "sources": [0]})
+    single.prerequisites = []
+    return plan.model_copy(
+        update={
+            "title": topic.title,
+            "sections": [section.model_copy(update={"title": topic.title, "topics": [single]})],
+        }
+    ).model_dump()
 
 
 def draft(topic: str) -> dict:
@@ -247,7 +272,9 @@ def answer(body: dict) -> tuple[dict, dict]:
         "revision": "Previous draft:" in prompt,
         "reasoning": body.get("reasoning"),
     }
-    if name == "course_plan":
+    if name == "course_plan" and "one lecture of the course" in prompt:
+        result = lecture_plan(prompt)
+    elif name == "course_plan":
         result = json.loads((FIXTURES / "course-plan.json").read_text())
     elif name == "coverage_review":
         result = {"approved": True, "issues": []}

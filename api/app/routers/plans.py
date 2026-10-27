@@ -18,6 +18,7 @@ from app.plan import (
     merge_proposals,
     new_id,
     save_plan,
+    session_fingerprint,
     sync,
 )
 from app.routers.syllabus import load_transcript, syllabus_file
@@ -69,6 +70,8 @@ class SessionView(BaseModel):
     session: Session
     files: list[FileView]
     proposals: list[Proposal]
+    # This lecture's readings; a lecture run records the one it was written from.
+    materials: str
 
 
 class BookView(BaseModel):
@@ -176,6 +179,7 @@ def render(settings: Settings, course: str, plan: Plan, transcript: Transcript |
                 session=session,
                 files=file_views(settings, plan, entry.files),
                 proposals=[p for p in plan.proposals if p.session_id == entry.id],
+                materials=session_fingerprint(plan, entry.id),
             )
             for entry, session in zip(plan.sessions, transcript.sessions, strict=True)
         ]

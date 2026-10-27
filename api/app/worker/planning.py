@@ -39,6 +39,15 @@ When you get a previous plan and reviewer issues, return the full revised plan, 
 blocking issue and keeping what was fine.
 """
 
+LECTURE_RULE = """
+This plan is for one lecture of the course (session S0), not the whole course. Return
+exactly one section, named after the lecture, holding 1 to 4 topics that together cover
+that lecture; each topic becomes one section of the lecture's note. title: the lecture's
+title. Earlier lectures are not part of this plan: never list them as prerequisites.
+"""
+
+LECTURE_TOPICS = 4
+
 COVERAGE_PROMPT = """\
 You review the topic plan of a course's lecture notes against an explicit rubric.
 
@@ -107,9 +116,21 @@ def planner_input(
     return "\n".join(parts)
 
 
+def is_lecture(transcript: Transcript) -> bool:
+    """A lecture run's transcript is scoped to its one session."""
+    return len(transcript.sessions) == 1
+
+
 def check_references(plan: CoursePlan, transcript: Transcript, inputs: Inputs) -> list:
     """Deterministic checks the reviewer would otherwise have to spot."""
     issues = []
+    if is_lecture(transcript) and (
+        len(plan.sections) != 1 or not 1 <= len(plan.topics()) <= LECTURE_TOPICS
+    ):
+        issues.append(
+            f"A lecture plan has one section with 1 to {LECTURE_TOPICS} topics, not "
+            f"{len(plan.sections)} sections with {len(plan.topics())} topics"
+        )
     ids = [t.id for _, t in plan.topics()]
     try:
         validate_topic_ids(ids)
@@ -154,10 +175,11 @@ async def plan_course(
     ) as span:
         plan: CoursePlan | None = None
         issues: list[CoverageIssue] = []
+        lecture = LECTURE_RULE if is_lecture(transcript) else ""
         for round in range(1, rounds + 1):
             plan = await ask(
                 client,
-                chat(PLANNER_PROMPT, planner_input(transcript, inputs, plan, issues)),
+                chat(PLANNER_PROMPT + lecture, planner_input(transcript, inputs, plan, issues)),
                 CoursePlan,
                 "course_plan",
                 step="draft-course-plan",
@@ -168,7 +190,7 @@ async def plan_course(
             review = await ask(
                 client,
                 chat(
-                    COVERAGE_PROMPT,
+                    COVERAGE_PROMPT + lecture,
                     "\n".join(
                         [
                             "Syllabus sessions:",

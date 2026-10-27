@@ -292,8 +292,12 @@ class NotesRun(BaseModel):
     warnings: list[str] = []
     error: str | None = None
     events: list[RunEvent] = []
-    # The course plan's materials when the run started (see `materials_fingerprint`).
+    # The course plan's materials when the run started (see `materials_fingerprint`); for a
+    # lecture run, that lecture's (see `session_fingerprint`).
     materials: str | None = None
+    # The plan session a lecture run writes the note of; None for whole-course runs.
+    session_id: str | None = None
+    session_label: str | None = None
 
 
 def now() -> str:

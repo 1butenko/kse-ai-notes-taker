@@ -22,7 +22,7 @@ from app.notes import (
     validate_topic_ids,
 )
 from app.notes_revisions import RevisionConflict, run_lock
-from app.plan import Plan, materials_fingerprint
+from app.plan import Plan, materials_fingerprint, session_fingerprint
 from app.storage import sha256
 from app.syllabus import Transcript
 from app.worker.artifacts import RunStore
@@ -43,6 +43,9 @@ COMPLETED_RUN = (
     "This notes run is complete, and resuming it would overwrite its published notes. "
     "Start a new run to regenerate them, or rerender this run to rebuild its outputs."
 )
+
+
+OTHER_LECTURE = "This run belongs to another lecture; resume it from that lecture."
 
 
 RESUME_PROVENANCE = (
@@ -101,11 +104,13 @@ def open_run(
     models: NotesModels,
     plan: Plan | None = None,
     transcript: Transcript | None = None,
+    session_id: str | None = None,
 ) -> RunStore:
     """The store of a new run, or of an earlier unpublished run being resumed.
 
     Admission takes the run lock that edits use: a completed run's notes are published
-    (and may be edited), so resuming it would silently replace them.
+    (and may be edited), so resuming it would silently replace them. A lecture run
+    (`session_id`) gets a plan and transcript already scoped to its session.
     """
     directory = run_dir(course_dir, run_id)
     directory.mkdir(parents=True, exist_ok=True)
@@ -115,6 +120,8 @@ def open_run(
             run = NotesRun.model_validate_json(previous.read_text())
             if run.status == "done" or (directory / "revisions").exists():
                 raise RevisionConflict(COMPLETED_RUN)
+            if run.session_id != session_id:
+                raise RevisionConflict(OTHER_LECTURE)
             # Refuse before changing even run.json: positional source IDs only have
             # meaning under the exact frozen input inventory and original context.
             store = RunStore(directory, run)
@@ -147,7 +154,15 @@ def open_run(
                 created_at=stamp,
                 updated_at=stamp,
                 models=models.summary(),
-                materials=materials_fingerprint(plan) if plan is not None else None,
+                materials=(
+                    None
+                    if plan is None
+                    else session_fingerprint(plan, session_id)
+                    if session_id
+                    else materials_fingerprint(plan)
+                ),
+                session_id=session_id,
+                session_label=plan.sessions[0].label if session_id and plan else None,
             )
         store = RunStore(directory, run)
         if not previous.is_file():

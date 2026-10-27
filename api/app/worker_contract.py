@@ -36,6 +36,8 @@ class NotesRequest(BaseModel):
     run: str
     plan: Plan
     transcript: Transcript
+    # A lecture run: plan and transcript are already scoped to this one session.
+    session_id: str | None = None
 
 
 NotesResponse = NotesRun
