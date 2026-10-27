@@ -349,6 +349,8 @@ class NotesRun(BaseModel):
     # The plan session a lecture run writes the note of; None for whole-course runs.
     session_id: str | None = None
     session_label: str | None = None
+    # A lecture run that rewrites only the failed sections of this finished run.
+    retried_from: str | None = None
 
 
 class QueueItem(BaseModel):
@@ -357,6 +359,8 @@ class QueueItem(BaseModel):
     resume: str | None = None
     # Generate all: when that run's readings changed, write a new run instead of refusing.
     renew: bool = False
+    # A finished run of this lecture whose failed sections a new run rewrites.
+    retry: str | None = None
 
 
 class LectureQueue(BaseModel):

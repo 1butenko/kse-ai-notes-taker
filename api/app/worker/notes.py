@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -193,6 +194,44 @@ def open_run(
             )
         store.save()
     return store
+
+
+def seed_retry(course_dir: Path, source: NotesRun, run_id: str, models: NotesModels) -> None:
+    """A new run holding a finished lecture run's frozen inputs, plan and the sections that
+    did not fail, waiting to be resumed: resuming writes only the failed sections.
+
+    The finished run is only read. Its edits and approvals stay with it.
+    """
+    old = run_dir(course_dir, source.id)
+    new = run_dir(course_dir, run_id)
+    new.mkdir(parents=True)
+    store = RunStore(old, source)
+    for name in ("inputs.json", "provenance.json", "plan.json", COURSE_NOTATION):
+        if store.path(name).is_file():
+            shutil.copyfile(store.path(name), new / name)
+    plan = store.read("plan.json", CoursePlan)
+    for _, topic in plan.topics() if plan else []:
+        name = f"topics/{topic_filename(topic.id)}/note.json"
+        note = store.read(name, TopicNote)
+        if note is not None and note.status != "failed":
+            (new / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(store.path(name), new / name)
+    stamp = now()
+    run = NotesRun(
+        id=run_id,
+        course=source.course,
+        status="failed",
+        stage="queued",
+        created_at=stamp,
+        updated_at=stamp,
+        models=models.summary(),
+        error="Waiting to write the failed sections again",
+        materials=source.materials,
+        session_id=source.session_id,
+        session_label=source.session_label,
+        retried_from=source.id,
+    )
+    RunStore(new, run).save()
 
 
 async def topic_notes(

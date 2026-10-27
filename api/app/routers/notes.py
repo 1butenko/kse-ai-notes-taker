@@ -101,6 +101,8 @@ HTML_HEADERS = {
 
 class NotesRunRequest(BaseModel):
     resume: str | None = None
+    # Lecture runs only: a finished run whose failed sections a new run writes again.
+    retry: str | None = None
 
 
 class NotesRunView(BaseModel):
@@ -201,7 +203,8 @@ async def generate_lecture_notes(
     worker: Annotated[WorkerClient, Depends(get_worker_client)],
     body: NotesRunRequest | None = None,
 ) -> NotesRunView:
-    """Write the note of one lecture from its own readings, or resume its earlier run."""
+    """Write the note of one lecture from its own readings, resume its unfinished run, or
+    retry a finished run's failed sections in a new run."""
     plan, transcript = current(settings, course)
     if transcript is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Transcribe a syllabus first")
@@ -213,13 +216,16 @@ async def generate_lecture_notes(
         raise HTTPException(status.HTTP_409_CONFLICT, "Add readings to this lecture first")
 
     resume = body.resume if body and body.resume else None
-    if resume and find_run(settings, course, resume).session_id != session_id:
-        raise HTTPException(status.HTTP_409_CONFLICT, "This run belongs to another lecture")
+    retry = body.retry if body and body.retry else None
+    for earlier in filter(None, (resume, retry)):
+        if find_run(settings, course, earlier).session_id != session_id:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This run belongs to another lecture")
+    if retry and find_run(settings, course, retry).status != "done":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only a finished run can be retried")
 
     # Through the course's queue, so a single lecture and Generate all never race.
-    reply = await worker.queue_lectures(
-        LecturesRequest(course=course, items=[QueueItem(session_id=session_id, resume=resume)])
-    )
+    item = QueueItem(session_id=session_id, resume=resume, retry=retry)
+    reply = await worker.queue_lectures(LecturesRequest(course=course, items=[item]))
     run = load_run(course_dir(settings, course), reply.run.id) or reply.run
     return view(settings, course, run)
 

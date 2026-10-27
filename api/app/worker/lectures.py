@@ -1,6 +1,7 @@
 """Lecture notes: each course's queue of lectures, written one at a time, and Stop."""
 
 import asyncio
+import shutil
 from pathlib import Path
 
 from app.notes import (
@@ -9,6 +10,7 @@ from app.notes import (
     NotesRun,
     QueueItem,
     load_queue,
+    load_run,
     new_run_id,
     queue_file,
     run_dir,
@@ -19,7 +21,7 @@ from app.syllabus import Transcript
 from app.worker.artifacts import RunStore
 from app.worker.config import WorkerSettings
 from app.worker.models import NotesModels
-from app.worker.notes import ACTIVE, mark_stopped, open_run, run_notes
+from app.worker.notes import ACTIVE, mark_stopped, open_run, run_notes, seed_retry
 from app.worker.openrouter import Opener
 
 # The run task being written per course, so Stop can cancel it.
@@ -56,6 +58,19 @@ def admit(settings: WorkerSettings, course: str, item: QueueItem) -> Admitted:
         raise NoReadings("Add readings to this lecture first")
     course_dir = settings.uploads_dir / course
     models = NotesModels.from_settings(settings)
+    if item.retry:
+        source = load_run(course_dir, item.retry)
+        if source is None or source.session_id != item.session_id or source.status != "done":
+            raise RevisionConflict("Only a finished run of this lecture can be retried")
+        run_id = new_run_id()
+        seed_retry(course_dir, source, run_id, models)
+        try:
+            store = open_run(course_dir, course, run_id, models, scoped, syllabus, item.session_id)
+            return store, scoped, syllabus
+        except RevisionConflict:
+            # Its readings changed: the frozen sections no longer match them.
+            shutil.rmtree(run_dir(course_dir, run_id), ignore_errors=True)
+            print(f"Lecture {course}/{item.session_id}: readings changed, writing it all again")
     if item.resume:
         try:
             store = open_run(

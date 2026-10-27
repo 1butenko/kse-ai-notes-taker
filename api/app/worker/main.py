@@ -215,8 +215,9 @@ async def queue_lectures(
     """Write these lectures one at a time: the first is admitted now, the rest wait."""
     if not COURSE.match(body.course):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {body.course!r}")
-    if any(item.resume and not RUN_ID.match(item.resume) for item in body.items):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid run to resume")
+    for item in body.items:
+        if any(run and not RUN_ID.match(run) for run in (item.resume, item.retry)):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid run to resume or retry")
     if opener is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Notes are not configured")
     if body.course in ACTIVE:

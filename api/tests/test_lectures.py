@@ -193,7 +193,7 @@ def test_lecture_run_resumes_only_from_its_lecture(mock_openrouter, no_quarto: P
     again = client.post("/plans/1/sessions/s2/notes", json={"resume": run["id"]}).json()["run"]
     assert again["id"] == run["id"] and again["status"] == "done"
     assert again["session_id"] == "s2"
-    assert "course_plan" not in [c[0] for c in calls]
+    assert "coverage_review" not in [c[0] for c in calls]
 
 
 # Lecture-only files
@@ -553,7 +553,7 @@ async def test_stop_cancels_the_lecture_clears_the_queue_and_resume_reuses_topic
     assert resumed["id"] == run_id and resumed["status"] == "done"
     assert t1.read_bytes() == finished
     names = [c[0] for c in calls]
-    assert "course_plan" not in names and names.count("evidence_selection") == 1
+    assert "coverage_review" not in names and names.count("evidence_selection") == 1
 
 
 def test_stop_without_a_job_is_harmless(mock_openrouter, no_quarto: Path) -> None:
@@ -737,3 +737,75 @@ def test_replacing_the_syllabus_clears_readings_approval(mock_openrouter, no_qua
     approve_readings(client)
     client.delete("/syllabus", params={"path": "1/syllabus/new.pdf"})
     assert client.get("/course-info/1").json()["readings_approved_at"] is None
+
+
+# Retry failed sections
+
+
+def failing_t2(handler):
+    def failing(request: httpx2.Request) -> httpx2.Response:
+        if b"Topic T2: Bases" in request.content and b"evidence_selection" in request.content:
+            return httpx2.Response(500, json={"error": {"message": "boom"}})
+        return handler(request)
+
+    return failing
+
+
+def test_retry_writes_only_the_failed_sections_in_a_new_run(
+    mock_openrouter, no_quarto: Path
+) -> None:
+    course(no_quarto)
+    handler, calls, _ = lecture_stub(TWO_TOPICS)
+    first = mock_openrouter(failing_t2(handler)).post("/plans/1/sessions/s2/notes").json()
+    statuses = [t["status"] for s in first["document"]["sections"] for t in s["topics"]]
+    assert first["run"]["status"] == "done" and statuses == ["verified", "failed"]
+    old = no_quarto / "1/notes" / first["run"]["id"]
+    finished = (old / "topics/T1/note.json").read_bytes()
+    published = (old / "notes.json").read_bytes()
+    client = mock_openrouter(handler)
+    calls.clear()
+
+    response = client.post("/plans/1/sessions/s2/notes", json={"retry": first["run"]["id"]})
+
+    assert response.status_code == 202, response.text
+    retried = response.json()
+    run = retried["run"]
+    assert run["id"] != first["run"]["id"] and run["status"] == "done"
+    assert run["retried_from"] == first["run"]["id"] and run["session_id"] == "s2"
+    statuses = [t["status"] for s in retried["document"]["sections"] for t in s["topics"]]
+    assert statuses == ["verified", "verified"]
+    names = [c[0] for c in calls]
+    assert "coverage_review" not in names and names.count("evidence_selection") == 1
+    new = no_quarto / "1/notes" / run["id"]
+    assert (new / "topics/T1/note.json").read_bytes() == finished
+    # The old version stays as it was.
+    assert (old / "notes.json").read_bytes() == published
+    assert client.get(f"/plans/1/notes/{first['run']['id']}").json()["run"]["status"] == "done"
+
+
+def test_retry_after_readings_changed_writes_the_whole_lecture(
+    mock_openrouter, no_quarto: Path
+) -> None:
+    course(no_quarto)
+    handler, calls, _ = lecture_stub(TWO_TOPICS)
+    first = mock_openrouter(failing_t2(handler)).post("/plans/1/sessions/s2/notes").json()["run"]
+    client = mock_openrouter(handler)
+    upload_lecture_file(client, "s2", "slides.md", b"# Slides\nBases again.")
+    calls.clear()
+
+    run = client.post("/plans/1/sessions/s2/notes", json={"retry": first["id"]}).json()["run"]
+
+    assert run["status"] == "done" and run["id"] != first["id"]
+    assert run["retried_from"] is None
+    assert "coverage_review" in [c[0] for c in calls]
+
+
+def test_retry_needs_a_finished_run_of_the_lecture(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    client = mock_openrouter(lecture_stub()[0])
+    run = client.post("/plans/1/sessions/s2/notes").json()["run"]
+
+    assert client.post("/plans/1/sessions/s1/notes", json={"retry": run["id"]}).status_code == 409
+    target = no_quarto / "1/notes" / run["id"] / "run.json"
+    target.write_text(json.dumps(json.loads(target.read_text()) | {"status": "failed"}))
+    assert client.post("/plans/1/sessions/s2/notes", json={"retry": run["id"]}).status_code == 409
