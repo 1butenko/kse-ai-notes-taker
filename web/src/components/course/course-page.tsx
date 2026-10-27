@@ -284,9 +284,13 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
                 Previous generations
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onClick={() => setDeleting("open")}>
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={notes.active !== null}
+                onClick={() => setDeleting("open")}
+              >
                 <Trash2Icon />
-                Start over
+                {notes.active ? "Start over (wait for the notes)" : "Start over"}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -473,8 +477,9 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
           <DialogHeader>
             <DialogTitle>Start over?</DialogTitle>
             <DialogDescription>
-              {name} is deleted with its syllabus, readings, lectures and every generated note. This
-              can&apos;t be undone.
+              {name} leaves the app with its syllabus, readings, lectures and every generated note.
+              The files move to the server&apos;s trash folder, where an administrator can restore
+              them.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

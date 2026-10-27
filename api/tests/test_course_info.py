@@ -71,7 +71,7 @@ def test_invalid_course_keys_are_rejected(tmp_uploads) -> None:
     assert not (tmp_uploads / "abc").exists()
 
 
-def test_delete_removes_the_whole_course_directory(tmp_uploads) -> None:
+def test_delete_moves_the_whole_course_directory_to_the_trash(tmp_uploads) -> None:
     client = TestClient(app)
     client.put("/course-info/7", json={"name": "Linear Algebra"})
     for path in (
@@ -87,7 +87,55 @@ def test_delete_removes_the_whole_course_directory(tmp_uploads) -> None:
     assert client.delete("/course-info/7").status_code == 204
     assert not (tmp_uploads / "7").exists()
     assert (tmp_uploads / "8/plan.json").is_file()
+    # Start over can be undone by hand: the folder waits in the trash, whole.
+    (trashed,) = (tmp_uploads / ".trash").iterdir()
+    assert trashed.name.startswith("7-")
+    assert (trashed / "reading/book.pdf").is_file()
+    assert (trashed / "notes/20261001-000000-abcd/run.json").is_file()
     assert client.get("/course-info/7").status_code == 404
     assert client.get("/course-info").json() == []
     # Deleting again is harmless.
+    assert client.delete("/course-info/7").status_code == 204
+
+
+def run_json(run: str, status: str) -> bytes:
+    return json.dumps(
+        {
+            "id": run,
+            "course": "7",
+            "status": status,
+            "stage": status,
+            "created_at": "2026-10-01T00:00:00+00:00",
+            "updated_at": "2026-10-01T00:00:00+00:00",
+            "models": {},
+        }
+    ).encode()
+
+
+def test_delete_is_refused_while_notes_are_generating(tmp_uploads) -> None:
+    client = TestClient(app)
+    client.put("/course-info/7", json={"name": "Linear Algebra"})
+    put(
+        tmp_uploads,
+        "7/notes/20261001-000000-aaaa/run.json",
+        run_json("20261001-000000-aaaa", "done"),
+    )
+
+    for status in ("queued", "running"):
+        put(
+            tmp_uploads,
+            "7/notes/20261002-000000-bbbb/run.json",
+            run_json("20261002-000000-bbbb", status),
+        )
+        refused = client.delete("/course-info/7")
+        assert refused.status_code == 409, status
+        assert "generat" in refused.json()["detail"].lower()
+        assert (tmp_uploads / "7/course.json").is_file()
+        assert not (tmp_uploads / ".trash").exists()
+
+    put(
+        tmp_uploads,
+        "7/notes/20261002-000000-bbbb/run.json",
+        run_json("20261002-000000-bbbb", "failed"),
+    )
     assert client.delete("/course-info/7").status_code == 204

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, StringConstraints, ValidationError
 
 from app.config import Settings, get_settings
+from app.notes import load_run, notes_dir
 from app.routers.plans import COURSE, course_dir
 
 router = APIRouter(prefix="/course-info", tags=["course-info"])
@@ -73,10 +74,40 @@ def put_course_info(
     return info
 
 
+def generating(directory: Path) -> bool:
+    """A run of the course is queued or running; unreadable run files count as idle."""
+    runs = notes_dir(directory)
+    if not runs.is_dir():
+        return False
+    for entry in runs.iterdir():
+        try:
+            run = load_run(directory, entry.name)
+        except (OSError, ValidationError):
+            continue
+        if run and run.status in ("queued", "running"):
+            return True
+    return False
+
+
+def trash_dir(settings: Settings) -> Path:
+    """Where Start over puts a course. Not a course key, so it is never listed."""
+    return settings.uploads_dir / ".trash"
+
+
 @router.delete("/{course}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_course(course: str, settings: Annotated[Settings, Depends(get_settings)]) -> None:
-    """Start over: everything stored for the course goes, uploads and notes included."""
+    """Start over: the course folder, uploads and notes included, moves to the trash.
+
+    Refused while notes are generating: the worker would recreate the folder it writes to.
+    """
     directory = course_dir(settings, course)
-    if directory.is_dir():
-        shutil.rmtree(directory)
-    print(f"Deleted course storage: {course}")
+    if not directory.is_dir():
+        return
+    if generating(directory):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Notes are generating. Stop or wait for them first."
+        )
+    trash_dir(settings).mkdir(parents=True, exist_ok=True)
+    target = trash_dir(settings) / f"{course}-{datetime.now(UTC):%Y%m%d-%H%M%S-%f}"
+    shutil.move(directory, target)
+    print(f"Moved course storage to the trash: {course} -> {target.name}")
