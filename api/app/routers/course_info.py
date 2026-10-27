@@ -7,36 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, StringConstraints, ValidationError
 
 from app.config import Settings, get_settings
+from app.course import CourseInfo, load_info, save_info
 from app.notes import CourseNotation, load_course_notation, load_queue, load_run, notes_dir
 from app.routers.plans import COURSE, course_dir
 
 router = APIRouter(prefix="/course-info", tags=["course-info"])
 
 
-class CourseInfo(BaseModel):
-    course: str
-    name: str
-    created_at: str
-
-
 class CourseInfoRequest(BaseModel):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
-
-
-def info_file(directory: Path) -> Path:
-    return directory / "course.json"
-
-
-def load_info(directory: Path) -> CourseInfo | None:
-    target = info_file(directory)
-    if not target.is_file():
-        return None
-    try:
-        info = CourseInfo.model_validate_json(target.read_text())
-    except ValidationError:
-        return None
-    # The directory names the course, whatever the file says.
-    return info.model_copy(update={"course": directory.name})
 
 
 @router.get("")
@@ -68,10 +47,35 @@ def put_course_info(
         course=course,
         name=body.name,
         created_at=previous.created_at if previous else datetime.now(UTC).isoformat(),
+        readings_approved_at=previous.readings_approved_at if previous else None,
     )
-    directory.mkdir(parents=True, exist_ok=True)
-    info_file(directory).write_text(info.model_dump_json(indent=2))
+    save_info(directory, info)
     return info
+
+
+def approval(settings: Settings, course: str, approved_at: str | None) -> CourseInfo:
+    directory = course_dir(settings, course)
+    info = load_info(directory)
+    if info is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
+    info = info.model_copy(update={"readings_approved_at": approved_at})
+    save_info(directory, info)
+    return info
+
+
+@router.post("/{course}/readings-approval")
+def approve_readings(
+    course: str, settings: Annotated[Settings, Depends(get_settings)]
+) -> CourseInfo:
+    """The lecturer approved the readings per lecture; the notes section opens."""
+    return approval(settings, course, datetime.now(UTC).isoformat(timespec="seconds"))
+
+
+@router.delete("/{course}/readings-approval")
+def revoke_readings_approval(
+    course: str, settings: Annotated[Settings, Depends(get_settings)]
+) -> CourseInfo:
+    return approval(settings, course, None)
 
 
 @router.get("/{course}/notation")

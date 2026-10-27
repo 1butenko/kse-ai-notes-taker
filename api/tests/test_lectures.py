@@ -656,3 +656,84 @@ async def test_stop_during_rendering_kills_quarto_and_publishes_nothing(
     assert resumed.json()["run"]["status"] == "done"
     artifacts = json.loads((folder / "artifacts.json").read_text())
     assert {a["status"] for a in artifacts} == {"failed"}
+
+
+# Readings approval
+
+
+def approve_readings(client) -> dict:
+    client.put("/course-info/1", json={"name": "Linear Algebra"})
+    response = client.post("/course-info/1/readings-approval")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_readings_approval_is_set_and_cleared(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    client = mock_openrouter(lecture_stub()[0])
+    assert client.post("/course-info/1/readings-approval").status_code == 404
+
+    info = approve_readings(client)
+
+    assert info["readings_approved_at"]
+    assert (
+        client.get("/course-info/1").json()["readings_approved_at"] == info["readings_approved_at"]
+    )
+    # Renaming the course keeps it.
+    renamed = client.put("/course-info/1", json={"name": "Linear Algebra I"}).json()
+    assert renamed["readings_approved_at"] == info["readings_approved_at"]
+
+    assert client.delete("/course-info/1/readings-approval").status_code == 200
+    assert client.get("/course-info/1").json()["readings_approved_at"] is None
+
+
+def test_reading_the_syllabus_again_clears_readings_approval(
+    mock_openrouter, no_quarto: Path
+) -> None:
+    from tests.test_syllabus import EXTRACTION, completion
+
+    course(no_quarto)
+    client = mock_openrouter(lambda request: completion(json.dumps(EXTRACTION)))
+    body = {"path": "1/syllabus/s.pdf"}
+    client.post("/syllabus/transcribe", json=body)  # The stored transcript is of other bytes.
+    approve_readings(client)
+
+    # A cached read changes nothing; a forced one is a new reading of the lectures.
+    client.post("/syllabus/transcribe", json=body)
+    assert client.get("/course-info/1").json()["readings_approved_at"] is not None
+    assert client.post("/syllabus/transcribe?force=true", json=body).status_code == 200
+    assert client.get("/course-info/1").json()["readings_approved_at"] is None
+
+
+def test_editing_the_lectures_clears_readings_approval(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    client = mock_openrouter(lecture_stub()[0])
+    approve_readings(client)
+    transcript = json.loads((no_quarto / "1/syllabus/s.pdf.transcript.json").read_text())
+    path = {"path": "1/syllabus/s.pdf"}
+
+    assert client.put("/syllabus/transcript", params=path, json=transcript).status_code == 200
+    assert client.get("/course-info/1").json()["readings_approved_at"] is not None
+
+    transcript["sessions"][1]["label"] = "Week 2b"
+    client.put("/syllabus/transcript", params=path, json=transcript)
+    assert client.get("/course-info/1").json()["readings_approved_at"] is None
+
+
+def test_replacing_the_syllabus_clears_readings_approval(mock_openrouter, no_quarto: Path) -> None:
+    from tests.test_plans import put_transcript
+
+    course(no_quarto)
+    client = mock_openrouter(lecture_stub()[0])
+    approve_readings(client)
+    other = transcript_of(no_quarto).model_copy(update={"source_path": "1/syllabus/new.pdf"})
+    put_transcript(no_quarto, other)
+
+    client.put("/plans/1/primary", json={"path": "1/syllabus/s.pdf"})
+    assert client.get("/course-info/1").json()["readings_approved_at"] is not None
+    assert client.put("/plans/1/primary", json={"path": "1/syllabus/new.pdf"}).status_code == 200
+    assert client.get("/course-info/1").json()["readings_approved_at"] is None
+
+    approve_readings(client)
+    client.delete("/syllabus", params={"path": "1/syllabus/new.pdf"})
+    assert client.get("/course-info/1").json()["readings_approved_at"] is None

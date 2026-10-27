@@ -9,6 +9,7 @@ from pypdf import PdfReader
 
 from app.books import cut_excerpt, load_index, printed_range
 from app.config import Settings, get_settings
+from app.course import clear_readings_approval
 from app.plan import (
     BookMatch,
     Plan,
@@ -300,7 +301,10 @@ def put_primary(
         raise HTTPException(status.HTTP_409_CONFLICT, "Transcribe this syllabus first")
     directory = course_dir(settings, course)
     plan = load_plan(directory)
-    plan.primary = file.relative_to(settings.uploads_dir.resolve()).as_posix()
+    primary = file.relative_to(settings.uploads_dir.resolve()).as_posix()
+    if plan.primary != primary:
+        clear_readings_approval(directory)
+    plan.primary = primary
     save_plan(directory, plan)
     return render(settings, course, *current(settings, course))
 

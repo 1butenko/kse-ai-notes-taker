@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
+from app.course import clear_readings_approval
 from app.plan import drop_primary, load_plan, save_plan, sync
 from app.storage import sha256
 from app.syllabus import Transcript, load_transcript, transcript_file
@@ -81,6 +82,9 @@ async def transcribe(
     )
     transcript_file(file).write_text(transcript.model_dump_json(indent=2))
     use_as_plan_if_first(settings, transcript.source_path)
+    course_dir = settings.uploads_dir / transcript.source_path.split("/")[0]
+    if load_plan(course_dir).primary == transcript.source_path:
+        clear_readings_approval(course_dir)
     print(
         f"Transcribed {transcript.source_path}: {len(transcript.sessions)} sessions, "
         f"{len(transcript.learning_materials)} materials"
@@ -126,6 +130,8 @@ def put_transcript(
     plan = load_plan(course_dir)
     if plan.primary == transcript.source_path and sync(plan, transcript):
         save_plan(course_dir, plan)
+    if plan.primary == transcript.source_path and transcript.sessions != stored.sessions:
+        clear_readings_approval(course_dir)
     print(f"Edited transcript {transcript.source_path}: {len(transcript.sessions)} sessions")
     return transcript
 
@@ -143,6 +149,7 @@ def delete_syllabus(
     if plan.primary == relative:
         drop_primary(plan)
         save_plan(course_dir, plan)
+        clear_readings_approval(course_dir)
 
     transcript_file(file).unlink(missing_ok=True)
     file.unlink()
