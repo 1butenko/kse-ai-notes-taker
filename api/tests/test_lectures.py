@@ -272,3 +272,96 @@ def test_lecture_file_opens_in_the_viewer(mock_openrouter, no_quarto: Path) -> N
     response = client.get("/files", params={"path": "1/lecture/s2/slides.md"})
 
     assert response.status_code == 200 and response.content == b"# Slides"
+
+
+# Course notation sheet
+
+FIRST_LECTURE_PLAN = {
+    **LECTURE_PLAN,
+    "title": "Linear systems",
+    "sections": [
+        {
+            "title": "Linear systems",
+            "topics": [topic("T1", "Linear systems", [0], [0], ["Gaussian", "elimination"])],
+        }
+    ],
+    "notation": [
+        {"symbol": "$V$", "meaning": "the vector of unknowns"},
+        {"symbol": "$A$", "meaning": "the coefficient matrix"},
+    ],
+    "terminology": [
+        {"term": "Basis", "definition": "a set of pivots"},
+        {"term": "pivot", "definition": "leading entry of a row"},
+    ],
+}
+
+
+def sheet(root: Path) -> dict:
+    return json.loads((root / "1/notation.json").read_text())
+
+
+def test_first_lecture_run_seeds_the_notation_sheet(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    client = mock_openrouter(lecture_stub()[0])
+    assert client.get("/course-info/1/notation").json() == {"notation": [], "terminology": []}
+
+    client.post("/plans/1/notes")  # A whole-course run never touches the sheet.
+    assert not (no_quarto / "1/notation.json").exists()
+
+    client.post("/plans/1/sessions/s2/notes")
+
+    expected = {
+        "notation": [{"symbol": "$V$", "meaning": "a vector space"}],
+        "terminology": [{"term": "basis", "definition": "independent spanning set"}],
+    }
+    assert sheet(no_quarto) == expected
+    assert client.get("/course-info/1/notation").json() == expected
+
+
+def test_later_lecture_gets_the_sheet_and_only_appends(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    client = mock_openrouter(lecture_stub()[0])
+    client.post("/plans/1/sessions/s2/notes")
+
+    handler, _, prompts = lecture_stub(FIRST_LECTURE_PLAN)
+    run = mock_openrouter(handler).post("/plans/1/sessions/s1/notes").json()["run"]
+
+    planner = next(p for name, p in prompts if name == "course_plan")
+    assert "Course notation" in planner and "a vector space" in planner
+    assert sheet(no_quarto) == {
+        "notation": [
+            {"symbol": "$V$", "meaning": "a vector space"},
+            {"symbol": "$A$", "meaning": "the coefficient matrix"},
+        ],
+        "terminology": [
+            {"term": "basis", "definition": "independent spanning set"},
+            {"term": "pivot", "definition": "leading entry of a row"},
+        ],
+    }
+    # The lecture itself follows the sheet where they disagree.
+    planned = json.loads((no_quarto / "1/notes" / run["id"] / "plan.json").read_text())
+    assert planned["notation"][0] == {"symbol": "$V$", "meaning": "a vector space"}
+    assert planned["terminology"][0] == {"term": "basis", "definition": "independent spanning set"}
+
+
+def test_failed_lecture_run_leaves_the_sheet_alone(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    handler, _, _ = lecture_stub()
+
+    def failing(request: httpx2.Request) -> httpx2.Response:
+        if b'"consistency_edits"' in request.content:
+            return httpx2.Response(500, json={"error": {"message": "boom"}})
+        return handler(request)
+
+    run = mock_openrouter(failing).post("/plans/1/sessions/s2/notes").json()["run"]
+
+    assert run["status"] == "failed"
+    assert not (no_quarto / "1/notation.json").exists()
+
+
+def test_unreadable_notation_sheet_reads_as_empty(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    (no_quarto / "1/notation.json").write_text("{not json")
+    client = mock_openrouter(lecture_stub()[0])
+
+    assert client.get("/course-info/1/notation").json() == {"notation": [], "terminology": []}

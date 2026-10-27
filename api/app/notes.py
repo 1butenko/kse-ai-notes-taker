@@ -106,6 +106,57 @@ class CoursePlan(Strict):
         return [(section, topic) for section in self.sections for topic in section.topics]
 
 
+class CourseNotation(BaseModel):
+    """The notation sheet lecture runs share: seeded by the first, only ever appended to."""
+
+    notation: list[NotationEntry] = []
+    terminology: list[TermEntry] = []
+
+
+def notation_file(course_dir: Path) -> Path:
+    return course_dir / "notation.json"
+
+
+def load_course_notation(course_dir: Path) -> CourseNotation:
+    """A missing or unreadable sheet is an empty one."""
+    try:
+        return CourseNotation.model_validate_json(notation_file(course_dir).read_text())
+    except (OSError, UnicodeError, ValueError):
+        return CourseNotation()
+
+
+def _key(text: str) -> str:
+    return " ".join(text.split())
+
+
+def bind_notation(plan: CoursePlan, sheet: CourseNotation) -> CoursePlan:
+    """The plan with the sheet's meaning for every symbol and term the sheet already has."""
+    symbols = {_key(e.symbol): e for e in sheet.notation}
+    terms = {_key(e.term).casefold(): e for e in sheet.terminology}
+    return plan.model_copy(
+        update={
+            "notation": [symbols.get(_key(e.symbol), e) for e in plan.notation],
+            "terminology": [terms.get(_key(e.term).casefold(), e) for e in plan.terminology],
+        }
+    )
+
+
+def append_notation(sheet: CourseNotation, plan: CoursePlan) -> CourseNotation:
+    """The sheet plus the plan's new symbols and terms; existing meanings never change."""
+    notation, terminology = list(sheet.notation), list(sheet.terminology)
+    symbols = {_key(e.symbol) for e in notation}
+    terms = {_key(e.term).casefold() for e in terminology}
+    for entry in plan.notation:
+        if _key(entry.symbol) not in symbols:
+            symbols.add(_key(entry.symbol))
+            notation.append(entry)
+    for entry in plan.terminology:
+        if _key(entry.term).casefold() not in terms:
+            terms.add(_key(entry.term).casefold())
+            terminology.append(entry)
+    return CourseNotation(notation=notation, terminology=terminology)
+
+
 class CoverageIssue(Strict):
     kind: Literal[
         "missing_topic", "duplicate", "granularity", "weak_evidence", "ordering", "objectives"

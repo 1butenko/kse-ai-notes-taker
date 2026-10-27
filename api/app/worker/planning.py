@@ -4,7 +4,15 @@ import json
 
 from langfuse import get_client
 
-from app.notes import CoursePlan, CoverageIssue, CoverageReview, Inputs, validate_topic_ids
+from app.notes import (
+    CourseNotation,
+    CoursePlan,
+    CoverageIssue,
+    CoverageReview,
+    Inputs,
+    bind_notation,
+    validate_topic_ids,
+)
 from app.syllabus import Transcript
 from app.worker.artifacts import RunStore
 from app.worker.llm import ask, chat
@@ -93,7 +101,11 @@ def inventory_text(inputs: Inputs) -> str:
 
 
 def planner_input(
-    transcript: Transcript, inputs: Inputs, previous: CoursePlan | None, issues: list
+    transcript: Transcript,
+    inputs: Inputs,
+    previous: CoursePlan | None,
+    issues: list,
+    sheet: CourseNotation | None = None,
 ) -> str:
     parts = [
         f"Syllabus language: {transcript.language or 'unknown'}",
@@ -104,6 +116,14 @@ def planner_input(
         "Course materials:",
         inventory_text(inputs),
     ]
+    if sheet and (sheet.notation or sheet.terminology):
+        parts += [
+            "",
+            "Course notation (binding: earlier lectures use these symbols and terms with these "
+            "meanings. Reuse them, never give them another meaning, and add entries only for "
+            "what this lecture introduces):",
+            sheet.model_dump_json(indent=1),
+        ]
     if previous:
         parts += [
             "",
@@ -167,8 +187,13 @@ async def plan_course(
     transcript: Transcript,
     inputs: Inputs,
     rounds: int,
+    sheet: CourseNotation | None = None,
 ) -> CoursePlan:
-    """Plan, review and revise until approved or out of rounds; the last plan is used."""
+    """Plan, review and revise until approved or out of rounds; the last plan is used.
+
+    A lecture run passes the course notation sheet: it is binding, so where the plan
+    disagrees with it the sheet's meaning is kept.
+    """
     with get_client().start_as_current_observation(
         name="plan-course",
         input={"sessions": len(transcript.sessions), "sources": len(inputs.sources)},
@@ -179,7 +204,10 @@ async def plan_course(
         for round in range(1, rounds + 1):
             plan = await ask(
                 client,
-                chat(PLANNER_PROMPT + lecture, planner_input(transcript, inputs, plan, issues)),
+                chat(
+                    PLANNER_PROMPT + lecture,
+                    planner_input(transcript, inputs, plan, issues, sheet),
+                ),
                 CoursePlan,
                 "course_plan",
                 step="draft-course-plan",
@@ -233,6 +261,8 @@ async def plan_course(
             store.warn(f"Thin evidence for {', '.join(gap.topics) or 'a topic'}: {gap.detail}")
 
         assert plan is not None
+        if sheet is not None:
+            plan = bind_notation(plan, sheet)
         validate_topic_ids([topic.id for _, topic in plan.topics()])
         store.write("plan.json", plan)
         span.update(

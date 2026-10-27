@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, StringConstraints, ValidationError
 
 from app.config import Settings, get_settings
-from app.notes import load_run, notes_dir
+from app.notes import CourseNotation, load_course_notation, load_run, notes_dir
 from app.routers.plans import COURSE, course_dir
 
 router = APIRouter(prefix="/course-info", tags=["course-info"])
@@ -72,6 +72,14 @@ def put_course_info(
     directory.mkdir(parents=True, exist_ok=True)
     info_file(directory).write_text(info.model_dump_json(indent=2))
     return info
+
+
+@router.get("/{course}/notation")
+def get_notation(
+    course: str, settings: Annotated[Settings, Depends(get_settings)]
+) -> CourseNotation:
+    """The notation and terms lecture notes share; read-only."""
+    return load_course_notation(course_dir(settings, course))
 
 
 def generating(directory: Path) -> bool:

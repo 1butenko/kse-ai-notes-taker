@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.note_assets import asset_resources
 from app.notes import (
+    CourseNotation,
     CoursePlan,
     Inputs,
     NotesDocument,
@@ -16,6 +17,9 @@ from app.notes import (
     NotesSection,
     RenderedArtifact,
     TopicNote,
+    append_notation,
+    load_course_notation,
+    notation_file,
     now,
     run_dir,
     topic_filename,
@@ -45,6 +49,7 @@ COMPLETED_RUN = (
 )
 
 
+COURSE_NOTATION = "course-notation.json"
 OTHER_LECTURE = "This run belongs to another lecture; resume it from that lecture."
 
 
@@ -173,6 +178,9 @@ def open_run(
             if input_fingerprint(course_dir, plan, transcript) != fingerprint:
                 raise RevisionConflict(RESUME_PROVENANCE)
             store.write("inputs.json", inputs)
+            if session_id:
+                # Frozen with the inputs, so resuming plans against the same sheet.
+                store.write(COURSE_NOTATION, load_course_notation(course_dir))
             store.write(
                 "provenance.json",
                 GenerationProvenance(
@@ -280,11 +288,22 @@ async def run_notes(
                     raise ValueError("No session material has extractable text")
                 store.log("inputs", f"{len(inputs.sources)} sources, {len(inputs.chunks)} chunks")
 
+                sheet = (
+                    store.read(COURSE_NOTATION, CourseNotation) or CourseNotation()
+                    if store.run.session_id
+                    else None
+                )
                 course_plan = store.read("plan.json", CoursePlan)
                 if course_plan is None:
                     store.log("planning", "Drafting the course plan")
                     course_plan = await plan_course(
-                        client, models, store, transcript, inputs, settings.notes_plan_rounds
+                        client,
+                        models,
+                        store,
+                        transcript,
+                        inputs,
+                        settings.notes_plan_rounds,
+                        sheet,
                     )
                 validate_topic_ids([topic.id for _, topic in course_plan.topics()])
                 store.log("planning", f"Plan ready: {len(course_plan.topics())} topics")
@@ -316,6 +335,8 @@ async def run_notes(
             )
             store.write("notes.json", document)
             await render_notes_outputs(document, store, settings)
+            if store.run.session_id:
+                extend_course_notation(store, course_plan)
             store.run.status = "done"
             store.log("done", "Notes are ready")
             span.update(output={"topics": len(notes), "failed": failed, "edits": edits})
@@ -326,6 +347,22 @@ async def run_notes(
         store.log("failed", store.run.error)
     finally:
         ACTIVE.discard(course)
+
+
+def extend_course_notation(store: RunStore, plan: CoursePlan) -> None:
+    """Append a finished lecture's new symbols and terms to the course sheet.
+
+    Only the worker writes the sheet, and it runs one job per course at a time.
+    """
+    course_dir = store.directory.parents[1]
+    try:
+        sheet = append_notation(load_course_notation(course_dir), plan)
+        target = notation_file(course_dir)
+        partial = target.with_name(f".{target.name}.partial")
+        partial.write_text(sheet.model_dump_json(indent=2))
+        partial.replace(target)
+    except OSError as error:
+        store.warn(f"The course notation sheet was not updated: {error}")
 
 
 async def render_notes_outputs(
