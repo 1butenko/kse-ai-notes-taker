@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.syllabus import Transcript
+from app.syllabus import Transcript, load_transcript
 
 
 class PlanSession(BaseModel):
@@ -176,6 +176,16 @@ def sync(plan: Plan, transcript: Transcript) -> bool:
     plan.unassigned = unassigned
     plan.proposals = proposals
     return changed
+
+
+def aligned(uploads_dir: Path, course: str) -> tuple[Plan, Transcript | None, bool]:
+    """The course plan re-aligned with its primary transcript, and whether that changed it.
+
+    Nothing is saved: the API saves the change, the worker only reads.
+    """
+    plan = load_plan(uploads_dir / course)
+    transcript = load_transcript(uploads_dir / plan.primary) if plan.primary else None
+    return plan, transcript, bool(transcript and sync(plan, transcript))
 
 
 def drop_primary(plan: Plan) -> None:

@@ -14,13 +14,13 @@ from app.plan import (
     Plan,
     PlanSession,
     Proposal,
+    aligned,
     load_plan,
     materials_fingerprint,
     merge_proposals,
     new_id,
     save_plan,
     session_fingerprint,
-    sync,
 )
 from app.routers.syllabus import load_transcript, syllabus_file
 from app.routers.uploads import SavedFile, safe_name
@@ -163,9 +163,8 @@ def file_views(settings: Settings, plan: Plan, paths: list[str]) -> list[FileVie
 def current(settings: Settings, course: str) -> tuple[Plan, Transcript | None]:
     """Load the course plan, re-aligned with its primary transcript."""
     directory = course_dir(settings, course)
-    plan = load_plan(directory)
-    transcript = load_transcript(settings.uploads_dir / plan.primary) if plan.primary else None
-    if transcript and sync(plan, transcript):
+    plan, transcript, changed = aligned(settings.uploads_dir, course)
+    if changed:
         save_plan(directory, plan)
     return plan, transcript
 

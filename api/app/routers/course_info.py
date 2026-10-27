@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, StringConstraints, ValidationError
 
 from app.config import Settings, get_settings
-from app.notes import CourseNotation, load_course_notation, load_run, notes_dir
+from app.notes import CourseNotation, load_course_notation, load_queue, load_run, notes_dir
 from app.routers.plans import COURSE, course_dir
 
 router = APIRouter(prefix="/course-info", tags=["course-info"])
@@ -83,7 +83,11 @@ def get_notation(
 
 
 def generating(directory: Path) -> bool:
-    """A run of the course is queued or running; unreadable run files count as idle."""
+    """A run of the course is queued or running, or lectures wait in its queue; unreadable
+    run files count as idle."""
+    queue = load_queue(directory)
+    if queue.waiting or queue.active:
+        return True
     runs = notes_dir(directory)
     if not runs.is_dir():
         return False

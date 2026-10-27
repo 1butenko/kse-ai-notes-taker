@@ -3,12 +3,12 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from app.config import Settings, get_settings
 from app.plan import drop_primary, load_plan, save_plan, sync
 from app.storage import sha256
-from app.syllabus import Transcript
+from app.syllabus import Transcript, load_transcript, transcript_file
 from app.worker_client import WorkerClient, get_worker_client
 from app.worker_contract import TranscribeRequest as WorkerTranscribeRequest
 
@@ -45,20 +45,6 @@ def syllabus_file(settings: Settings, path: str) -> Path:
     if file.stat().st_size > MAX_SIZE:
         raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Syllabus file is larger than 20 MB")
     return file
-
-
-def transcript_file(file: Path) -> Path:
-    return file.with_name(f"{file.name}.transcript.json")
-
-
-def load_transcript(file: Path) -> Transcript | None:
-    target = transcript_file(file)
-    if not target.is_file():
-        return None
-    try:
-        return Transcript.model_validate_json(target.read_text())
-    except ValidationError:
-        return None
 
 
 def use_as_plan_if_first(settings: Settings, source_path: str) -> None:

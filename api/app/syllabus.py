@@ -1,3 +1,7 @@
+from pathlib import Path
+
+from pydantic import ValidationError
+
 from app.schemas import Strict
 
 
@@ -36,3 +40,17 @@ class Transcript(SyllabusExtraction):
     source_sha256: str
     model: str
     created_at: str
+
+
+def transcript_file(file: Path) -> Path:
+    return file.with_name(f"{file.name}.transcript.json")
+
+
+def load_transcript(file: Path) -> Transcript | None:
+    target = transcript_file(file)
+    if not target.is_file():
+        return None
+    try:
+        return Transcript.model_validate_json(target.read_text())
+    except ValidationError:
+        return None

@@ -11,14 +11,17 @@ from pydantic import BaseModel, Field
 from app.config import Settings, get_settings
 from app.note_assets import MAX_UPLOAD_BYTES, import_asset, load_asset, validated_asset_path
 from app.notes import (
+    LectureQueue,
     NoteAsset,
     NotesDocument,
     NotesRun,
+    QueueItem,
     RenderedArtifact,
     RenderFormat,
     list_runs,
     load_course_plan,
     load_document,
+    load_queue,
     load_run,
     new_run_id,
     run_dir,
@@ -58,10 +61,12 @@ from app.routers.plans import course_dir, current
 from app.worker_client import WorkerClient, get_worker_client
 from app.worker_contract import (
     ApprovalRequest,
+    LecturesRequest,
     NotesRequest,
     RenderRequest,
     RestoreRequest,
     ReviseRequest,
+    StopRequest,
     SuggestionActionRequest,
     SuggestRequest,
     VerifyTopicRequest,
@@ -207,17 +212,90 @@ async def generate_lecture_notes(
     if not scoped.sessions[0].files:
         raise HTTPException(status.HTTP_409_CONFLICT, "Add readings to this lecture first")
 
-    run_id = body.resume if body and body.resume else new_run_id()
-    if body and body.resume and find_run(settings, course, run_id).session_id != session_id:
+    resume = body.resume if body and body.resume else None
+    if resume and find_run(settings, course, resume).session_id != session_id:
         raise HTTPException(status.HTTP_409_CONFLICT, "This run belongs to another lecture")
 
-    started = await worker.generate_notes(
-        NotesRequest(
-            course=course, run=run_id, plan=scoped, transcript=syllabus, session_id=session_id
-        )
+    # Through the course's queue, so a single lecture and Generate all never race.
+    reply = await worker.queue_lectures(
+        LecturesRequest(course=course, items=[QueueItem(session_id=session_id, resume=resume)])
     )
-    run = load_run(course_dir(settings, course), started.id) or started
+    run = load_run(course_dir(settings, course), reply.run.id) or reply.run
     return view(settings, course, run)
+
+
+class SkippedLecture(BaseModel):
+    session_id: str
+    reason: str
+
+
+class QueueView(BaseModel):
+    """The course's notes job: the run being written and the lectures waiting, in order."""
+
+    waiting: list[str]
+    active: str | None
+    active_session: str | None
+    # Generate all only: lectures it left out, and why.
+    skipped: list[SkippedLecture] = Field(default_factory=list)
+
+
+def queue_view(queue: LectureQueue, skipped: list[SkippedLecture] | None = None) -> QueueView:
+    return QueueView(
+        waiting=[item.session_id for item in queue.waiting],
+        active=queue.active,
+        active_session=queue.active_session,
+        skipped=skipped or [],
+    )
+
+
+@router.post("/{course}/notes/queue", status_code=status.HTTP_202_ACCEPTED)
+async def generate_all(
+    course: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> QueueView:
+    """Queue every lecture without a note that has readings, in syllabus order.
+
+    A lecture whose last run stopped or failed continues it, unless its readings changed.
+    """
+    plan, transcript = current(settings, course)
+    if transcript is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Transcribe a syllabus first")
+    runs = [r for r in list_runs(course_dir(settings, course)) if r.session_id]
+    items: list[QueueItem] = []
+    skipped: list[SkippedLecture] = []
+    for entry in plan.sessions:
+        own = [r for r in runs if r.session_id == entry.id]
+        if any(r.status == "done" for r in own):
+            continue
+        if not entry.files:
+            skipped.append(SkippedLecture(session_id=entry.id, reason="No readings"))
+            continue
+        last = own[0] if own else None
+        resume = last.id if last and last.status == "failed" else None
+        items.append(QueueItem(session_id=entry.id, resume=resume, renew=True))
+    if not items:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Every lecture with readings already has a note"
+        )
+    reply = await worker.queue_lectures(LecturesRequest(course=course, items=items))
+    return queue_view(reply.queue, skipped)
+
+
+@router.get("/{course}/notes/queue")
+def get_queue(course: str, settings: Annotated[Settings, Depends(get_settings)]) -> QueueView:
+    return queue_view(load_queue(course_dir(settings, course)))
+
+
+@router.post("/{course}/notes/stop")
+async def stop_notes(
+    course: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> QueueView:
+    """Stop the lecture being written (it keeps its finished sections) and clear the queue."""
+    course_dir(settings, course)
+    return queue_view(await worker.stop_notes(StopRequest(course=course)))
 
 
 @router.get("/{course}/notes")

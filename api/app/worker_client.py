@@ -6,10 +6,13 @@ from fastapi import Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
+from app.notes import LectureQueue
 from app.notes_revisions import EditResult, RenderJob
 from app.notes_suggestions import NoteSuggestion, VerificationJob
 from app.worker_contract import (
     ApprovalRequest,
+    LecturesRequest,
+    LecturesResponse,
     MapRequest,
     MapResponse,
     NotesRequest,
@@ -17,6 +20,7 @@ from app.worker_contract import (
     RenderRequest,
     RestoreRequest,
     ReviseRequest,
+    StopRequest,
     SuggestionActionRequest,
     SuggestRequest,
     TranscribeRequest,
@@ -40,6 +44,12 @@ class WorkerClient:
 
     async def generate_notes(self, request: NotesRequest) -> NotesResponse:
         return await self.call("/notes", request, NotesResponse)
+
+    async def queue_lectures(self, request: LecturesRequest) -> LecturesResponse:
+        return await self.call("/notes/lectures", request, LecturesResponse)
+
+    async def stop_notes(self, request: StopRequest) -> LectureQueue:
+        return await self.call("/notes/stop", request, LectureQueue)
 
     async def revise_notes(self, request: ReviseRequest) -> EditResult:
         return await self.call("/notes/revise", request, EditResult)

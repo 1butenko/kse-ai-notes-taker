@@ -8,7 +8,7 @@ from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 
-from app.notes import RUN_ID, run_dir
+from app.notes import RUN_ID, LectureQueue, run_dir
 from app.notes_revisions import (
     EditResult,
     InvalidEdit,
@@ -17,14 +17,15 @@ from app.notes_revisions import (
     RevisionNotFound,
 )
 from app.notes_suggestions import NoteSuggestion, VerificationJob
+from app.plan import UnknownSession
 from app.storage import sha256
 from app.syllabus import SyllabusExtraction
-from app.worker import note_suggestions, revisions
+from app.worker import lectures, note_suggestions, revisions
 from app.worker.config import WorkerSettings, get_worker_settings
 from app.worker.llm import ask
 from app.worker.mapping import proposal_summary, run_mapping
 from app.worker.models import NotesModels
-from app.worker.notes import ACTIVE, fail_interrupted, open_run, run_notes
+from app.worker.notes import ACTIVE, fail_interrupted, open_run
 from app.worker.openrouter import (
     Opener,
     OpenRouterClient,
@@ -35,6 +36,8 @@ from app.worker.tracing import course_trace, init_langfuse
 from app.worker.transcribe import EmptyDocument, build_messages, drop_bad_refs
 from app.worker_contract import (
     ApprovalRequest,
+    LecturesRequest,
+    LecturesResponse,
     MapRequest,
     MapResponse,
     NotesRequest,
@@ -42,6 +45,7 @@ from app.worker_contract import (
     RenderRequest,
     RestoreRequest,
     ReviseRequest,
+    StopRequest,
     SuggestionActionRequest,
     SuggestRequest,
     TranscribeRequest,
@@ -67,6 +71,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             ) from error
         try:
             await asyncio.to_thread(fail_interrupted, settings.uploads_dir)
+            await asyncio.to_thread(lectures.drop_queues, settings.uploads_dir)
             await asyncio.to_thread(revisions.fail_interrupted_renders, settings.uploads_dir)
             await asyncio.to_thread(note_suggestions.fail_interrupted_jobs, settings.uploads_dir)
             yield
@@ -176,6 +181,7 @@ async def generate_notes(
         raise HTTPException(status.HTTP_409_CONFLICT, "Notes are already being generated")
 
     ACTIVE.add(body.course)  # Reserved before admission waits for the run lock off the loop.
+    lectures.STOPPING.discard(body.course)
     try:
         store = await asyncio.to_thread(
             open_run,
@@ -185,7 +191,6 @@ async def generate_notes(
             NotesModels.from_settings(settings),
             body.plan,
             body.transcript,
-            body.session_id,
         )
     except RevisionConflict as error:
         ACTIVE.discard(body.course)
@@ -193,8 +198,63 @@ async def generate_notes(
     except BaseException:
         ACTIVE.discard(body.course)
         raise
-    background.add_task(run_notes, opener, settings, store, body.plan, body.transcript)
+    lectures.QUEUES[body.course] = LectureQueue(active=store.run.id)
+    background.add_task(
+        lectures.drain, opener, settings, body.course, (store, body.plan, body.transcript)
+    )
     return store.run
+
+
+@app.post("/notes/lectures", status_code=status.HTTP_202_ACCEPTED)
+async def queue_lectures(
+    body: LecturesRequest,
+    background: BackgroundTasks,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+    opener: Annotated[Opener | None, Depends(get_openrouter_opener)],
+) -> LecturesResponse:
+    """Write these lectures one at a time: the first is admitted now, the rest wait."""
+    if not COURSE.match(body.course):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {body.course!r}")
+    if any(item.resume and not RUN_ID.match(item.resume) for item in body.items):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid run to resume")
+    if opener is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Notes are not configured")
+    if body.course in ACTIVE:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Notes are already being generated")
+
+    ACTIVE.add(body.course)
+    lectures.STOPPING.discard(body.course)
+    first, *rest = body.items
+    try:
+        admitted = await asyncio.to_thread(lectures.admit, settings, body.course, first)
+    except UnknownSession as error:
+        ACTIVE.discard(body.course)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Lecture not found") from error
+    except (lectures.NoReadings, RevisionConflict) as error:
+        ACTIVE.discard(body.course)
+        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+    except BaseException:
+        ACTIVE.discard(body.course)
+        raise
+    store = admitted[0]
+    queue = LectureQueue(waiting=rest, active=store.run.id, active_session=store.run.session_id)
+    lectures.QUEUES[body.course] = queue
+    lectures.save_queue(settings.uploads_dir / body.course, queue)
+    background.add_task(lectures.drain, opener, settings, body.course, admitted)
+    return LecturesResponse(run=store.run, queue=queue)
+
+
+@app.post("/notes/stop")
+async def stop_notes(
+    body: StopRequest, settings: Annotated[WorkerSettings, Depends(get_worker_settings)]
+) -> LectureQueue:
+    """Cancel the run being written and empty the queue; the run stays resumable.
+
+    Async on purpose: the job's task can only be cancelled from its own event loop.
+    """
+    if not COURSE.match(body.course):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {body.course!r}")
+    return lectures.stop(settings, body.course)
 
 
 def run_directory(settings: WorkerSettings, course: str, run: str) -> Path:

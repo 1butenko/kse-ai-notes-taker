@@ -351,6 +351,37 @@ class NotesRun(BaseModel):
     session_label: str | None = None
 
 
+class QueueItem(BaseModel):
+    session_id: str
+    # An unfinished run of this lecture to continue rather than starting a new one.
+    resume: str | None = None
+    # Generate all: when that run's readings changed, write a new run instead of refusing.
+    renew: bool = False
+
+
+class LectureQueue(BaseModel):
+    """What a course's notes job is doing: the run being written and the lectures waiting.
+
+    The worker writes it to <course>/queue.json while a job runs and removes it after.
+    """
+
+    waiting: list[QueueItem] = []
+    active: str | None = None
+    active_session: str | None = None
+
+
+def queue_file(course_dir: Path) -> Path:
+    return course_dir / "queue.json"
+
+
+def load_queue(course_dir: Path) -> LectureQueue:
+    """A missing or unreadable queue is an empty one."""
+    try:
+        return LectureQueue.model_validate_json(queue_file(course_dir).read_text())
+    except (OSError, UnicodeError, ValueError):
+        return LectureQueue()
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 

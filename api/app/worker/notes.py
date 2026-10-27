@@ -50,6 +50,7 @@ COMPLETED_RUN = (
 
 
 COURSE_NOTATION = "course-notation.json"
+STOPPED = "Stopped; resume to continue"
 OTHER_LECTURE = "This run belongs to another lecture; resume it from that lecture."
 
 
@@ -345,8 +346,18 @@ async def run_notes(
         store.run.status = "failed"
         store.run.error = str(getattr(error, "detail", None) or error)
         store.log("failed", store.run.error)
-    finally:
-        ACTIVE.discard(course)
+    except asyncio.CancelledError:
+        # Stop: finished topics stay on disk and are reused when the run resumes. Nothing
+        # half-written is published: Quarto is killed and its outputs never replace files,
+        # and a run that is not done never shows its artifact manifest.
+        mark_stopped(store)
+
+
+def mark_stopped(store: RunStore) -> None:
+    print(f"Notes run {store.run.course}/{store.run.id} stopped")
+    store.run.status = "failed"
+    store.run.error = STOPPED
+    store.log("failed", STOPPED)
 
 
 def extend_course_notation(store: RunStore, plan: CoursePlan) -> None:
