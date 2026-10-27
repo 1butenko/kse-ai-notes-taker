@@ -809,3 +809,31 @@ def test_retry_needs_a_finished_run_of_the_lecture(mock_openrouter, no_quarto: P
     target = no_quarto / "1/notes" / run["id"] / "run.json"
     target.write_text(json.dumps(json.loads(target.read_text()) | {"status": "failed"}))
     assert client.post("/plans/1/sessions/s2/notes", json={"retry": run["id"]}).status_code == 409
+
+
+# The e2e mock model
+
+
+def test_e2e_mock_plans_and_writes_the_lecture_it_is_asked_about() -> None:
+    from app.worker.llm import chat
+    from app.worker.planning import LECTURE_RULE, PLANNER_PROMPT
+    from tests.e2e.synthetic import answer
+
+    def body(name: str, system: str, user: str) -> dict:
+        return {
+            "model": "e2e/planner",
+            "response_format": {"json_schema": {"name": name}},
+            "messages": chat(system, user),
+        }
+
+    second = "Syllabus sessions:\nS0: Тиждень 2: Власні значення та власні вектори"
+    plan, _ = answer(body("course_plan", PLANNER_PROMPT + LECTURE_RULE, second))
+    topics = [t for s in plan["sections"] for t in s["topics"]]
+    assert [(t["id"], t["title"], t["sessions"]) for t in topics] == [
+        ("T1", "Власні значення та власні вектори", [0])
+    ]
+
+    # The lecture's T1 is the control topic T2: its draft and its unresolved verification.
+    prompt = "Topic T1: Власні значення та власні вектори\nObjectives:"
+    _, record = answer(body("topic_verification", "Verify.", prompt))
+    assert record["topic"] == "T2"

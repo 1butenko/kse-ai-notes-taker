@@ -261,7 +261,9 @@ def answer(body: dict) -> tuple[dict, dict]:
     """The JSON answer for one chat completion request and a log record describing it."""
     name = body["response_format"]["json_schema"]["name"]
     prompt = "\n".join(
-        m["content"] if isinstance(m["content"], str) else json.dumps(m["content"])
+        m["content"]
+        if isinstance(m["content"], str)
+        else json.dumps(m["content"], ensure_ascii=False)
         for m in body["messages"]
     )
     topic = topic_of(prompt)
