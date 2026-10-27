@@ -188,6 +188,8 @@ export type Excerpt = {
 
 export type FileView = SavedFile & {
   excerpt: Excerpt | null;
+  /** Uploaded for this lecture only: not a course reading, never matched to other lectures. */
+  lecture_only?: boolean;
 };
 
 export type ProposalMethod = "pages" | "bookmarks" | "toc" | "manual";
@@ -212,6 +214,8 @@ export type SessionView = {
   session: Session;
   files: FileView[];
   proposals: Proposal[];
+  /** Fingerprint of this lecture's readings; a lecture run records the one it used. */
+  materials: string;
 };
 
 export type BookView = {
@@ -241,6 +245,8 @@ export type CourseInfo = {
   course: string;
   name: string;
   created_at: string;
+  /** When the lecturer approved the readings per lecture; cleared by reading the lectures anew. */
+  readings_approved_at?: string | null;
 };
 
 /** Every course with a name, newest first. */
@@ -254,6 +260,24 @@ export function saveCourseInfo(course: string, name: string): Promise<CourseInfo
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
+}
+
+export function getCourseInfo(course: string): Promise<CourseInfo> {
+  return request(`/course-info/${course}`);
+}
+
+export function approveReadings(course: string): Promise<CourseInfo> {
+  return request(`/course-info/${course}/readings-approval`, { method: "POST" });
+}
+
+export type CourseNotation = {
+  notation: { symbol: string; meaning: string }[];
+  terminology: { term: string; definition: string }[];
+};
+
+/** The notation and terms the course's lecture notes share; it only ever grows. */
+export function getCourseNotation(course: string): Promise<CourseNotation> {
+  return request(`/course-info/${course}/notation`);
 }
 
 /** Deletes everything stored for the course: files, plan, transcripts and notes. */
@@ -290,6 +314,20 @@ export function detachFile(course: string, sessionId: string, path: string): Pro
     `/plans/${course}/sessions/${sessionId}/files?path=${encodeURIComponent(path)}`,
     { method: "DELETE" },
   );
+}
+
+/** Files for one lecture only: stored under the lecture and attached to it. */
+export function uploadLectureFiles(
+  course: string,
+  sessionId: string,
+  files: File[],
+): Promise<PlanView> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+  return request(`/plans/${course}/sessions/${sessionId}/lecture-files`, {
+    method: "POST",
+    body: form,
+  });
 }
 
 export function dismissUnassigned(course: string, path: string): Promise<PlanView> {
@@ -377,8 +415,13 @@ export type NotesRun = {
   warnings: string[];
   error: string | null;
   events: NotesRunEvent[];
-  /** The plan's materials fingerprint when the run started. */
+  /** The plan's materials fingerprint when the run started; a lecture run's is its lecture's. */
   materials?: string | null;
+  /** The lecture (plan session) a lecture run writes; null for whole-course runs. */
+  session_id?: string | null;
+  session_label?: string | null;
+  /** The finished run whose failed sections this run writes again. */
+  retried_from?: string | null;
 };
 
 export type VerificationIssue = {
@@ -734,6 +777,39 @@ export function generateNotes(course: string, resume?: string): Promise<NotesRun
   });
 }
 
+/** Write one lecture's note, resume its unfinished run, or retry a finished run's failed sections. */
+export function generateLectureNotes(
+  course: string,
+  sessionId: string,
+  from?: { resume: string } | { retry: string },
+): Promise<NotesRunView> {
+  return request(`/plans/${course}/sessions/${sessionId}/notes`, sendJson("POST", from ?? {}));
+}
+
+export type NotesQueue = {
+  /** Lectures (session ids) waiting, in the order they are written. */
+  waiting: string[];
+  /** The run being written. */
+  active: string | null;
+  active_session: string | null;
+  /** Generate all only: lectures it left out. */
+  skipped: { session_id: string; reason: string }[];
+};
+
+/** Generate all: every lecture without a note that has readings, one at a time. */
+export function generateAllLectures(course: string): Promise<NotesQueue> {
+  return request(`/plans/${course}/notes/queue`, { method: "POST" });
+}
+
+export function getNotesQueue(course: string): Promise<NotesQueue> {
+  return request(`/plans/${course}/notes/queue`);
+}
+
+/** Cancels the lecture being written (it keeps its finished sections) and clears the queue. */
+export function stopNotes(course: string): Promise<NotesQueue> {
+  return request(`/plans/${course}/notes/stop`, { method: "POST" });
+}
+
 /** Rebuild a saved revision's files; no model is called. */
 export function renderNotesRevision(
   course: string,
@@ -782,6 +858,10 @@ export function topicNotesUrl(course: string, run: string, topic: string, kind: 
 export function previewPath(course: string, run: string, topic?: string): string {
   const path = `/preview/${encodeURIComponent(course)}/${encodeURIComponent(run)}`;
   return topic ? `${path}/${encodeURIComponent(topic)}` : path;
+}
+
+export function lecturePath(course: string, sessionId: string): string {
+  return `/lectures/${encodeURIComponent(course)}/${encodeURIComponent(sessionId)}`;
 }
 
 /** Server-side read of a notes run, through the API's internal address. */

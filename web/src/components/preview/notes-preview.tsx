@@ -3,7 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { DownloadIcon, ExternalLinkIcon, FileTextIcon, LinkIcon, PencilLineIcon } from "lucide-react";
+import {
+  BookOpenTextIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  FileTextIcon,
+  LinkIcon,
+  PencilLineIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { TOPIC_STATUS } from "@/components/dashboard/notes-stage";
@@ -37,6 +44,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getNotesRun,
   getRenderJob,
+  lecturePath,
   renderNotesRevision,
   revisionArtifactUrl,
   revisionBookUrl,
@@ -303,6 +311,16 @@ export function NotesPreview({ course, run, topicId, view: initial }: NotesPrevi
           </p>
         </div>
         <div className="ml-auto flex flex-wrap gap-2">
+          {view.run.session_id && (
+            <Link
+              href={lecturePath(course, view.run.session_id)}
+              onNavigate={guard.onNavigate(lecturePath(course, view.run.session_id))}
+              className={buttonVariants({ variant: "outline" })}
+            >
+              <BookOpenTextIcon />
+              Lecture readings
+            </Link>
+          )}
           <Button variant="outline" onClick={copyLink}>
             <LinkIcon />
             Copy link
