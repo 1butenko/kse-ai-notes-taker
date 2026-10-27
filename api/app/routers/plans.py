@@ -14,6 +14,7 @@ from app.plan import (
     PlanSession,
     Proposal,
     load_plan,
+    materials_fingerprint,
     merge_proposals,
     new_id,
     save_plan,
@@ -85,6 +86,8 @@ class PlanView(BaseModel):
     unassigned: list[FileView]
     books: list[BookView]
     mapped: bool
+    # Changes whenever a file is attached to or detached from a session.
+    materials: str
 
 
 def course_dir(settings: Settings, course: str) -> Path:
@@ -187,6 +190,7 @@ def render(settings: Settings, course: str, plan: Plan, transcript: Transcript |
         unassigned=file_views(settings, plan, plan.unassigned),
         books=book_views(plan, transcript),
         mapped=bool(plan.books),
+        materials=materials_fingerprint(plan),
     )
 
 

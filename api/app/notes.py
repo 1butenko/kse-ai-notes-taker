@@ -292,6 +292,8 @@ class NotesRun(BaseModel):
     warnings: list[str] = []
     error: str | None = None
     events: list[RunEvent] = []
+    # The course plan's materials when the run started (see `materials_fingerprint`).
+    materials: str | None = None
 
 
 def now() -> str:
@@ -327,6 +329,17 @@ def list_runs(course_dir: Path) -> list[NotesRun]:
         return []
     runs = [load_run(course_dir, d.name) for d in sorted(directory.iterdir(), reverse=True)]
     return [r for r in runs if r]
+
+
+def load_course_plan(course_dir: Path, run: str) -> CoursePlan | None:
+    """The run's planned topics, once planning is done; None before that or if unreadable."""
+    target = run_dir(course_dir, run) / "plan.json"
+    if not RUN_ID.match(run) or not target.is_file():
+        return None
+    try:
+        return CoursePlan.model_validate_json(target.read_text())
+    except (OSError, ValidationError):
+        return None
 
 
 def load_document(course_dir: Path, run: str) -> NotesDocument | None:

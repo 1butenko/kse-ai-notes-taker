@@ -22,7 +22,7 @@ from app.notes import (
     validate_topic_ids,
 )
 from app.notes_revisions import RevisionConflict, run_lock
-from app.plan import Plan
+from app.plan import Plan, materials_fingerprint
 from app.storage import sha256
 from app.syllabus import Transcript
 from app.worker.artifacts import RunStore
@@ -147,6 +147,7 @@ def open_run(
                 created_at=stamp,
                 updated_at=stamp,
                 models=models.summary(),
+                materials=materials_fingerprint(plan) if plan is not None else None,
             )
         store = RunStore(directory, run)
         if not previous.is_file():
@@ -318,7 +319,8 @@ async def render_notes_outputs(
     """Save format sources and a manifest even when individual renders fail.
 
     The run directory is the artifacts root. Revision zero keeps the established
-    notes.pdf/notes.qmd and topics/<id>/note.pdf download locations.
+    notes.qmd and topics/<id>/note.pdf download locations; the full document is
+    rendered as HTML only (older runs may still hold a notes.pdf).
     """
     artifacts: list[RenderedArtifact] = []
     store.log("rendering", "Rendering HTML and PDF with Quarto")
@@ -356,6 +358,10 @@ async def render_notes_outputs(
                         error=str(error),
                     )
                 )
+        if note is None:
+            # The whole course is read as HTML; only topics get a PDF. notes.qmd is still
+            # written: it is the run's downloadable Quarto source.
+            prepared.pop("pdf", None)
         results += await render_document(
             prepared,
             store.path(prefix),

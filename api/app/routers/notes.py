@@ -17,6 +17,7 @@ from app.notes import (
     RenderedArtifact,
     RenderFormat,
     list_runs,
+    load_course_plan,
     load_document,
     load_run,
     new_run_id,
@@ -106,6 +107,8 @@ class NotesRunView(BaseModel):
     pdf: bool
     topic_pdfs: list[str]
     artifacts: list[RenderedArtifact] = Field(default_factory=list)
+    # Planned topic id -> the transcript sessions (indices) it covers; empty before planning.
+    topic_sessions: dict[str, list[int]] = Field(default_factory=dict)
 
 
 def find_run(settings: Settings, course: str, run: str) -> NotesRun:
@@ -133,6 +136,7 @@ def view(settings: Settings, course: str, run: NotesRun) -> NotesRunView:
     document = head.document if head else None
     topics = [t.topic_id for s in document.sections for t in s.topics] if document else []
     ready = [a for a in artifacts if a.status == "ready"]
+    planned = load_course_plan(directory, run.id)
     full = next(
         (a for kind in ("html", "pdf") for a in ready if a.topic_id is None and a.format == kind),
         None,
@@ -152,6 +156,7 @@ def view(settings: Settings, course: str, run: NotesRun) -> NotesRunView:
             or topic_pdf(directory, run.id, t).is_file()
         ],
         artifacts=artifacts,
+        topic_sessions={t.id: t.sessions for _, t in planned.topics()} if planned else {},
     )
 
 

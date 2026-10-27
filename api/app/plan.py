@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 import uuid
 from pathlib import Path
@@ -68,6 +70,12 @@ def load_plan(course_dir: Path) -> Plan:
 def save_plan(course_dir: Path, plan: Plan) -> None:
     course_dir.mkdir(parents=True, exist_ok=True)
     plan_file(course_dir).write_text(plan.model_dump_json(indent=2))
+
+
+def materials_fingerprint(plan: Plan) -> str:
+    """Which files, excerpts included, are attached to which session; order doesn't count."""
+    value = {session.id: sorted(set(session.files)) for session in plan.sessions}
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
 def normalize(label: str) -> str:

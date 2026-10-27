@@ -144,12 +144,15 @@ def test_failed_docx_keeps_html_and_pdf(saved_run, client, model_calls, word_cli
 
     directory, document = saved_run
     client.patch(url("/topics/T1"), json=patch_for(document))
-    ready = {kind: (artifact_path(directory, 1, kind, None),) for kind in ("html", "pdf")}
-    bytes_before = {kind: path.read_bytes() for kind, (path,) in ready.items()}
+    # The full notes are HTML only; PDFs are per topic.
+    keys = {"html": None, "pdf": "T1"}
+    ready = {kind: artifact_path(directory, 1, kind, topic) for kind, topic in keys.items()}
+    bytes_before = {kind: path.read_bytes() for kind, path in ready.items()}
+    links = {"html": "/revisions/1/artifacts/html", "pdf": "/revisions/1/topics/T1/artifacts/pdf"}
     manifest_before = [
         a for a in client.get(url()).json()["artifacts"] if a["format"] in ("html", "pdf")
     ]
-    assert len(manifest_before) == 6
+    assert len(manifest_before) == 5
 
     (word_cli.parent / "fail-docx").write_text("")
     job = render(client, 1, ["docx"])
@@ -160,17 +163,17 @@ def test_failed_docx_keeps_html_and_pdf(saved_run, client, model_calls, word_cli
     view = client.get(url()).json()
     assert [a for a in view["artifacts"] if a["format"] in ("html", "pdf")] == manifest_before
     assert not [a for a in view["artifacts"] if a["format"] == "docx"]
-    for kind, (path,) in ready.items():
-        assert artifact_path(directory, 1, kind, None) == path
+    for kind, path in ready.items():
+        assert artifact_path(directory, 1, kind, keys[kind]) == path
         assert path.read_bytes() == bytes_before[kind]
-        assert client.get(url(f"/revisions/1/artifacts/{kind}")).status_code == 200
+        assert client.get(url(links[kind])).status_code == 200
     assert view["current_revision"] == 1
 
     # Retrying after the fault is fixed publishes the Word files next to the HTML/PDF.
     (word_cli.parent / "fail-docx").unlink()
     assert render(client, 1, ["docx"])["status"] == "done"
     final = client.get(url()).json()["artifacts"]
-    assert len(final) == 9 and client.get(url("/revisions/1/artifacts/docx")).status_code == 200
+    assert len(final) == 8 and client.get(url("/revisions/1/artifacts/docx")).status_code == 200
     assert model_calls == []
 
 

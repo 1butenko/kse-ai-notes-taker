@@ -157,7 +157,9 @@ async def render_job(directory: Path, job: RenderJob, settings: WorkerSettings) 
                 destination = output / prefix
                 destination.mkdir(parents=True, exist_ok=True)
                 sources, resources = {}, {}
-                for kind in (item for item in job.formats if item != "book"):
+                # The book is rendered on its own; the full document has no PDF.
+                kinds = [k for k in job.formats if k != "book" and (note is not None or k != "pdf")]
+                for kind in kinds:
                     try:
                         source = (
                             topic_to_quarto(

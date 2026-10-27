@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings, get_settings
-from app.plan import drop_primary, load_plan, save_plan
+from app.plan import drop_primary, load_plan, save_plan, sync
 from app.storage import sha256
 from app.syllabus import Transcript
 from app.worker_client import WorkerClient, get_worker_client
@@ -110,6 +110,37 @@ def get_transcript(
     transcript = load_transcript(syllabus_file(settings, path))
     if transcript is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No transcript for this file yet")
+    return transcript
+
+
+@router.put("/transcript")
+def put_transcript(
+    path: Annotated[str, Query()],
+    body: Transcript,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> Transcript:
+    """Save the lecturer's edits (renamed, removed or added sessions) to a transcript."""
+    file = syllabus_file(settings, path)
+    stored = load_transcript(file)
+    if stored is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No transcript for this file yet")
+    # Provenance stays the stored one, so the edit still counts as this file's transcript.
+    transcript = body.model_copy(
+        update={
+            "source_path": stored.source_path,
+            "source_sha256": stored.source_sha256,
+            "model": stored.model,
+            "created_at": stored.created_at,
+        }
+    )
+    transcript_file(file).write_text(transcript.model_dump_json(indent=2))
+
+    # As after a re-transcription: unmatched sessions' files move to `unassigned`.
+    course_dir = settings.uploads_dir / transcript.source_path.split("/")[0]
+    plan = load_plan(course_dir)
+    if plan.primary == transcript.source_path and sync(plan, transcript):
+        save_plan(course_dir, plan)
+    print(f"Edited transcript {transcript.source_path}: {len(transcript.sessions)} sessions")
     return transcript
 
 
