@@ -258,6 +258,30 @@ Langfuse trace: `generate-notes` → `plan-course` (`draft-course-plan`, `check-
 
 The worker image (`worker-dev` / `worker-prod` targets) adds Quarto, whose bundled Typst makes the PDF, so no LaTeX is needed. Its build renders a sample document, so a broken Quarto or font setup fails the build instead of the first run. Without Quarto (e.g. running the worker outside Docker) the run still finishes with `notes.qmd` and a warning instead of a PDF.
 
+## Lecture notes
+
+The web app writes one note per lecture, only when the lecturer asks (spec: [docs/superpowers/specs/2026-10-27-lecture-notes.md](docs/superpowers/specs/2026-10-27-lecture-notes.md)). After the lectures are approved, their readings are matched and shown on **Readings per lecture**; **Approve readings** (stored as `readings_approved_at` in `course.json`, cleared when the syllabus is read again, its lectures edited or replaced) opens the notes section. Each lecture row opens its note, or its lecture page (`/lectures/<course>/<session>`) with **Generate note**, its readings and a drop zone for files of that lecture only.
+
+A lecture run is an ordinary notes run whose plan and transcript are cut down to one session before admission (`scope_to_session` in `api/app/plan.py`), so everything in [Notes generation](#notes-generation) and [Editing and publishing notes](#editing-and-publishing-notes) applies inside it. The run records `session_id`, and its `materials` is that lecture's readings fingerprint (excerpt pages included); the plan view gives each session's current one, which is how "Readings changed since this note was written" is detected. Inside the run the lecture is session `S0`, so map runs to lectures by `run.session_id`, never by `topic_sessions`. The planner gets one lecture and returns one section of 1 to 4 topics.
+
+- **Queue.** The worker writes one job per course at a time. `POST /plans/{course}/sessions/{session}/notes` and Generate all go through the same per-course queue (mirrored in `<course>/queue.json`); each lecture reads the current plan from disk when it starts. Generate all queues every lecture without a note that has readings, in syllabus order, continues a stopped run when its readings are unchanged, and reports lectures without readings as skipped.
+- **Stop.** Cancels the run being written (Quarto subprocesses included), marks it `failed` with "Stopped; resume to continue" and empties the queue. Resume reuses the plan and every finished section. A worker restart fails the active run and drops the queue with a warning on that run.
+- **Regenerate and retry.** Regenerate writes a new run; the note shown stays the newest finished run, so the old one moves to Previous versions with its edits and approvals. A finished run with failed sections can't be resumed (its notes are published), so **Retry failed section** starts a new run seeded with the old run's frozen inputs, plan and finished sections, and writes only the failed ones; if the readings changed since, it writes the whole lecture.
+- **Lecture-only files** are stored under `<course>/lecture/<session>/`, attached to that session and flagged `lecture_only`. They are not course readings, so matching, the readings list and other lectures never see them; detaching one deletes it.
+- **Course notation** (`<course>/notation.json`) is seeded by the first finished lecture run. Each lecture run freezes it at admission, plans against it as binding (its meaning wins on conflict) and appends only new symbols and terms when done. `GET /course-info/{course}/notation` shows it.
+
+| Endpoint | What it does |
+|----------|--------------|
+| `POST /plans/{course}/sessions/{session}/notes` | Write one lecture's note (`202`); `{"resume": "<run>"}` continues its stopped run, `{"retry": "<run>"}` rewrites a finished run's failed sections in a new run. `404` for an unknown lecture, `409` without readings or while the course has a job |
+| `POST /plans/{course}/notes/queue` | Generate all; returns the queue and the lectures skipped for having no readings. `409` when no lecture needs a note |
+| `GET /plans/{course}/notes/queue` | The run being written and the lectures waiting |
+| `POST /plans/{course}/notes/stop` | Stop the run being written and clear the queue |
+| `POST /plans/{course}/sessions/{session}/lecture-files` | Upload files for one lecture only (multipart `files`) |
+| `POST` / `DELETE /course-info/{course}/readings-approval` | Approve the readings per lecture, or clear the approval |
+| `GET /course-info/{course}/notation` | The course notation sheet (view-only) |
+
+Whole-course runs from before lecture notes stay readable under **Previous generations** and never appear in the lecture list; `POST /plans/{course}/notes` still starts and resumes them (the notes E2E suite uses it).
+
 ## Editing and publishing notes
 
 A finished run (`status: done`) can be read as HTML and PDF, edited topic by topic, restored to an earlier text, exported to Word and refined with AI suggestions. Editing, restoring and rendering never call a model; only AI suggestions and the manual recheck need OpenRouter. The architectural decisions behind this are recorded in [docs/superpowers/specs/2026-10-23-quarto-notes-decisions.md](docs/superpowers/specs/2026-10-23-quarto-notes-decisions.md).
