@@ -91,7 +91,7 @@ function ProposalRow({
           value={start}
           onChange={(event) => setStart(event.target.value)}
         />
-        <span>–</span>
+        <span>to</span>
         <Input
           aria-label="Last PDF page"
           inputMode="numeric"
@@ -149,7 +149,7 @@ export function SessionProposals({
     <div className="flex flex-col gap-2">
       {open.length > 0 && (
         <>
-          <span className="text-xs font-semibold uppercase text-muted-foreground">
+          <span className="text-xs font-medium text-muted-foreground">
             Proposed excerpts
           </span>
           <ul className="flex flex-col gap-2">

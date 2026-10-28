@@ -693,13 +693,15 @@ def test_manual_edit_renders_without_model_calls(saved_run, client, model_calls,
     assert completed.json()["status"] == "done"
     view = client.get(url()).json()
     assert view["display_revision"] == 1
-    assert len(view["artifacts"]) == 6
+    # Full HTML plus HTML and PDF of each topic: the whole course has no PDF.
+    assert len(view["artifacts"]) == 5
     assert {a["revision"] for a in view["artifacts"]} == {1}
-    for kind in ("html", "pdf"):
-        response = client.get(url(f"/revisions/1/artifacts/{kind}"))
+    assert client.get(url("/revisions/1/artifacts/pdf")).status_code == 404
+    for path in ("/artifacts/html", "/topics/T1/artifacts/pdf"):
+        response = client.get(url(f"/revisions/1{path}"))
         assert response.status_code == 200, response.text
         assert "Edited text" in response.text
-        assert client.get(url(f"/revisions/0/artifacts/{kind}")).status_code == 404
+        assert client.get(url(f"/revisions/0{path}")).status_code == 404
     assert model_calls == []
 
 
@@ -766,7 +768,7 @@ def test_old_render_cannot_replace_new_head(saved_run, client, revision_cli, mod
 def test_failed_render_keeps_previous_artifact(saved_run, client, revision_cli, model_calls):
     directory, document = saved_run
     client.patch(url("/topics/T1"), json=patch_for(document))
-    before = client.get(url("/revisions/1/artifacts/pdf")).content
+    before = client.get(url("/revisions/1/topics/T1/artifacts/pdf")).content
     revision_cli.quarto_bin = "/not-installed/quarto"
     saved = client.patch(
         url("/topics/T1"), json=patch_for(document, "Saved despite failure", base=1)
@@ -776,9 +778,9 @@ def test_failed_render_keeps_previous_artifact(saved_run, client, revision_cli, 
     view = client.get(url()).json()
     assert view["current_revision"] == 2 and view["display_revision"] == 1
     assert topics(view)[0]["blocks"][0]["content"] == "Saved despite failure"
-    assert client.get(url("/pdf")).content == before
-    assert client.get(url("/revisions/2/artifacts/pdf")).status_code == 404
-    assert client.get(url("/revisions/1/artifacts/pdf")).content == before
+    assert client.get(url("/topics/T1/pdf")).content == before
+    assert client.get(url("/revisions/2/topics/T1/artifacts/pdf")).status_code == 404
+    assert client.get(url("/revisions/1/topics/T1/artifacts/pdf")).content == before
     assert model_calls == []
 
 
@@ -820,7 +822,7 @@ def test_same_key_failure_retains_immutable_artifact_and_partial_formats_merge(
 
     directory, document = saved_run
     client.patch(url("/topics/T1"), json=patch_for(document))
-    old_path = artifact_path(directory, 1, "pdf", None)
+    old_path = artifact_path(directory, 1, "pdf", "T1")
     old_bytes = old_path.read_bytes()
     # HTML succeeds, PDF fails; a failed retry must retain that key's ready PDF.
     fake_cli(
@@ -836,11 +838,11 @@ output.write_text('new html')
     )
     retry = client.post(url("/revisions/1/render"), json={"formats": ["html", "pdf"]}).json()
     job = client.get(url(f"/render-jobs/{retry['id']}")).json()
-    assert job["status"] == "failed" and len(job["errors"]) == 3
+    assert job["status"] == "failed" and len(job["errors"]) == 2  # The topic PDFs.
     assert client.get(url("/revisions/1/artifacts/html")).text == "new html"
-    assert artifact_path(directory, 1, "pdf", None) == old_path
+    assert artifact_path(directory, 1, "pdf", "T1") == old_path
     assert old_path.read_bytes() == old_bytes
-    assert len(client.get(url()).json()["artifacts"]) == 6
+    assert len(client.get(url()).json()["artifacts"]) == 5
 
 
 def test_concurrent_formats_merge_and_waiting_lock_does_not_block_loop(
@@ -865,9 +867,12 @@ def test_concurrent_formats_merge_and_waiting_lock_does_not_block_loop(
 
     asyncio.run(scenario())
     artifacts = client.get(url()).json()["artifacts"]
-    assert len(artifacts) == 9
+    assert len(artifacts) == 8
     assert {(a["topic_id"], a["format"]) for a in artifacts} == {
-        (topic, kind) for topic in (None, "T1", "T2") for kind in ("html", "pdf", "docx")
+        (topic, kind)
+        for topic in (None, "T1", "T2")
+        for kind in ("html", "pdf", "docx")
+        if (topic, kind) != (None, "pdf")
     }
 
 
@@ -1094,12 +1099,16 @@ def test_legacy_aliases_name_the_revision_they_serve(saved_run, client, revision
     client.patch(url("/topics/T1"), json=patch_for(document))
     revision_cli.quarto_bin = "/not-installed/quarto"
     client.patch(url("/topics/T1"), json=patch_for(document, "Unrendered", base=1))
-    for path in ("/pdf", "/html", "/topics/T1/pdf", "/topics/T1/html"):
+    for path in ("/html", "/topics/T1/pdf", "/topics/T1/html"):
         response = client.get(url(path))
         assert response.status_code == 200, path
         # HEAD is 2, but its render failed: the alias serves and names revision 1.
         assert response.headers["x-notes-revision"] == "1", path
         assert "Edited text" in response.text and "Unrendered" not in response.text
+    # Revisions no longer render a full PDF: the legacy generation file is still served.
+    legacy = client.get(url("/pdf"))
+    assert legacy.content == b"%PDF-generation"
+    assert legacy.headers["x-notes-revision"] == "0"
     explicit = client.get(url("/revisions/2/artifacts/html"))
     assert explicit.status_code == 404  # Explicit revision URLs never fall back.
 
@@ -1147,7 +1156,7 @@ def test_corrupt_manifest_serves_nothing_and_rerender_replaces_it(saved_run, cli
     (directory / "revisions/000001/artifacts/manifest.json").write_text("{not json")
     view = client.get(url())
     assert view.status_code == 200 and view.json()["artifacts"] == []
-    assert client.get(url("/revisions/1/artifacts/pdf")).status_code == 404
+    assert client.get(url("/revisions/1/topics/T1/artifacts/pdf")).status_code == 404
     retry = client.post(url("/revisions/1/render"), json={"formats": ["pdf"]}).json()
     assert client.get(url(f"/render-jobs/{retry['id']}")).json()["status"] == "done"
-    assert client.get(url("/revisions/1/artifacts/pdf")).status_code == 200
+    assert client.get(url("/revisions/1/topics/T1/artifacts/pdf")).status_code == 200

@@ -77,7 +77,7 @@ export function FileUploadCard({
   const remove = (index: number) => onFilesChange(files.filter((_, i) => i !== index));
 
   return (
-    <Card>
+    <Card className="gap-3 overflow-visible bg-transparent py-0 ring-0 [--card-spacing:0px]">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         {(!isEmpty || actions) && (
@@ -110,7 +110,7 @@ export function FileUploadCard({
               <EmptyTitle>{emptyTitle}</EmptyTitle>
             </EmptyHeader>
             <EmptyContent>
-              <Button onClick={openPicker}>
+              <Button variant="outline" onClick={openPicker}>
                 <UploadIcon />
                 {multiple ? "Upload files" : "Upload file"}
               </Button>

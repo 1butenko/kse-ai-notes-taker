@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 import uuid
 from pathlib import Path
@@ -5,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.syllabus import Transcript
+from app.syllabus import Transcript, load_transcript
 
 
 class PlanSession(BaseModel):
@@ -70,6 +72,59 @@ def save_plan(course_dir: Path, plan: Plan) -> None:
     plan_file(course_dir).write_text(plan.model_dump_json(indent=2))
 
 
+def materials_fingerprint(plan: Plan) -> str:
+    """Which files, excerpts included, are attached to which session; order doesn't count."""
+    value = {session.id: sorted(set(session.files)) for session in plan.sessions}
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def session_fingerprint(plan: Plan, session_id: str) -> str:
+    """One lecture's readings: its files and, for excerpts, the book pages they were cut from.
+
+    Pages count because an excerpt cut again from other pages may reuse its file name.
+    """
+    entry = next(s for s in plan.sessions if s.id == session_id)
+    excerpts = {p.excerpt: p for p in plan.proposals if p.excerpt}
+    value = sorted(
+        [path]
+        + (
+            [excerpts[path].book, excerpts[path].pdf_start, excerpts[path].pdf_end]
+            if path in excerpts
+            else []
+        )
+        for path in set(entry.files)
+    )
+    return hashlib.sha256(json.dumps(value).encode()).hexdigest()
+
+
+class UnknownSession(LookupError):
+    pass
+
+
+def scope_to_session(
+    plan: Plan, transcript: Transcript, session_id: str
+) -> tuple[Plan, Transcript]:
+    """One lecture's slice of an aligned plan and transcript: its entry and syllabus session,
+    with the excerpt proposals and book titles its files need. Inside, it is session S0.
+
+    Only what this lecture reads is kept, so changes elsewhere in the course never alter
+    the slice (and never block resuming the lecture's run).
+    """
+    index = next((i for i, s in enumerate(plan.sessions) if s.id == session_id), None)
+    if index is None:
+        raise UnknownSession(session_id)
+    entry = plan.sessions[index]
+    proposals = [p for p in plan.proposals if p.excerpt and p.excerpt in entry.files]
+    read = {p.book for p in proposals} | set(entry.files)
+    scoped = Plan(
+        primary=plan.primary,
+        sessions=[entry.model_copy(deep=True)],
+        books=[b.model_copy() for b in plan.books if b.file in read],
+        proposals=[p.model_copy() for p in proposals],
+    )
+    return scoped, transcript.model_copy(update={"sessions": [transcript.sessions[index]]})
+
+
 def normalize(label: str) -> str:
     return re.sub(r"\s+", " ", label).strip().casefold()
 
@@ -121,6 +176,16 @@ def sync(plan: Plan, transcript: Transcript) -> bool:
     plan.unassigned = unassigned
     plan.proposals = proposals
     return changed
+
+
+def aligned(uploads_dir: Path, course: str) -> tuple[Plan, Transcript | None, bool]:
+    """The course plan re-aligned with its primary transcript, and whether that changed it.
+
+    Nothing is saved: the API saves the change, the worker only reads.
+    """
+    plan = load_plan(uploads_dir / course)
+    transcript = load_transcript(uploads_dir / plan.primary) if plan.primary else None
+    return plan, transcript, bool(transcript and sync(plan, transcript))
 
 
 def drop_primary(plan: Plan) -> None:

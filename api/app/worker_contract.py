@@ -1,8 +1,8 @@
 """What the API and the worker send each other."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.notes import NotesRun, RenderFormat
+from app.notes import LectureQueue, NotesRun, QueueItem, RenderFormat
 from app.notes_revisions import ApprovalAction, TopicPatch
 from app.notes_suggestions import SuggestionRequest
 from app.plan import BookMatch, Plan, Proposal
@@ -39,6 +39,22 @@ class NotesRequest(BaseModel):
 
 
 NotesResponse = NotesRun
+
+
+class LecturesRequest(BaseModel):
+    """Write these lectures' notes one after another; the worker reads each from disk."""
+
+    course: str
+    items: list[QueueItem] = Field(min_length=1)
+
+
+class LecturesResponse(BaseModel):
+    run: NotesRun
+    queue: LectureQueue
+
+
+class StopRequest(BaseModel):
+    course: str
 
 
 class ReviseRequest(BaseModel):

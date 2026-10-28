@@ -106,6 +106,57 @@ class CoursePlan(Strict):
         return [(section, topic) for section in self.sections for topic in section.topics]
 
 
+class CourseNotation(BaseModel):
+    """The notation sheet lecture runs share: seeded by the first, only ever appended to."""
+
+    notation: list[NotationEntry] = []
+    terminology: list[TermEntry] = []
+
+
+def notation_file(course_dir: Path) -> Path:
+    return course_dir / "notation.json"
+
+
+def load_course_notation(course_dir: Path) -> CourseNotation:
+    """A missing or unreadable sheet is an empty one."""
+    try:
+        return CourseNotation.model_validate_json(notation_file(course_dir).read_text())
+    except (OSError, UnicodeError, ValueError):
+        return CourseNotation()
+
+
+def _key(text: str) -> str:
+    return " ".join(text.split())
+
+
+def bind_notation(plan: CoursePlan, sheet: CourseNotation) -> CoursePlan:
+    """The plan with the sheet's meaning for every symbol and term the sheet already has."""
+    symbols = {_key(e.symbol): e for e in sheet.notation}
+    terms = {_key(e.term).casefold(): e for e in sheet.terminology}
+    return plan.model_copy(
+        update={
+            "notation": [symbols.get(_key(e.symbol), e) for e in plan.notation],
+            "terminology": [terms.get(_key(e.term).casefold(), e) for e in plan.terminology],
+        }
+    )
+
+
+def append_notation(sheet: CourseNotation, plan: CoursePlan) -> CourseNotation:
+    """The sheet plus the plan's new symbols and terms; existing meanings never change."""
+    notation, terminology = list(sheet.notation), list(sheet.terminology)
+    symbols = {_key(e.symbol) for e in notation}
+    terms = {_key(e.term).casefold() for e in terminology}
+    for entry in plan.notation:
+        if _key(entry.symbol) not in symbols:
+            symbols.add(_key(entry.symbol))
+            notation.append(entry)
+    for entry in plan.terminology:
+        if _key(entry.term).casefold() not in terms:
+            terms.add(_key(entry.term).casefold())
+            terminology.append(entry)
+    return CourseNotation(notation=notation, terminology=terminology)
+
+
 class CoverageIssue(Strict):
     kind: Literal[
         "missing_topic", "duplicate", "granularity", "weak_evidence", "ordering", "objectives"
@@ -292,6 +343,47 @@ class NotesRun(BaseModel):
     warnings: list[str] = []
     error: str | None = None
     events: list[RunEvent] = []
+    # The course plan's materials when the run started (see `materials_fingerprint`); for a
+    # lecture run, that lecture's (see `session_fingerprint`).
+    materials: str | None = None
+    # The plan session a lecture run writes the note of; None for whole-course runs.
+    session_id: str | None = None
+    session_label: str | None = None
+    # A lecture run that rewrites only the failed sections of this finished run.
+    retried_from: str | None = None
+
+
+class QueueItem(BaseModel):
+    session_id: str
+    # An unfinished run of this lecture to continue rather than starting a new one.
+    resume: str | None = None
+    # Generate all: when that run's readings changed, write a new run instead of refusing.
+    renew: bool = False
+    # A finished run of this lecture whose failed sections a new run rewrites.
+    retry: str | None = None
+
+
+class LectureQueue(BaseModel):
+    """What a course's notes job is doing: the run being written and the lectures waiting.
+
+    The worker writes it to <course>/queue.json while a job runs and removes it after.
+    """
+
+    waiting: list[QueueItem] = []
+    active: str | None = None
+    active_session: str | None = None
+
+
+def queue_file(course_dir: Path) -> Path:
+    return course_dir / "queue.json"
+
+
+def load_queue(course_dir: Path) -> LectureQueue:
+    """A missing or unreadable queue is an empty one."""
+    try:
+        return LectureQueue.model_validate_json(queue_file(course_dir).read_text())
+    except (OSError, UnicodeError, ValueError):
+        return LectureQueue()
 
 
 def now() -> str:
@@ -327,6 +419,17 @@ def list_runs(course_dir: Path) -> list[NotesRun]:
         return []
     runs = [load_run(course_dir, d.name) for d in sorted(directory.iterdir(), reverse=True)]
     return [r for r in runs if r]
+
+
+def load_course_plan(course_dir: Path, run: str) -> CoursePlan | None:
+    """The run's planned topics, once planning is done; None before that or if unreadable."""
+    target = run_dir(course_dir, run) / "plan.json"
+    if not RUN_ID.match(run) or not target.is_file():
+        return None
+    try:
+        return CoursePlan.model_validate_json(target.read_text())
+    except (OSError, ValidationError):
+        return None
 
 
 def load_document(course_dir: Path, run: str) -> NotesDocument | None:

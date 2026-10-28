@@ -24,7 +24,7 @@ export function RevisionTag({ revision, text }: { revision: number; text: number
     <Badge
       variant="outline"
       title={older ? `Rendered from revision ${revision}; the text is at revision ${text}` : undefined}
-      className={cn(older && "border-warning/40 text-warning")}
+      className={cn("border-current/40 text-current", older && "border-warning/40 text-warning")}
     >
       rev. {revision}
       {older && " · older"}

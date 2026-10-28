@@ -1,23 +1,27 @@
 import re
+import shutil
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 from pypdf import PdfReader
 
 from app.books import cut_excerpt, load_index, printed_range
 from app.config import Settings, get_settings
+from app.course import clear_readings_approval
 from app.plan import (
     BookMatch,
     Plan,
     PlanSession,
     Proposal,
+    aligned,
     load_plan,
+    materials_fingerprint,
     merge_proposals,
     new_id,
     save_plan,
-    sync,
+    session_fingerprint,
 )
 from app.routers.syllabus import load_transcript, syllabus_file
 from app.routers.uploads import SavedFile, safe_name
@@ -61,6 +65,8 @@ class Excerpt(BaseModel):
 
 class FileView(SavedFile):
     excerpt: Excerpt | None = None
+    # Uploaded for one lecture only: never a course reading, never matched to other lectures.
+    lecture_only: bool = False
 
 
 class SessionView(BaseModel):
@@ -68,6 +74,8 @@ class SessionView(BaseModel):
     session: Session
     files: list[FileView]
     proposals: list[Proposal]
+    # This lecture's readings; a lecture run records the one it was written from.
+    materials: str
 
 
 class BookView(BaseModel):
@@ -85,6 +93,8 @@ class PlanView(BaseModel):
     unassigned: list[FileView]
     books: list[BookView]
     mapped: bool
+    # Changes whenever a file is attached to or detached from a session.
+    materials: str
 
 
 def course_dir(settings: Settings, course: str) -> Path:
@@ -114,6 +124,13 @@ def is_excerpt(path: str) -> bool:
     return path.split("/")[1:2] == ["excerpts"]
 
 
+def is_lecture_file(path: str) -> bool:
+    return path.split("/")[1:2] == ["lecture"]
+
+
+SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
 def file_views(settings: Settings, plan: Plan, paths: list[str]) -> list[FileView]:
     excerpts = {p.excerpt: p for p in plan.proposals if p.excerpt}
     result = []
@@ -133,16 +150,22 @@ def file_views(settings: Settings, plan: Plan, paths: list[str]) -> list[FileVie
             if proposal and proposal.pdf_start is not None and proposal.pdf_end is not None
             else None
         )
-        result.append(FileView(path=path, size=file.stat().st_size, excerpt=excerpt))
+        result.append(
+            FileView(
+                path=path,
+                size=file.stat().st_size,
+                excerpt=excerpt,
+                lecture_only=is_lecture_file(path),
+            )
+        )
     return result
 
 
 def current(settings: Settings, course: str) -> tuple[Plan, Transcript | None]:
     """Load the course plan, re-aligned with its primary transcript."""
     directory = course_dir(settings, course)
-    plan = load_plan(directory)
-    transcript = load_transcript(settings.uploads_dir / plan.primary) if plan.primary else None
-    if transcript and sync(plan, transcript):
+    plan, transcript, changed = aligned(settings.uploads_dir, course)
+    if changed:
         save_plan(directory, plan)
     return plan, transcript
 
@@ -173,6 +196,7 @@ def render(settings: Settings, course: str, plan: Plan, transcript: Transcript |
                 session=session,
                 files=file_views(settings, plan, entry.files),
                 proposals=[p for p in plan.proposals if p.session_id == entry.id],
+                materials=session_fingerprint(plan, entry.id),
             )
             for entry, session in zip(plan.sessions, transcript.sessions, strict=True)
         ]
@@ -187,6 +211,7 @@ def render(settings: Settings, course: str, plan: Plan, transcript: Transcript |
         unassigned=file_views(settings, plan, plan.unassigned),
         books=book_views(plan, transcript),
         mapped=bool(plan.books),
+        materials=materials_fingerprint(plan),
     )
 
 
@@ -276,7 +301,10 @@ def put_primary(
         raise HTTPException(status.HTTP_409_CONFLICT, "Transcribe this syllabus first")
     directory = course_dir(settings, course)
     plan = load_plan(directory)
-    plan.primary = file.relative_to(settings.uploads_dir.resolve()).as_posix()
+    primary = file.relative_to(settings.uploads_dir.resolve()).as_posix()
+    if plan.primary != primary:
+        clear_readings_approval(directory)
+    plan.primary = primary
     save_plan(directory, plan)
     return render(settings, course, *current(settings, course))
 
@@ -294,6 +322,32 @@ def attach_file(
     if path not in entry.files:
         entry.files.append(path)
     plan.unassigned = [f for f in plan.unassigned if f != path]
+    save_plan(course_dir(settings, course), plan)
+    return render(settings, course, plan, transcript)
+
+
+@router.post("/{course}/sessions/{session_id}/lecture-files")
+async def upload_lecture_files(
+    course: str,
+    session_id: str,
+    files: Annotated[list[UploadFile], File()],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> PlanView:
+    """Files for one lecture only, stored under <course>/lecture/<session>/ and attached to it."""
+    plan, transcript = current(settings, course)
+    entry = find_session(plan, session_id)
+    if not SESSION_ID.match(entry.id):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This lecture can't hold its own files")
+    directory = course_dir(settings, course) / "lecture" / entry.id
+    directory.mkdir(parents=True, exist_ok=True)
+    for upload in files:
+        dest = directory / safe_name(upload.filename or "")
+        with dest.open("wb") as out:
+            shutil.copyfileobj(upload.file, out)
+        path = f"{course}/lecture/{entry.id}/{dest.name}"
+        if path not in entry.files:
+            entry.files.append(path)
+        print(f"Saved lecture file: {path} ({dest.stat().st_size} bytes)")
     save_plan(course_dir(settings, course), plan)
     return render(settings, course, plan, transcript)
 
@@ -341,6 +395,9 @@ def detach_file(
     entry = find_session(plan, session_id)
     if path in entry.files and is_excerpt(path):
         delete_excerpt(settings, plan, path, forget=False)
+    if path in entry.files and is_lecture_file(path):
+        # It belongs to this lecture alone.
+        (settings.uploads_dir / path).unlink(missing_ok=True)
     entry.files = [f for f in entry.files if f != path]
     save_plan(course_dir(settings, course), plan)
     return render(settings, course, plan, transcript)
@@ -355,6 +412,8 @@ def dismiss_unassigned(
     plan, transcript = current(settings, course)
     if path in plan.unassigned and is_excerpt(path):
         delete_excerpt(settings, plan, path, forget=True)
+    if path in plan.unassigned and is_lecture_file(path):
+        (settings.uploads_dir / path).unlink(missing_ok=True)
     plan.unassigned = [f for f in plan.unassigned if f != path]
     save_plan(course_dir(settings, course), plan)
     return render(settings, course, plan, transcript)

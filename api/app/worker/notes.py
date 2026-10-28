@@ -3,12 +3,14 @@
 import asyncio
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from app.note_assets import asset_resources
 from app.notes import (
+    CourseNotation,
     CoursePlan,
     Inputs,
     NotesDocument,
@@ -16,13 +18,16 @@ from app.notes import (
     NotesSection,
     RenderedArtifact,
     TopicNote,
+    append_notation,
+    load_course_notation,
+    notation_file,
     now,
     run_dir,
     topic_filename,
     validate_topic_ids,
 )
 from app.notes_revisions import RevisionConflict, run_lock
-from app.plan import Plan
+from app.plan import Plan, materials_fingerprint, session_fingerprint
 from app.storage import sha256
 from app.syllabus import Transcript
 from app.worker.artifacts import RunStore
@@ -43,6 +48,11 @@ COMPLETED_RUN = (
     "This notes run is complete, and resuming it would overwrite its published notes. "
     "Start a new run to regenerate them, or rerender this run to rebuild its outputs."
 )
+
+
+COURSE_NOTATION = "course-notation.json"
+STOPPED = "Stopped; resume to continue"
+OTHER_LECTURE = "This run belongs to another lecture; resume it from that lecture."
 
 
 RESUME_PROVENANCE = (
@@ -101,11 +111,13 @@ def open_run(
     models: NotesModels,
     plan: Plan | None = None,
     transcript: Transcript | None = None,
+    session_id: str | None = None,
 ) -> RunStore:
     """The store of a new run, or of an earlier unpublished run being resumed.
 
     Admission takes the run lock that edits use: a completed run's notes are published
-    (and may be edited), so resuming it would silently replace them.
+    (and may be edited), so resuming it would silently replace them. A lecture run
+    (`session_id`) gets a plan and transcript already scoped to its session.
     """
     directory = run_dir(course_dir, run_id)
     directory.mkdir(parents=True, exist_ok=True)
@@ -115,6 +127,8 @@ def open_run(
             run = NotesRun.model_validate_json(previous.read_text())
             if run.status == "done" or (directory / "revisions").exists():
                 raise RevisionConflict(COMPLETED_RUN)
+            if run.session_id != session_id:
+                raise RevisionConflict(OTHER_LECTURE)
             # Refuse before changing even run.json: positional source IDs only have
             # meaning under the exact frozen input inventory and original context.
             store = RunStore(directory, run)
@@ -147,6 +161,15 @@ def open_run(
                 created_at=stamp,
                 updated_at=stamp,
                 models=models.summary(),
+                materials=(
+                    None
+                    if plan is None
+                    else session_fingerprint(plan, session_id)
+                    if session_id
+                    else materials_fingerprint(plan)
+                ),
+                session_id=session_id,
+                session_label=plan.sessions[0].label if session_id and plan else None,
             )
         store = RunStore(directory, run)
         if not previous.is_file():
@@ -157,6 +180,9 @@ def open_run(
             if input_fingerprint(course_dir, plan, transcript) != fingerprint:
                 raise RevisionConflict(RESUME_PROVENANCE)
             store.write("inputs.json", inputs)
+            if session_id:
+                # Frozen with the inputs, so resuming plans against the same sheet.
+                store.write(COURSE_NOTATION, load_course_notation(course_dir))
             store.write(
                 "provenance.json",
                 GenerationProvenance(
@@ -168,6 +194,44 @@ def open_run(
             )
         store.save()
     return store
+
+
+def seed_retry(course_dir: Path, source: NotesRun, run_id: str, models: NotesModels) -> None:
+    """A new run holding a finished lecture run's frozen inputs, plan and the sections that
+    did not fail, waiting to be resumed: resuming writes only the failed sections.
+
+    The finished run is only read. Its edits and approvals stay with it.
+    """
+    old = run_dir(course_dir, source.id)
+    new = run_dir(course_dir, run_id)
+    new.mkdir(parents=True)
+    store = RunStore(old, source)
+    for name in ("inputs.json", "provenance.json", "plan.json", COURSE_NOTATION):
+        if store.path(name).is_file():
+            shutil.copyfile(store.path(name), new / name)
+    plan = store.read("plan.json", CoursePlan)
+    for _, topic in plan.topics() if plan else []:
+        name = f"topics/{topic_filename(topic.id)}/note.json"
+        note = store.read(name, TopicNote)
+        if note is not None and note.status != "failed":
+            (new / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(store.path(name), new / name)
+    stamp = now()
+    run = NotesRun(
+        id=run_id,
+        course=source.course,
+        status="failed",
+        stage="queued",
+        created_at=stamp,
+        updated_at=stamp,
+        models=models.summary(),
+        error="Waiting to write the failed sections again",
+        materials=source.materials,
+        session_id=source.session_id,
+        session_label=source.session_label,
+        retried_from=source.id,
+    )
+    RunStore(new, run).save()
 
 
 async def topic_notes(
@@ -264,11 +328,22 @@ async def run_notes(
                     raise ValueError("No session material has extractable text")
                 store.log("inputs", f"{len(inputs.sources)} sources, {len(inputs.chunks)} chunks")
 
+                sheet = (
+                    store.read(COURSE_NOTATION, CourseNotation) or CourseNotation()
+                    if store.run.session_id
+                    else None
+                )
                 course_plan = store.read("plan.json", CoursePlan)
                 if course_plan is None:
                     store.log("planning", "Drafting the course plan")
                     course_plan = await plan_course(
-                        client, models, store, transcript, inputs, settings.notes_plan_rounds
+                        client,
+                        models,
+                        store,
+                        transcript,
+                        inputs,
+                        settings.notes_plan_rounds,
+                        sheet,
                     )
                 validate_topic_ids([topic.id for _, topic in course_plan.topics()])
                 store.log("planning", f"Plan ready: {len(course_plan.topics())} topics")
@@ -300,6 +375,8 @@ async def run_notes(
             )
             store.write("notes.json", document)
             await render_notes_outputs(document, store, settings)
+            if store.run.session_id:
+                extend_course_notation(store, course_plan)
             store.run.status = "done"
             store.log("done", "Notes are ready")
             span.update(output={"topics": len(notes), "failed": failed, "edits": edits})
@@ -308,8 +385,34 @@ async def run_notes(
         store.run.status = "failed"
         store.run.error = str(getattr(error, "detail", None) or error)
         store.log("failed", store.run.error)
-    finally:
-        ACTIVE.discard(course)
+    except asyncio.CancelledError:
+        # Stop: finished topics stay on disk and are reused when the run resumes. Nothing
+        # half-written is published: Quarto is killed and its outputs never replace files,
+        # and a run that is not done never shows its artifact manifest.
+        mark_stopped(store)
+
+
+def mark_stopped(store: RunStore) -> None:
+    print(f"Notes run {store.run.course}/{store.run.id} stopped")
+    store.run.status = "failed"
+    store.run.error = STOPPED
+    store.log("failed", STOPPED)
+
+
+def extend_course_notation(store: RunStore, plan: CoursePlan) -> None:
+    """Append a finished lecture's new symbols and terms to the course sheet.
+
+    Only the worker writes the sheet, and it runs one job per course at a time.
+    """
+    course_dir = store.directory.parents[1]
+    try:
+        sheet = append_notation(load_course_notation(course_dir), plan)
+        target = notation_file(course_dir)
+        partial = target.with_name(f".{target.name}.partial")
+        partial.write_text(sheet.model_dump_json(indent=2))
+        partial.replace(target)
+    except OSError as error:
+        store.warn(f"The course notation sheet was not updated: {error}")
 
 
 async def render_notes_outputs(
@@ -318,7 +421,8 @@ async def render_notes_outputs(
     """Save format sources and a manifest even when individual renders fail.
 
     The run directory is the artifacts root. Revision zero keeps the established
-    notes.pdf/notes.qmd and topics/<id>/note.pdf download locations.
+    notes.qmd and topics/<id>/note.pdf download locations; the full document is
+    rendered as HTML only (older runs may still hold a notes.pdf).
     """
     artifacts: list[RenderedArtifact] = []
     store.log("rendering", "Rendering HTML and PDF with Quarto")
@@ -356,6 +460,10 @@ async def render_notes_outputs(
                         error=str(error),
                     )
                 )
+        if note is None:
+            # The whole course is read as HTML; only topics get a PDF. notes.qmd is still
+            # written: it is the run's downloadable Quarto source.
+            prepared.pop("pdf", None)
         results += await render_document(
             prepared,
             store.path(prefix),

@@ -512,7 +512,8 @@ def test_generate_notes_runs_every_stage_with_its_model(mock_openrouter, no_quar
     run = body["run"]
     assert run["status"] == "done", run
     assert run["topics_total"] == run["topics_done"] == 2
-    assert any("PDF not rendered" in w for w in run["warnings"])
+    assert any(w.startswith("PDF of T1 not rendered") for w in run["warnings"])
+    assert not any(w.startswith("PDF not rendered") for w in run["warnings"])
     assert body["pdf"] is False
     assert body["topic_pdfs"] == []
 
@@ -585,7 +586,7 @@ def test_each_topic_gets_its_own_pdf(mock_openrouter, fake_quarto: Path) -> None
 
     body = client.post("/plans/1/notes").json()
     run = body["run"]["id"]
-    assert body["pdf"] is True
+    assert body["pdf"] is False
     assert body["topic_pdfs"] == ["T1"]
     assert any(w.startswith("PDF of T2 not rendered") for w in body["run"]["warnings"])
 
@@ -596,10 +597,9 @@ def test_each_topic_gets_its_own_pdf(mock_openrouter, fake_quarto: Path) -> None
     assert pdf.content == b"%PDF-1.4 note.qmd"
     folder = fake_quarto / "1/notes" / run
     artifacts = json.loads((folder / "artifacts.json").read_text())
-    assert len(artifacts) == 6
+    assert len(artifacts) == 5
     assert all(a["revision"] == 0 for a in artifacts)
     assert {(a["format"], a["topic_id"]) for a in artifacts if a["status"] == "ready"} == {
-        ("pdf", None),
         ("pdf", "T1"),
     }
     assert all(not a["path"].startswith("/") for a in artifacts)
@@ -608,6 +608,25 @@ def test_each_topic_gets_its_own_pdf(mock_openrouter, fake_quarto: Path) -> None
     assert client.get(f"/plans/1/notes/{run}/topics/T2/pdf").status_code == 404
     assert client.get(f"/plans/1/notes/{run}/topics/T9/pdf").status_code == 404
     assert client.get(f"/plans/1/notes/{run}/topics/..%2F..%2Frun.json/pdf").status_code == 404
+
+
+def test_new_run_renders_no_full_pdf(mock_openrouter, fake_quarto: Path) -> None:
+    course(fake_quarto)
+    handler, _ = model_stub()
+    client = mock_openrouter(handler)
+
+    body = client.post("/plans/1/notes").json()
+    run = body["run"]["id"]
+    folder = fake_quarto / "1/notes" / run
+
+    assert body["pdf"] is False
+    assert not (folder / "notes.pdf").exists()
+    artifacts = json.loads((folder / "artifacts.json").read_text())
+    assert ("pdf", None) not in {(a["format"], a["topic_id"]) for a in artifacts}
+    assert ("html", None) in {(a["format"], a["topic_id"]) for a in artifacts}
+    # The Quarto source of the whole course is still saved for download.
+    assert client.get(f"/plans/1/notes/{run}/qmd").status_code == 200
+    assert client.get(f"/plans/1/notes/{run}/pdf").status_code == 404
 
 
 def test_verifier_escalates_to_astra(mock_openrouter, no_quarto: Path) -> None:
@@ -667,6 +686,46 @@ def test_resume_reuses_the_plan_and_finished_topics(mock_openrouter, no_quarto: 
     names = [c[0] for c in calls]
     assert "course_plan" not in names
     assert names.count("evidence_selection") == 1
+
+
+def test_run_records_materials_and_topic_sessions(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    handler, _ = model_stub()
+    client = mock_openrouter(handler)
+    materials = client.get("/plans/1").json()["materials"]
+
+    body = client.post("/plans/1/notes").json()
+    run = body["run"]
+
+    assert run["materials"] == materials and len(materials) == 64
+    assert body["topic_sessions"] == {"T1": [0], "T2": [1]}
+    assert client.get(f"/plans/1/notes/{run['id']}").json()["topic_sessions"] == {
+        "T1": [0],
+        "T2": [1],
+    }
+    assert client.get("/plans/1/notes").json()[0]["materials"] == materials
+
+    # A resume keeps what the run started with.
+    folder = no_quarto / "1/notes" / run["id"]
+    stored = json.loads((folder / "run.json").read_text())
+    (folder / "run.json").write_text(
+        json.dumps(stored | {"status": "failed", "materials": "original"})
+    )
+    (folder / "topics/T2/note.json").unlink()
+    again = client.post("/plans/1/notes", json={"resume": run["id"]}).json()["run"]
+    assert again["status"] == "done" and again["materials"] == "original"
+
+
+def test_topic_sessions_are_empty_before_planning(mock_openrouter, no_quarto: Path) -> None:
+    course(no_quarto)
+    handler, _ = model_stub()
+    client = mock_openrouter(handler)
+    run = client.post("/plans/1/notes").json()["run"]["id"]
+    (no_quarto / "1/notes" / run / "plan.json").unlink()
+
+    assert client.get(f"/plans/1/notes/{run}").json()["topic_sessions"] == {}
+    (no_quarto / "1/notes" / run / "plan.json").write_text("{not json")
+    assert client.get(f"/plans/1/notes/{run}").json()["topic_sessions"] == {}
 
 
 def test_failed_model_call_fails_only_that_topic(mock_openrouter, no_quarto: Path) -> None:

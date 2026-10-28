@@ -3,12 +3,13 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from app.config import Settings, get_settings
-from app.plan import drop_primary, load_plan, save_plan
+from app.course import clear_readings_approval
+from app.plan import drop_primary, load_plan, save_plan, sync
 from app.storage import sha256
-from app.syllabus import Transcript
+from app.syllabus import Transcript, load_transcript, transcript_file
 from app.worker_client import WorkerClient, get_worker_client
 from app.worker_contract import TranscribeRequest as WorkerTranscribeRequest
 
@@ -47,20 +48,6 @@ def syllabus_file(settings: Settings, path: str) -> Path:
     return file
 
 
-def transcript_file(file: Path) -> Path:
-    return file.with_name(f"{file.name}.transcript.json")
-
-
-def load_transcript(file: Path) -> Transcript | None:
-    target = transcript_file(file)
-    if not target.is_file():
-        return None
-    try:
-        return Transcript.model_validate_json(target.read_text())
-    except ValidationError:
-        return None
-
-
 def use_as_plan_if_first(settings: Settings, source_path: str) -> None:
     course_dir = settings.uploads_dir / source_path.split("/")[0]
     plan = load_plan(course_dir)
@@ -95,6 +82,9 @@ async def transcribe(
     )
     transcript_file(file).write_text(transcript.model_dump_json(indent=2))
     use_as_plan_if_first(settings, transcript.source_path)
+    course_dir = settings.uploads_dir / transcript.source_path.split("/")[0]
+    if load_plan(course_dir).primary == transcript.source_path:
+        clear_readings_approval(course_dir)
     print(
         f"Transcribed {transcript.source_path}: {len(transcript.sessions)} sessions, "
         f"{len(transcript.learning_materials)} materials"
@@ -113,6 +103,39 @@ def get_transcript(
     return transcript
 
 
+@router.put("/transcript")
+def put_transcript(
+    path: Annotated[str, Query()],
+    body: Transcript,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> Transcript:
+    """Save the lecturer's edits (renamed, removed or added sessions) to a transcript."""
+    file = syllabus_file(settings, path)
+    stored = load_transcript(file)
+    if stored is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No transcript for this file yet")
+    # Provenance stays the stored one, so the edit still counts as this file's transcript.
+    transcript = body.model_copy(
+        update={
+            "source_path": stored.source_path,
+            "source_sha256": stored.source_sha256,
+            "model": stored.model,
+            "created_at": stored.created_at,
+        }
+    )
+    transcript_file(file).write_text(transcript.model_dump_json(indent=2))
+
+    # As after a re-transcription: unmatched sessions' files move to `unassigned`.
+    course_dir = settings.uploads_dir / transcript.source_path.split("/")[0]
+    plan = load_plan(course_dir)
+    if plan.primary == transcript.source_path and sync(plan, transcript):
+        save_plan(course_dir, plan)
+    if plan.primary == transcript.source_path and transcript.sessions != stored.sessions:
+        clear_readings_approval(course_dir)
+    print(f"Edited transcript {transcript.source_path}: {len(transcript.sessions)} sessions")
+    return transcript
+
+
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 def delete_syllabus(
     path: Annotated[str, Query()],
@@ -126,6 +149,7 @@ def delete_syllabus(
     if plan.primary == relative:
         drop_primary(plan)
         save_plan(course_dir, plan)
+        clear_readings_approval(course_dir)
 
     transcript_file(file).unlink(missing_ok=True)
     file.unlink()

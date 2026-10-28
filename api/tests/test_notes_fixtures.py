@@ -257,7 +257,12 @@ def rendered_text(output: Path) -> dict[str, str]:
         word = archive.read("word/document.xml").decode()
     return {
         "html": (output / "notes.html").read_text(),
-        "pdf": " ".join(page.extract_text() for page in PdfReader(output / "notes.pdf").pages),
+        # The whole course has no PDF: read the topics' PDFs in order.
+        "pdf": " ".join(
+            page.extract_text()
+            for topic in ("T1", "T2")
+            for page in PdfReader(output / "topics" / topic / "note.pdf").pages
+        ),
         "docx": word,
     }
 
@@ -267,8 +272,8 @@ def test_control_fixture_renders_with_actual_quarto(control_render) -> None:
 
     assert [a.model_dump() for a in artifacts if a.status != "ready"] == []
     assert {(a.topic_id, a.format) for a in artifacts} == {
-        (topic, kind) for topic in (None, "T1", "T2") for kind in ("html", "pdf")
-    } | {(None, "docx")}
+        (topic, kind) for topic in ("T1", "T2") for kind in ("html", "pdf")
+    } | {(None, "html"), (None, "docx")}
     text = rendered_text(output)
     assert 'lang="uk"' in text["html"] and "MathJax" in text["html"]
     assert 'id="tbl-t1-row-operations"' in text["html"]

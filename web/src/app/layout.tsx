@@ -1,14 +1,21 @@
 import type { Metadata } from "next";
-import { DM_Sans, Geist_Mono } from "next/font/google";
+import { Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 import "./globals.css";
 
-const dmSans = DM_Sans({
-  variable: "--font-dm-sans",
-  subsets: ["latin", "latin-ext"],
+// KSE Sans from the KSE design system: Latin and Ukrainian Cyrillic.
+const kseSans = localFont({
+  variable: "--font-kse-sans",
+  display: "swap",
+  src: [
+    { path: "./fonts/KSE-SansRegular.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/KSE-SansMedium.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/KSE-SansBold.woff2", weight: "700", style: "normal" },
+  ],
 });
 
 const geistMono = Geist_Mono({
@@ -17,15 +24,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "KSE AI Notes Taker",
-  description: "Upload lecture materials and get AI-generated notes",
+  title: "KSE Notes",
+  description: "Turn a course syllabus and its readings into lecture notes.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${dmSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${kseSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         <TooltipProvider>{children}</TooltipProvider>

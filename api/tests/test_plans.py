@@ -1,10 +1,11 @@
 import json
 from pathlib import Path
 
+import httpx2
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.plan import Plan, PlanSession, sync
+from app.plan import Plan, PlanSession, materials_fingerprint, sync
 from app.syllabus import Session, Transcript
 from tests.test_syllabus import EXTRACTION, completion
 
@@ -124,6 +125,7 @@ def test_empty_plan(tmp_uploads) -> None:
         "unassigned": [],
         "books": [],
         "mapped": False,
+        "materials": materials_fingerprint(Plan()),
     }
     assert TestClient(app).get("/plans/..").status_code in (400, 404)
     assert TestClient(app).get("/plans/abc").status_code == 400
@@ -247,3 +249,122 @@ def test_delete_primary_syllabus_frees_its_files(tmp_uploads) -> None:
     assert plan["sessions"] == []
     assert [f["path"] for f in plan["unassigned"]] == ["1/reading/book.pdf"]
     assert (tmp_uploads / "1/reading/book.pdf").exists()
+
+
+# Transcript edits
+
+
+def test_edit_transcript_round_trip_keeps_provenance(mock_openrouter, tmp_uploads) -> None:
+    put(tmp_uploads, "1/syllabus/s.pdf", b"%PDF")
+    calls = []
+
+    def handler(_) -> httpx2.Response:
+        calls.append(1)
+        return completion(json.dumps(EXTRACTION))
+
+    client = mock_openrouter(handler)
+    params = {"path": "1/syllabus/s.pdf"}
+    original = client.post("/syllabus/transcribe", json=params).json()
+
+    edited = json.loads(json.dumps(original))
+    edited["sessions"][0]["label"] = "Lecture 1"
+    edited["sessions"][0]["topic"] = "Renamed topic"
+    edited["sessions"].append({**edited["sessions"][0], "label": "Extra", "number": None})
+    # Provenance in the body is ignored: the stored transcript's stays.
+    edited["source_sha256"] = "forged"
+    response = client.put("/syllabus/transcript", params=params, json=edited)
+
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    assert [s["label"] for s in saved["sessions"]] == ["Lecture 1", "Extra"]
+    assert saved["sessions"][0]["topic"] == "Renamed topic"
+    for key in ("source_path", "source_sha256", "model", "created_at"):
+        assert saved[key] == original[key], key
+    assert client.get("/syllabus/transcript", params=params).json() == saved
+    # Still current for this file: transcribing again returns the edit, no model call.
+    assert client.post("/syllabus/transcribe", json=params).json() == saved
+    assert len(calls) == 1
+
+
+def test_edit_transcript_requires_a_stored_transcript(tmp_uploads) -> None:
+    put(tmp_uploads, "1/syllabus/s.pdf")
+    body = transcript(session("Week 1", 1)).model_dump()
+    client = TestClient(app)
+
+    def status_of(path: str, data: dict = body) -> int:
+        return client.put("/syllabus/transcript", params={"path": path}, json=data).status_code
+
+    assert status_of("1/syllabus/s.pdf") == 404
+    assert not (tmp_uploads / "1/syllabus/s.pdf.transcript.json").exists()
+    assert status_of("1/syllabus/missing.pdf") == 404
+    assert status_of("../../etc/passwd") == 400
+    put_transcript(tmp_uploads, transcript(session("Week 1", 1)))
+    assert status_of("1/syllabus/s.pdf", {**body, "extra": 1}) == 422
+
+
+def test_edit_transcript_keeps_the_plan_consistent(tmp_uploads) -> None:
+    put_transcript(
+        tmp_uploads, transcript(session("Week 1", 1), session("Week 2", 2), session("Week 3"))
+    )
+    put_plan(tmp_uploads, "1", Plan(primary="1/syllabus/s.pdf"))
+    for name in ("a", "b", "c"):
+        put(tmp_uploads, f"1/reading/{name}.pdf")
+    client = TestClient(app)
+    ids = [s["id"] for s in client.get("/plans/1").json()["sessions"]]
+    for session_id, name in zip(ids, ("a", "b", "c"), strict=True):
+        client.post(f"/plans/1/sessions/{session_id}/files", json={"path": f"1/reading/{name}.pdf"})
+
+    # Rename Week 1 (matched by its number), delete Week 2, rename numberless Week 3, add one.
+    edited = transcript(
+        session("Lecture 1", 1), session("Lecture 3"), session("Review", 9)
+    ).model_dump()
+    response = client.put("/syllabus/transcript", params={"path": "1/syllabus/s.pdf"}, json=edited)
+    assert response.status_code == 200, response.text
+
+    stored = Plan.model_validate_json((tmp_uploads / "1/plan.json").read_text())
+    assert [s.label for s in stored.sessions] == ["Lecture 1", "Lecture 3", "Review"]
+    assert stored.sessions[0].id == ids[0] and stored.sessions[0].files == ["1/reading/a.pdf"]
+    assert stored.sessions[1].files == stored.sessions[2].files == []
+    assert stored.unassigned == ["1/reading/b.pdf", "1/reading/c.pdf"]
+    plan = client.get("/plans/1").json()
+    assert [s["session"]["label"] for s in plan["sessions"]] == ["Lecture 1", "Lecture 3", "Review"]
+    assert [f["path"] for f in plan["unassigned"]] == ["1/reading/b.pdf", "1/reading/c.pdf"]
+
+
+# Materials fingerprint
+
+
+def test_materials_fingerprint_follows_attached_files_only() -> None:
+    def plan(*files: list[str], label: str = "Week 1") -> Plan:
+        return Plan(
+            sessions=[
+                PlanSession(id=f"s{i}", label=label, number=i, files=f) for i, f in enumerate(files)
+            ]
+        )
+
+    base = materials_fingerprint(plan(["1/reading/a.pdf", "1/excerpts/s0/x.pdf"], []))
+    assert len(base) == 64 and int(base, 16) >= 0
+    assert materials_fingerprint(plan(["1/excerpts/s0/x.pdf", "1/reading/a.pdf"], [])) == base
+    assert (
+        materials_fingerprint(plan(["1/reading/a.pdf", "1/excerpts/s0/x.pdf"], [], label="Renamed"))
+        == base
+    )
+    assert materials_fingerprint(plan(["1/reading/a.pdf"], [])) != base
+    assert materials_fingerprint(plan([], ["1/reading/a.pdf", "1/excerpts/s0/x.pdf"])) != base
+
+
+def test_plan_view_materials_change_on_attach_and_detach(tmp_uploads) -> None:
+    put_transcript(tmp_uploads, transcript(session("Week 1", 1)))
+    put_plan(tmp_uploads, "1", Plan(primary="1/syllabus/s.pdf"))
+    put(tmp_uploads, "1/reading/book.pdf")
+    client = TestClient(app)
+    plan = client.get("/plans/1").json()
+    week1, before = plan["sessions"][0]["id"], plan["materials"]
+    assert client.get("/plans/1").json()["materials"] == before
+
+    url = f"/plans/1/sessions/{week1}/files"
+    attached = client.post(url, json={"path": "1/reading/book.pdf"}).json()["materials"]
+    assert attached != before
+    assert client.get("/plans/1").json()["materials"] == attached
+    detached = client.delete(url, params={"path": "1/reading/book.pdf"}).json()["materials"]
+    assert detached == before

@@ -2,8 +2,10 @@
 
 Run from api/:  NOTES_E2E_MOCK_LOG=<file.jsonl> python -m uvicorn tests.e2e.mock_openrouter:app
 Every request is appended to the JSONL log; unknown schemas fail loudly with HTTP 500.
+NOTES_E2E_MOCK_DELAY=<seconds> slows every answer, e.g. to press Stop during a run.
 """
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -31,6 +33,7 @@ def health() -> dict[str, str]:
 @app.post("/api/v1/chat/completions")
 async def chat_completions(request: Request) -> JSONResponse:
     body = await request.json()
+    await asyncio.sleep(float(os.environ.get("NOTES_E2E_MOCK_DELAY") or 0))
     try:
         result, record = answer(body)
     except (UnknownRequest, KeyError, TypeError) as error:

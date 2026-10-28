@@ -48,7 +48,7 @@ type CoursePlanProps = {
   onUploaded: () => void;
 };
 
-function FileRow({
+export function FileRow({
   file,
   label,
   onRemove,
@@ -204,7 +204,7 @@ export function CoursePlan({ plan, courseId, readingFiles, onPlan, onUploaded }:
               materials={transcript.learning_materials}
             >
               <SessionProposals proposals={entry.proposals} course={plan.course} update={update} />
-              <span className="text-xs font-semibold uppercase text-muted-foreground">Files</span>
+              <span className="text-xs font-medium text-muted-foreground">Files</span>
               {entry.files.length > 0 && (
                 <ItemGroup className="gap-2">
                   {entry.files.map((file) => (

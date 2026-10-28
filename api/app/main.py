@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import courses, files, notes, plans, syllabus, uploads
+from app.routers import course_info, courses, files, notes, plans, syllabus, uploads
 
 settings = get_settings()
 
@@ -52,6 +52,7 @@ async def published_book_cors(request, call_next):
 
 
 app.include_router(courses.router)
+app.include_router(course_info.router)
 app.include_router(uploads.router)
 app.include_router(syllabus.router)
 app.include_router(plans.router)
