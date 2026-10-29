@@ -34,7 +34,9 @@ Build the notes' topic hierarchy:
   success_criteria: checkable statements a reviewer can use to decide the note is complete,
   e.g. "states the rank-nullity theorem with its assumptions and one worked example".
   prerequisites: ids of earlier topics it relies on (never later ones).
-  key_terms: the terms, theorems and symbols it introduces; used to search the materials.
+  key_terms: the terms, theorems and symbols it introduces; used to search the materials by
+  their words. Write each term in the language of the topic and, when its sources are in
+  another language, also as those sources word it (e.g. "власне значення", "eigenvalue").
 - Cover every syllabus session topic and subtopic. Do not split one idea across topics or
   repeat it in two. Order topics so every concept is introduced before it is used.
 - Review, revision, recap or exam-preparation sessions get no topic of their own: add their

@@ -685,8 +685,9 @@ async def refreshed_topic(
     if frozen is None:
         return note, LEGACY_REFRESH, None
     inputs, section, planned, context_hash = frozen
+    # A refresh adds only what the selector picks for the gaps, never the whole reading.
     selected, gaps = await select_evidence(
-        client, models.selector, section, planned, inputs, Retriever(inputs.chunks)
+        client, models.selector, section, planned, inputs, Retriever(inputs.chunks), False
     )
     old = {item.chunk_id for item in note.evidence}
     added = [item for item in selected if item.chunk_id not in old][:MAX_REFRESH_NEW]
