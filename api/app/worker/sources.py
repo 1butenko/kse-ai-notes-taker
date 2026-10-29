@@ -19,6 +19,20 @@ from app.syllabus import Transcript
 CHUNK_CHARS = 1400
 MAX_PAGES = 600
 TEXT_SUFFIXES = {".txt", ".md", ".qmd", ".tex"}
+# Characters of text below which a page counts as having none: a scan, or a blank page.
+NEAR_EMPTY = 40
+
+
+def page_ranges(pages: list[int]) -> str:
+    """Sorted page numbers as "PDF page 3" or "PDF pages 3, 7–9"."""
+    spans: list[list[int]] = []
+    for page in pages:
+        if spans and page == spans[-1][1] + 1:
+            spans[-1][1] = page
+        else:
+            spans.append([page, page])
+    text = ", ".join(str(a) if a == b else f"{a}–{b}" for a, b in spans)
+    return f"PDF page {text}" if len(pages) == 1 else f"PDF pages {text}"
 
 
 class PageTexts(BaseModel):
@@ -181,6 +195,13 @@ def build_inputs(uploads_dir: Path, course_dir: Path, plan: Plan, transcript: Tr
         if not source.chunk_ids:
             skipped.append(f"{material.file}: no extractable text (scanned or unsupported)")
             continue
+        blank = [page for page, text in pages.items() if len(text.strip()) < NEAR_EMPTY]
+        if is_pdf and material.pdf_start is not None and blank:
+            skipped.append(
+                f"{material.file}: {page_ranges(blank)} of {material.label or 'the excerpt'} "
+                f"{'has' if len(blank) == 1 else 'have'} no extractable text (scanned or blank); "
+                "the notes miss what is on them"
+            )
         by_key[key] = source
         sources.append(source)
 

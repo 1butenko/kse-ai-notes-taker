@@ -1570,3 +1570,34 @@ def test_run_store_cannot_place_a_temporary_file_outside_run_by_targeting_root(t
     with pytest.raises(ValueError, match="run"):
         store.write(name, "invalid file destination")
     assert list(tmp_path.iterdir()) == [directory]
+
+
+def test_build_inputs_warns_about_excerpt_pages_without_text(tmp_path: Path) -> None:
+    course(tmp_path)
+    text_pdf(tmp_path / "1/reading/book.pdf", [BOOK_PAGES[0], "", "", BOOK_PAGES[3], " 12 "])
+    plan = Plan.model_validate_json((tmp_path / "1/plan.json").read_text())
+    plan.proposals[0].pdf_end = 5
+    transcript = Transcript.model_validate_json(
+        (tmp_path / "1/syllabus/s.pdf.transcript.json").read_text()
+    )
+
+    inputs = build_inputs(tmp_path, tmp_path / "1", plan, transcript)
+
+    assert inputs.skipped == [
+        "1/reading/book.pdf: PDF pages 2–3, 5 of Ch. 1 have no extractable text "
+        "(scanned or blank); the notes miss what is on them"
+    ]
+    assert [c.pdf_page for c in inputs.chunks if c.source == 0] == [1, 4, 5]
+
+
+def test_build_inputs_reports_a_fully_scanned_excerpt_once(tmp_path: Path) -> None:
+    course(tmp_path)
+    text_pdf(tmp_path / "1/reading/book.pdf", ["", "", "", ""])
+    plan = Plan.model_validate_json((tmp_path / "1/plan.json").read_text())
+    transcript = Transcript.model_validate_json(
+        (tmp_path / "1/syllabus/s.pdf.transcript.json").read_text()
+    )
+
+    inputs = build_inputs(tmp_path, tmp_path / "1", plan, transcript)
+
+    assert inputs.skipped == ["1/reading/book.pdf: no extractable text (scanned or unsupported)"]
