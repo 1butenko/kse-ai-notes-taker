@@ -20,7 +20,7 @@ from app.notes_suggestions import NoteSuggestion, VerificationJob
 from app.plan import UnknownSession
 from app.storage import sha256
 from app.syllabus import SyllabusExtraction
-from app.worker import lectures, note_suggestions, revisions
+from app.worker import lectures, note_suggestions, revisions, vision
 from app.worker.config import WorkerSettings, get_worker_settings
 from app.worker.llm import ask
 from app.worker.mapping import proposal_summary, run_mapping
@@ -36,6 +36,8 @@ from app.worker.tracing import course_trace, init_langfuse
 from app.worker.transcribe import EmptyDocument, build_messages, drop_bad_refs
 from app.worker_contract import (
     ApprovalRequest,
+    BooksRequest,
+    BooksResponse,
     LecturesRequest,
     LecturesResponse,
     MapRequest,
@@ -161,6 +163,24 @@ async def map_materials(
             }
         )
     return MapResponse(matches=matches, proposals=proposals)
+
+
+@app.post("/books/transcribe", status_code=status.HTTP_202_ACCEPTED)
+async def transcribe_books(
+    body: BooksRequest,
+    background: BackgroundTasks,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+    opener: Annotated[Opener | None, Depends(get_openrouter_opener)],
+) -> BooksResponse:
+    """Transcribe, in the background, the pages of the course's approved excerpts that their
+    PDF text garbles (see `vision`)."""
+    if not COURSE.match(body.course):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {body.course!r}")
+    spec = vision.vision_spec(settings)
+    if opener is None or spec is None:
+        return BooksResponse(started=False)
+    background.add_task(vision.keep_transcribing, opener, spec, settings.uploads_dir, body.course)
+    return BooksResponse(started=True)
 
 
 @app.post("/notes", status_code=status.HTTP_202_ACCEPTED)

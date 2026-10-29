@@ -186,7 +186,9 @@ export type Excerpt = {
   printed: string | null;
 };
 
-export type FileView = SavedFile & {
+export type FileView = Omit<SavedFile, "size"> & {
+  /** Null for an excerpt: its pages are cut from the book when opened. */
+  size: number | null;
   excerpt: Excerpt | null;
   /** Uploaded for this lecture only: not a course reading, never matched to other lectures. */
   lecture_only?: boolean;
@@ -338,6 +340,11 @@ export function dismissUnassigned(course: string, path: string): Promise<PlanVie
 
 export function fileName(path: string): string {
   return path.split("/").pop() ?? path;
+}
+
+/** Whether a file opens as a PDF. An excerpt has no extension: its pages are cut from a book. */
+export function isPdfPath(path: string): boolean {
+  return /\.pdf$/i.test(path) || path.split("/")[1] === "excerpts";
 }
 
 export function fileUrl(path: string, page?: number): string {

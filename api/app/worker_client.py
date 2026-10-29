@@ -11,6 +11,8 @@ from app.notes_revisions import EditResult, RenderJob
 from app.notes_suggestions import NoteSuggestion, VerificationJob
 from app.worker_contract import (
     ApprovalRequest,
+    BooksRequest,
+    BooksResponse,
     LecturesRequest,
     LecturesResponse,
     MapRequest,
@@ -74,6 +76,9 @@ class WorkerClient:
 
     async def verify_topic(self, request: VerifyTopicRequest) -> VerificationJob:
         return await self.call("/notes/verify", request, VerificationJob)
+
+    async def transcribe_books(self, request: BooksRequest) -> BooksResponse:
+        return await self.call("/books/transcribe", request, BooksResponse)
 
     async def call[T: BaseModel](self, path: str, request: BaseModel, response: type[T]) -> T:
         try:

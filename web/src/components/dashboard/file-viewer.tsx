@@ -5,7 +5,7 @@ import { DownloadIcon } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { fileName, fileUrl } from "@/lib/api";
+import { fileName, fileUrl, isPdfPath } from "@/lib/api";
 
 type Viewing = { path: string; page?: number; title?: string; url?: string };
 
@@ -14,7 +14,7 @@ const FileViewerContext = createContext<((viewing: Viewing) => void) | null>(nul
 /** Opens uploaded files and excerpts in a modal: PDFs inline, other types as a download. */
 export function FileViewerProvider({ children }: { children: ReactNode }) {
   const [viewing, setViewing] = useState<Viewing | null>(null);
-  const isPdf = viewing ? /\.pdf$/i.test(viewing.path) : false;
+  const isPdf = viewing ? isPdfPath(viewing.path) : false;
 
   return (
     <FileViewerContext.Provider value={setViewing}>
@@ -39,7 +39,7 @@ export function FileViewerProvider({ children }: { children: ReactNode }) {
                   // Re-mount per page: changing only the #page hash doesn't scroll the viewer.
                   key={`${viewing.path}#${viewing.page ?? ""}`}
                   src={viewing.url ?? fileUrl(viewing.path, viewing.page)}
-                  title={fileName(viewing.path)}
+                  title={viewing.title ?? fileName(viewing.path)}
                   className="min-h-0 w-full flex-1 rounded-lg border"
                 />
               ) : (

@@ -180,6 +180,10 @@ def topic_of(directory: Path, topic: int = 0):
     return RevisionStore(directory).current().document.sections[0].topics[topic]
 
 
+# The frozen reading is short, so the selector sees it whole in page order: c1, c2, definition.
+DEFINITION = 2
+
+
 def frozen_f3_run(saved_run):
     directory, document = saved_run
     source = document.sources[0]
@@ -518,7 +522,7 @@ def test_f3_verify_refreshes_frozen_evidence_without_rewriting_authored_blocks(
     model.selection = {
         "selected": [
             {
-                "candidate": 0,
+                "candidate": DEFINITION,
                 "role": "definition",
                 "relevance": 5,
                 "reason": "Defines transpose and its dimensions.",
@@ -801,7 +805,7 @@ def test_f3_refresh_invalidates_prior_f1_candidate(saved_run, client, model):
     assert proposal["status"] == "ready" and proposal["compatible"] is True
     model.selection = {
         "selected": [
-            {"candidate": 0, "role": "definition", "relevance": 5, "reason": "Definition."}
+            {"candidate": DEFINITION, "role": "definition", "relevance": 5, "reason": "Definition."}
         ],
         "gaps": [],
     }

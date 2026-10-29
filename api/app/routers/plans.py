@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from pydantic import BaseModel
 from pypdf import PdfReader
 
-from app.books import cut_excerpt, load_index, printed_range
+from app.books import load_index, printed_range
 from app.config import Settings, get_settings
 from app.course import clear_readings_approval
 from app.plan import (
@@ -16,6 +16,8 @@ from app.plan import (
     PlanSession,
     Proposal,
     aligned,
+    excerpt_proposal,
+    excerpt_ref,
     load_plan,
     materials_fingerprint,
     merge_proposals,
@@ -28,7 +30,7 @@ from app.routers.uploads import SavedFile, safe_name
 from app.storage import sha256
 from app.syllabus import Session, Transcript
 from app.worker_client import WorkerClient, get_worker_client
-from app.worker_contract import MapRequest
+from app.worker_contract import BooksRequest, MapRequest
 
 router = APIRouter(prefix="/plans", tags=["plans"])
 
@@ -64,6 +66,8 @@ class Excerpt(BaseModel):
 
 
 class FileView(SavedFile):
+    # An excerpt has no file of its own, so no size.
+    size: int | None
     excerpt: Excerpt | None = None
     # Uploaded for one lecture only: never a course reading, never matched to other lectures.
     lecture_only: bool = False
@@ -132,32 +136,24 @@ SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def file_views(settings: Settings, plan: Plan, paths: list[str]) -> list[FileView]:
-    excerpts = {p.excerpt: p for p in plan.proposals if p.excerpt}
     result = []
     for path in paths:
-        file = settings.uploads_dir / path
-        if not file.is_file():
-            continue
-        proposal = excerpts.get(path)
-        excerpt = (
-            Excerpt(
+        proposal = excerpt_proposal(plan, path)
+        if proposal:
+            excerpt = Excerpt(
                 book=proposal.book,
                 label=proposal.label,
                 pdf_start=proposal.pdf_start,
                 pdf_end=proposal.pdf_end,
                 printed=proposal.printed,
             )
-            if proposal and proposal.pdf_start is not None and proposal.pdf_end is not None
-            else None
-        )
-        result.append(
-            FileView(
-                path=path,
-                size=file.stat().st_size,
-                excerpt=excerpt,
-                lecture_only=is_lecture_file(path),
+            result.append(FileView(path=path, size=None, excerpt=excerpt))
+            continue
+        file = settings.uploads_dir / path
+        if file.is_file():
+            result.append(
+                FileView(path=path, size=file.stat().st_size, lecture_only=is_lecture_file(path))
             )
-        )
     return result
 
 
@@ -230,8 +226,11 @@ def find_proposal(plan: Plan, proposal_id: str) -> Proposal:
 
 
 def delete_excerpt(settings: Settings, plan: Plan, path: str, *, forget: bool) -> None:
-    """Remove an excerpt file. Its proposal goes back to review, or away with `forget`."""
-    (settings.uploads_dir / path).unlink(missing_ok=True)
+    """Remove an excerpt. Its proposal goes back to review, or away with `forget`."""
+    # Excerpts cut before they became references still have a file until migrated.
+    legacy = settings.uploads_dir / path
+    if legacy.is_file():
+        legacy.unlink()
     if forget:
         plan.proposals = [p for p in plan.proposals if p.excerpt != path]
         return
@@ -240,15 +239,6 @@ def delete_excerpt(settings: Settings, plan: Plan, path: str, *, forget: bool) -
         if proposal.excerpt == path:
             proposal.excerpt = None
             proposal.status = "proposed"
-
-
-def excerpt_name(directory: Path, book: str, label: str) -> str:
-    stem = Path(book).stem[:60]
-    base = safe_name(f"{stem} - {label}"[:120])
-    name, n = f"{base}.pdf", 2
-    while (directory / name).exists():
-        name, n = f"{base} ({n}).pdf", n + 1
-    return name
 
 
 def check_pages(book: Path, start: int, end: int) -> None:
@@ -274,15 +264,21 @@ def approve(settings: Settings, course: str, plan: Plan, proposal: Proposal) -> 
     if not book.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "The book file is gone")
 
-    directory = course_dir(settings, course) / "excerpts" / entry.id
-    name = excerpt_name(directory, proposal.book, proposal.label)
-    cut_excerpt(book, proposal.pdf_start, proposal.pdf_end, directory / name)
-
-    path = f"{course}/excerpts/{entry.id}/{name}"
-    entry.files.append(path)
+    path = excerpt_ref(course, proposal.id)
+    if path not in entry.files:
+        entry.files.append(path)
     proposal.status = "approved"
     proposal.excerpt = path
-    print(f"Cut excerpt {path} (PDF pages {proposal.pdf_start}-{proposal.pdf_end})")
+    print(f"Approved excerpt {path} (PDF pages {proposal.pdf_start}-{proposal.pdf_end})")
+
+
+async def transcribe_excerpts(worker: WorkerClient, course: str) -> None:
+    """Have the worker read the pages that approved excerpts' PDF text garbles now, not when a
+    note is written. An approval stands even when the worker can't be reached."""
+    try:
+        await worker.transcribe_books(BooksRequest(course=course))
+    except HTTPException as error:
+        print(f"Couldn't start transcribing {course}: {error.detail}")
 
 
 @router.get("/{course}")
@@ -353,11 +349,12 @@ async def upload_lecture_files(
 
 
 @router.post("/{course}/sessions/{session_id}/excerpts")
-def add_excerpt(
+async def add_excerpt(
     course: str,
     session_id: str,
     body: ExcerptRequest,
     settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
 ) -> PlanView:
     plan, transcript = current(settings, course)
     entry = find_session(plan, session_id)
@@ -381,6 +378,7 @@ def add_excerpt(
     plan.proposals.append(proposal)
     approve(settings, course, plan, proposal)
     save_plan(course_dir(settings, course), plan)
+    await transcribe_excerpts(worker, course)
     return render(settings, course, plan, transcript)
 
 
@@ -479,7 +477,11 @@ def put_book(
 
 
 @router.post("/{course}/proposals/approve-all")
-def approve_all(course: str, settings: Annotated[Settings, Depends(get_settings)]) -> PlanView:
+async def approve_all(
+    course: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> PlanView:
     plan, transcript = current(settings, course)
     for proposal in plan.proposals:
         if (
@@ -489,14 +491,16 @@ def approve_all(course: str, settings: Annotated[Settings, Depends(get_settings)
         ):
             approve(settings, course, plan, proposal)
     save_plan(course_dir(settings, course), plan)
+    await transcribe_excerpts(worker, course)
     return render(settings, course, plan, transcript)
 
 
 @router.post("/{course}/proposals/{proposal_id}/approve")
-def approve_proposal(
+async def approve_proposal(
     course: str,
     proposal_id: str,
     settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
     body: PagesRequest | None = None,
 ) -> PlanView:
     plan, transcript = current(settings, course)
@@ -511,6 +515,7 @@ def approve_proposal(
             proposal.method = "manual"
     approve(settings, course, plan, proposal)
     save_plan(course_dir(settings, course), plan)
+    await transcribe_excerpts(worker, course)
     return render(settings, course, plan, transcript)
 
 

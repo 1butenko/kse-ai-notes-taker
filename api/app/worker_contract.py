@@ -105,3 +105,13 @@ class VerifyTopicRequest(BaseModel):
     run: str
     topic: str
     base_revision: int
+
+
+class BooksRequest(BaseModel):
+    course: str
+
+
+class BooksResponse(BaseModel):
+    """Whether the pages of the course's approved excerpts are being transcribed."""
+
+    started: bool

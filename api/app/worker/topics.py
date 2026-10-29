@@ -77,16 +77,35 @@ def page_of(chunk: Chunk) -> str | None:
     return f"PDF p. {chunk.pdf_page}" if chunk.pdf_page else None
 
 
-def candidates_for(topic: PlannedTopic, inputs: Inputs, retriever: Retriever) -> list[Chunk]:
-    query = " ".join([topic.title, *topic.key_terms, *topic.objectives])
-    own = {
+def own_chunks(topic: PlannedTopic, inputs: Inputs) -> set[str]:
+    return {
         chunk_id
         for source in inputs.sources
         if source.id in topic.sources
         for chunk_id in source.chunk_ids
     }
+
+
+def whole_reading(own: set[str]) -> bool:
+    """A reading short enough to give the topic whole, without searching it.
+
+    Word search misses chunks that word things differently, and every chunk when the topic
+    and its reading are in different languages.
+    """
+    return 0 < len(own) <= TOPIC_CANDIDATES
+
+
+def candidates_for(topic: PlannedTopic, inputs: Inputs, retriever: Retriever) -> list[Chunk]:
+    """The topic's own reading first (whole and in page order when short, else searched),
+    then a few chunks of other readings."""
+    query = " ".join([topic.title, *topic.key_terms, *topic.objectives])
+    own = own_chunks(topic, inputs)
     found: list[Chunk] = []
     seen: set[str] = set()
+    if whole_reading(own):
+        found = [chunk for chunk in inputs.chunks if chunk.id in own]
+        seen = set(own)
+        own = set()
 
     def add(candidates: list[Chunk], limit: int) -> None:
         for chunk in candidates:
@@ -124,18 +143,31 @@ async def select_evidence(
     topic: PlannedTopic,
     inputs: Inputs,
     retriever: Retriever,
+    keep_reading: bool = True,
 ) -> tuple[list[EvidenceItem], list[str]]:
+    """The evidence for a topic. A short reading (`whole_reading`) is kept whole, in page
+    order: the selector only gives its chunks their roles, and picks among other readings.
+    Without `keep_reading`, it picks among the short reading too."""
     candidates = candidates_for(topic, inputs, retriever)
     if not candidates:
         return [], ["No excerpt of the course materials matches this topic"]
+    own = own_chunks(topic, inputs)
+    kept = sum(c.id in own for c in candidates) if keep_reading and whole_reading(own) else 0
     titles = {s.id: s.title for s in inputs.sources}
     listing = [
         f"C{i} ({titles[c.source]}, {page_of(c) or 'no page'}):\n{c.text}"
         for i, c in enumerate(candidates)
     ]
+    message = "Candidates:\n\n" + "\n\n".join(listing)
+    if kept:
+        message = (
+            f"C0-C{kept - 1} are the topic's whole reading and are all kept: give each of them "
+            "its role, relevance and reason. Select among the other candidates as usual.\n\n"
+            + message
+        )
     result = await ask(
         client,
-        chat(SELECTOR_PROMPT, topic_text(section, topic), "Candidates:\n\n" + "\n\n".join(listing)),
+        chat(SELECTOR_PROMPT, topic_text(section, topic), message),
         EvidenceSelection,
         "evidence_selection",
         step="select-evidence",
@@ -145,6 +177,15 @@ async def select_evidence(
     for choice in result.selected:
         if 0 <= choice.candidate < len(candidates) and choice.candidate not in chosen:
             chosen[choice.candidate] = choice
+    picked = sorted(
+        ((i, choice) for i, choice in chosen.items() if i >= kept),
+        key=lambda c: (-c[1].relevance, c[0]),
+    )
+    reading = [
+        (i, chosen.get(i) or EvidenceChoice(candidate=i, role="background", relevance=2, reason=""))
+        for i in range(kept)
+    ]
+    limit = OTHER_CANDIDATES if kept else MAX_SELECTED_EVIDENCE
     evidence = [
         EvidenceItem(
             chunk_id=candidates[i].id,
@@ -153,12 +194,10 @@ async def select_evidence(
             page=page_of(candidates[i]),
             role=choice.role,
             relevance=max(1, min(5, choice.relevance)),
-            reason=choice.reason,
+            reason=choice.reason or "Part of the topic's assigned reading.",
             text=candidates[i].text,
         )
-        for i, choice in sorted(chosen.items(), key=lambda c: (-c[1].relevance, c[0]))[
-            :MAX_SELECTED_EVIDENCE
-        ]
+        for i, choice in [*reading, *picked[:limit]]
     ]
     return evidence, result.gaps
 

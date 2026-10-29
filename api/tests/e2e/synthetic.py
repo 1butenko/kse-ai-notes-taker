@@ -250,6 +250,7 @@ SCHEMAS = (
     "topic_verification",
     "consistency_edits",
     "topic_suggestion",
+    "page_transcript",
 )
 
 
@@ -288,6 +289,8 @@ def answer(body: dict) -> tuple[dict, dict]:
             ],
             "gaps": [],
         }
+    elif name == "page_transcript":
+        result = {"markdown": "Transcribed page."}
     elif name == "consistency_edits":
         result = {"edits": []}
     elif name == "topic_suggestion" and topic:

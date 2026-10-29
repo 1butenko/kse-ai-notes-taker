@@ -19,6 +19,20 @@ from app.syllabus import Transcript
 CHUNK_CHARS = 1400
 MAX_PAGES = 600
 TEXT_SUFFIXES = {".txt", ".md", ".qmd", ".tex"}
+# Characters of text below which a page counts as having none: a scan, or a blank page.
+NEAR_EMPTY = 40
+
+
+def page_ranges(pages: list[int]) -> str:
+    """Sorted page numbers as "PDF page 3" or "PDF pages 3, 7–9"."""
+    spans: list[list[int]] = []
+    for page in pages:
+        if spans and page == spans[-1][1] + 1:
+            spans[-1][1] = page
+        else:
+            spans.append([page, page])
+    text = ", ".join(str(a) if a == b else f"{a}–{b}" for a, b in spans)
+    return f"PDF page {text}" if len(pages) == 1 else f"PDF pages {text}"
 
 
 class PageTexts(BaseModel):
@@ -64,6 +78,79 @@ def page_texts(
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(cached.model_dump_json())
     return {page: cached.pages[page] for page in wanted}
+
+
+# Pages whose PDF text loses what is on them. Typeset matrices come out as stacked bracket
+# pieces with their entries run together, and TeX math fonts lose symbols (≠ becomes =).
+BRACKETS = re.compile("[⎛⎜⎝⎞⎟⎠⎡⎢⎣⎤⎥⎦]")
+MATH_FONT = re.compile(
+    r"CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|EUFM|EUSM|RSFS|MTMI|MTSY|MTEX|MathematicalPi|LMMath|"
+    r"txsy|txmi|pxsy|pxmi|STIX\w*Math|Cambria.?Math",
+    re.IGNORECASE,
+)
+
+
+def font_names(resources, depth: int = 0) -> set[str]:
+    """Base fonts of a page's resources, those of its form XObjects included."""
+    if resources is None or depth > 3:
+        return set()
+    resources = resources.get_object()
+    names = {
+        str(f.get_object().get("/BaseFont", "")) for f in (resources.get("/Font") or {}).values()
+    }
+    for item in (resources.get("/XObject") or {}).values():
+        item = item.get_object()
+        if item.get("/Subtype") == "/Form":
+            names |= font_names(item.get("/Resources"), depth + 1)
+    return names
+
+
+def loses_text(page, text: str) -> bool:
+    """Whether a page's PDF text misses what the page shows: it has no text (a scan), typeset
+    matrices or math set in TeX fonts."""
+    if len(text.strip()) < NEAR_EMPTY or BRACKETS.search(text):
+        return True
+    try:
+        return any(MATH_FONT.search(name) for name in font_names(page.get("/Resources")))
+    except Exception:
+        return False
+
+
+class PageTranscripts(BaseModel):
+    """Pages of a PDF a vision model transcribed to Markdown with LaTeX, in place of their PDF
+    text (see `app.worker.vision`). `key` names the model and prompt that read them."""
+
+    source_sha256: str
+    key: str
+    pages: dict[int, str]
+
+
+def transcript_cache(course_dir: Path, digest: str) -> Path:
+    return course_dir / "text" / f"{digest[:16]}.vision.json"
+
+
+def load_transcripts(course_dir: Path, digest: str) -> PageTranscripts | None:
+    target = transcript_cache(course_dir, digest)
+    if not target.is_file():
+        return None
+    try:
+        transcripts = PageTranscripts.model_validate_json(target.read_text())
+    except ValueError:
+        return None
+    return transcripts if transcripts.source_sha256 == digest else None
+
+
+def untranscribed(file: Path, pages: dict[int, str], transcribed: dict[int, str]) -> list[int]:
+    """Pages with text that `loses_text` and no transcription. Pages without text are reported
+    on their own."""
+    reader = PdfReader(file)
+    return [
+        page
+        for page, text in pages.items()
+        if page not in transcribed
+        and len(text.strip()) >= NEAR_EMPTY
+        and loses_text(reader.pages[page - 1], text)
+    ]
 
 
 def split_text(text: str) -> list[str]:
@@ -147,6 +234,13 @@ def build_inputs(uploads_dir: Path, course_dir: Path, plan: Plan, transcript: Tr
             continue
 
         is_pdf = file.suffix.lower() == ".pdf"
+        garbled: list[int] = []
+        if is_pdf:
+            read = load_transcripts(course_dir, digest)
+            transcribed = read.pages if read else {}
+            if material.pdf_start is not None:
+                garbled = untranscribed(file, pages, transcribed)
+            pages = {page: transcribed.get(page, text) for page, text in pages.items()}
         index = load_index(course_dir, file, digest) if is_pdf else None
         first = material.pdf_start or 1
         last = material.pdf_end or max(pages, default=0)
@@ -181,6 +275,19 @@ def build_inputs(uploads_dir: Path, course_dir: Path, plan: Plan, transcript: Tr
         if not source.chunk_ids:
             skipped.append(f"{material.file}: no extractable text (scanned or unsupported)")
             continue
+        blank = [page for page, text in pages.items() if len(text.strip()) < NEAR_EMPTY]
+        if is_pdf and material.pdf_start is not None and blank:
+            skipped.append(
+                f"{material.file}: {page_ranges(blank)} of {material.label or 'the excerpt'} "
+                f"{'has' if len(blank) == 1 else 'have'} no extractable text (scanned or blank); "
+                "the notes miss what is on them"
+            )
+        if garbled:
+            skipped.append(
+                f"{material.file}: {page_ranges(garbled)} of {material.label or 'the excerpt'} "
+                f"{'has' if len(garbled) == 1 else 'have'} formulas or matrices their PDF text "
+                "garbles, and no vision transcription yet; the notes may misread them"
+            )
         by_key[key] = source
         sources.append(source)
 

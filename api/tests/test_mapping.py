@@ -1,3 +1,4 @@
+import io
 import json
 from pathlib import Path
 
@@ -39,6 +40,13 @@ def make_book(path: Path, *, outline=OUTLINE, labels: bool = True, pages: int = 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as f:
         writer.write(f)
+
+
+def viewed_pages(client: TestClient, path: str) -> int:
+    """Pages of a file as the viewer gets it."""
+    response = client.get("/files", params={"path": path})
+    assert response.status_code == 200
+    return len(PdfReader(io.BytesIO(response.content)).pages)
 
 
 def reading(raw: str, pages: str | None, ref: int | None) -> SessionReading:
@@ -178,15 +186,16 @@ def test_map_approve_detach_reject_cycle(mock_openrouter, tmp_uploads) -> None:
     plan = client.post("/plans/1/proposals/approve-all").json()
     files = plan["sessions"][0]["files"]
     assert len(files) == 1 and files[0]["excerpt"]["printed"] == "pp. 1–12"
-    excerpt = tmp_uploads / files[0]["path"]
-    assert len(PdfReader(excerpt).pages) == 12
-    assert client.get("/files", params={"path": files[0]["path"]}).status_code == 200
+    proposal_id = first[0]["id"]
+    assert files[0]["path"] == f"1/excerpts/{proposal_id}"
+    assert not (tmp_uploads / "1/excerpts").exists()
+    assert viewed_pages(client, files[0]["path"]) == 12
 
     session_id = plan["sessions"][0]["id"]
     plan = client.delete(
         f"/plans/1/sessions/{session_id}/files", params={"path": files[0]["path"]}
     ).json()
-    assert not excerpt.exists()
+    assert plan["sessions"][0]["files"] == []
     proposal = plan["sessions"][0]["proposals"][0]
     assert proposal["status"] == "proposed" and proposal["excerpt"] is None
 
@@ -205,7 +214,8 @@ def test_map_approve_detach_reject_cycle(mock_openrouter, tmp_uploads) -> None:
         "manual",
         "pp. 3–4",
     )
-    assert len(PdfReader(tmp_uploads / approved["excerpt"]).pages) == 2
+    assert approved["excerpt"] == f"1/excerpts/{proposal_id}"
+    assert viewed_pages(client, approved["excerpt"]) == 2
 
 
 def test_approve_rejects_bad_pages_and_ai_estimates_need_one_by_one(
@@ -355,11 +365,12 @@ def test_add_excerpt_cuts_pages_and_detach_forgets_it(tmp_uploads) -> None:
     [file] = entry["files"]
     assert file["excerpt"]["book"] == "1/reading/b.pdf"
     assert (file["excerpt"]["pdf_start"], file["excerpt"]["pdf_end"]) == (5, 6)
-    assert len(PdfReader(tmp_uploads / file["path"]).pages) == 2
+    assert file["path"] == f"1/excerpts/{entry['proposals'][0]['id']}"
+    assert viewed_pages(client, file["path"]) == 2
     assert entry["proposals"][0]["status"] == "approved"
 
     plan = client.delete(
         f"/plans/1/sessions/{session_id}/files", params={"path": file["path"]}
     ).json()
-    assert not (tmp_uploads / file["path"]).exists()
+    assert client.get("/files", params={"path": file["path"]}).status_code == 404
     assert plan["sessions"][0]["files"] == [] and plan["sessions"][0]["proposals"] == []
