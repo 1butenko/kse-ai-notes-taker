@@ -37,6 +37,8 @@ def in_process_worker() -> Iterator[None]:
             yield WorkerClient("http://worker.test", http)
 
     app.dependency_overrides[get_worker_client] = override
+    # No model unless a test installs one: the real key in .env must never be used.
+    worker_app.dependency_overrides[get_openrouter_opener] = lambda: None
     yield
     app.dependency_overrides.pop(get_worker_client, None)
     worker_app.dependency_overrides.clear()

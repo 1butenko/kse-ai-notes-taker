@@ -30,7 +30,7 @@ from app.routers.uploads import SavedFile, safe_name
 from app.storage import sha256
 from app.syllabus import Session, Transcript
 from app.worker_client import WorkerClient, get_worker_client
-from app.worker_contract import MapRequest
+from app.worker_contract import BooksRequest, MapRequest
 
 router = APIRouter(prefix="/plans", tags=["plans"])
 
@@ -272,6 +272,15 @@ def approve(settings: Settings, course: str, plan: Plan, proposal: Proposal) -> 
     print(f"Approved excerpt {path} (PDF pages {proposal.pdf_start}-{proposal.pdf_end})")
 
 
+async def transcribe_excerpts(worker: WorkerClient, course: str) -> None:
+    """Have the worker read the pages that approved excerpts' PDF text garbles now, not when a
+    note is written. An approval stands even when the worker can't be reached."""
+    try:
+        await worker.transcribe_books(BooksRequest(course=course))
+    except HTTPException as error:
+        print(f"Couldn't start transcribing {course}: {error.detail}")
+
+
 @router.get("/{course}")
 def get_plan(course: str, settings: Annotated[Settings, Depends(get_settings)]) -> PlanView:
     return render(settings, course, *current(settings, course))
@@ -340,11 +349,12 @@ async def upload_lecture_files(
 
 
 @router.post("/{course}/sessions/{session_id}/excerpts")
-def add_excerpt(
+async def add_excerpt(
     course: str,
     session_id: str,
     body: ExcerptRequest,
     settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
 ) -> PlanView:
     plan, transcript = current(settings, course)
     entry = find_session(plan, session_id)
@@ -368,6 +378,7 @@ def add_excerpt(
     plan.proposals.append(proposal)
     approve(settings, course, plan, proposal)
     save_plan(course_dir(settings, course), plan)
+    await transcribe_excerpts(worker, course)
     return render(settings, course, plan, transcript)
 
 
@@ -466,7 +477,11 @@ def put_book(
 
 
 @router.post("/{course}/proposals/approve-all")
-def approve_all(course: str, settings: Annotated[Settings, Depends(get_settings)]) -> PlanView:
+async def approve_all(
+    course: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> PlanView:
     plan, transcript = current(settings, course)
     for proposal in plan.proposals:
         if (
@@ -476,14 +491,16 @@ def approve_all(course: str, settings: Annotated[Settings, Depends(get_settings)
         ):
             approve(settings, course, plan, proposal)
     save_plan(course_dir(settings, course), plan)
+    await transcribe_excerpts(worker, course)
     return render(settings, course, plan, transcript)
 
 
 @router.post("/{course}/proposals/{proposal_id}/approve")
-def approve_proposal(
+async def approve_proposal(
     course: str,
     proposal_id: str,
     settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
     body: PagesRequest | None = None,
 ) -> PlanView:
     plan, transcript = current(settings, course)
@@ -498,6 +515,7 @@ def approve_proposal(
             proposal.method = "manual"
     approve(settings, course, plan, proposal)
     save_plan(course_dir(settings, course), plan)
+    await transcribe_excerpts(worker, course)
     return render(settings, course, plan, transcript)
 
 

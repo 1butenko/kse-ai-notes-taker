@@ -20,6 +20,8 @@ class WorkerSettings(BaseSettings):
     notes_writer_model: str = "google/gemini-3.7-flash"
     notes_verifier_model: str = "openai/gpt-6-luna"
     notes_escalation_model: str = "openai/gpt-6.1-sol"
+    # Reads book pages whose PDF text garbles formulas or has none; empty turns it off.
+    notes_vision_model: str = "google/gemini-3.7-flash"
     notes_concurrency: int = 4
     notes_plan_rounds: int = 3
     notes_revision_rounds: int = 2
