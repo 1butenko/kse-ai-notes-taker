@@ -1,4 +1,5 @@
 import shutil
+import uuid
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -9,7 +10,9 @@ from pydantic import BaseModel, Field
 from app.config import Settings, get_settings
 from app.links import PageTooLarge, fetch, get_web_client, html_to_text, is_video
 from app.moodle import MoodleClient, get_moodle_client
+from app.plan import load_plan
 from app.routers.courses import moodle_errors
+from app.storage import sha256
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
 
@@ -51,6 +54,60 @@ def saved(settings: Settings, dest: Path, size: int) -> SavedFile:
     return SavedFile(path=path, size=size)
 
 
+def excerpt_sessions(settings: Settings, path: str) -> list[str]:
+    """Labels of the sessions whose approved excerpts read pages of this book."""
+    plan = load_plan(settings.uploads_dir / path.split("/")[0])
+    ids = {p.session_id for p in plan.proposals if p.status == "approved" and p.book == path}
+    labels = [s.label for s in plan.sessions if s.id in ids]
+    # Approved excerpts of sessions the syllabus no longer has wait in Unassigned.
+    return labels + (["Unassigned"] if ids - {s.id for s in plan.sessions} else [])
+
+
+class Staging:
+    """Uploads land next to their category first and replace their files only when every
+    one may: a book whose pages approved excerpts read keeps its bytes."""
+
+    def __init__(self, settings: Settings, directory: Path) -> None:
+        self.settings = settings
+        self.directory = directory.parent / ".staging"
+        self.files: list[tuple[Path, Path]] = []
+
+    def __enter__(self) -> "Staging":
+        return self
+
+    def __exit__(self, *_) -> None:
+        for temporary, _ in self.files:
+            temporary.unlink(missing_ok=True)
+
+    def add(self, dest: Path) -> Path:
+        """Where to write the upload meant for `dest`."""
+        self.directory.mkdir(parents=True, exist_ok=True)
+        temporary = self.directory / f"{len(self.files)}-{uuid.uuid4().hex}"
+        self.files.append((temporary, dest))
+        return temporary
+
+    def commit(self) -> list[SavedFile]:
+        conflicts = []
+        for temporary, dest in self.files:
+            if dest.is_file() and sha256(dest) != sha256(temporary):
+                path = dest.relative_to(self.settings.uploads_dir).as_posix()
+                if sessions := excerpt_sessions(self.settings, path):
+                    conflicts.append(f"{dest.name} (excerpts in {', '.join(sessions)})")
+        if conflicts:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "A different file is already saved under this name and approved excerpts read "
+                f"its pages: {'; '.join(conflicts)}. Upload it under another name, or remove "
+                "those excerpts first.",
+            )
+        result = []
+        for temporary, dest in self.files:
+            size = temporary.stat().st_size
+            temporary.replace(dest)
+            result.append(saved(self.settings, dest, size))
+        return result
+
+
 @router.post("")
 async def upload_files(
     category: Annotated[Category, Form()],
@@ -59,13 +116,11 @@ async def upload_files(
     course_id: Annotated[int | None, Form()] = None,
 ) -> list[SavedFile]:
     directory = target_dir(settings, course_id, category)
-    result = []
-    for upload in files:
-        dest = directory / safe_name(upload.filename or "")
-        with dest.open("wb") as out:
-            shutil.copyfileobj(upload.file, out)
-        result.append(saved(settings, dest, dest.stat().st_size))
-    return result
+    with Staging(settings, directory) as staging:
+        for upload in files:
+            with staging.add(directory / safe_name(upload.filename or "")).open("wb") as out:
+                shutil.copyfileobj(upload.file, out)
+        return staging.commit()
 
 
 @router.post("/moodle")
@@ -80,13 +135,12 @@ async def upload_moodle_files(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Not a Moodle file: {ref.fileurl}")
 
     directory = target_dir(settings, body.course_id, body.category)
-    result = []
-    for ref in body.files:
-        dest = directory / safe_name(ref.filename)
-        with moodle_errors():
-            size = await moodle.download(settings.moodle_token, ref.fileurl, dest)
-        result.append(saved(settings, dest, size))
-    return result
+    with Staging(settings, directory) as staging:
+        for ref in body.files:
+            temporary = staging.add(directory / safe_name(ref.filename))
+            with moodle_errors():
+                await moodle.download(settings.moodle_token, ref.fileurl, temporary)
+        return staging.commit()
 
 
 class MoodleLinksRequest(BaseModel):
@@ -114,43 +168,45 @@ async def upload_moodle_links(
         if c.type == "url"
     }
     directory = target_dir(settings, body.course_id, "reading")
-    result = []
-    for module in body.modules:
-        if module not in links:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, f"No link {module} in this course")
-        name, url = links[module]
-        if not url.startswith(("http://", "https://")) or is_video(url):
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT, f"{name}: only web pages can be imported"
-            )
-        try:
-            content_type, page = await fetch(web, url)
-        except PageTooLarge as error:
-            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, f"{name}: over 20 MB") from error
-        except httpx2.HTTPError as error:
-            print(f"Link download failed: {url}: {error!r}")
-            raise HTTPException(
-                status.HTTP_502_BAD_GATEWAY, f"{name}: couldn't download {url}"
-            ) from error
+    with Staging(settings, directory) as staging:
+        for module in body.modules:
+            if module not in links:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"No link {module} in this course")
+            name, url = links[module]
+            if not url.startswith(("http://", "https://")) or is_video(url):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    f"{name}: only web pages can be imported",
+                )
+            try:
+                content_type, page = await fetch(web, url)
+            except PageTooLarge as error:
+                raise HTTPException(
+                    status.HTTP_413_CONTENT_TOO_LARGE, f"{name}: over 20 MB"
+                ) from error
+            except httpx2.HTTPError as error:
+                print(f"Link download failed: {url}: {error!r}")
+                raise HTTPException(
+                    status.HTTP_502_BAD_GATEWAY, f"{name}: couldn't download {url}"
+                ) from error
 
-        if "pdf" in content_type or page.startswith(b"%PDF"):
-            dest = directory / f"{safe_name(name)}.pdf"
-            dest.write_bytes(page)
-        elif "html" in content_type or "text/plain" in content_type:
-            text = page.decode(errors="replace")
-            if "html" in content_type:
-                text = html_to_text(text)
-            if not text.strip():
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{name}: no text")
-            dest = directory / f"{safe_name(name)}.md"
-            dest.write_text(f"# {name}\n\nSource: {url}\n\n{text}\n")
-        else:
-            raise HTTPException(
-                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                f"{name}: {content_type or 'unknown type'} can't be imported",
-            )
-        result.append(saved(settings, dest, dest.stat().st_size))
-    return result
+            if "pdf" in content_type or page.startswith(b"%PDF"):
+                staging.add(directory / f"{safe_name(name)}.pdf").write_bytes(page)
+            elif "html" in content_type or "text/plain" in content_type:
+                text = page.decode(errors="replace")
+                if "html" in content_type:
+                    text = html_to_text(text)
+                if not text.strip():
+                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{name}: no text")
+                staging.add(directory / f"{safe_name(name)}.md").write_text(
+                    f"# {name}\n\nSource: {url}\n\n{text}\n"
+                )
+            else:
+                raise HTTPException(
+                    status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                    f"{name}: {content_type or 'unknown type'} can't be imported",
+                )
+        return staging.commit()
 
 
 class CourseFiles(BaseModel):
