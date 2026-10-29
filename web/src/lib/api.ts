@@ -186,7 +186,9 @@ export type Excerpt = {
   printed: string | null;
 };
 
-export type FileView = SavedFile & {
+export type FileView = Omit<SavedFile, "size"> & {
+  /** Null for an excerpt: its pages are cut from the book when opened. */
+  size: number | null;
   excerpt: Excerpt | null;
   /** Uploaded for this lecture only: not a course reading, never matched to other lectures. */
   lecture_only?: boolean;

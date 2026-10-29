@@ -56,6 +56,20 @@ def new_id() -> str:
     return uuid.uuid4().hex[:8]
 
 
+def excerpt_ref(course: str, proposal_id: str) -> str:
+    """How an approved proposal sits in a session's files. No file has this path: the pages
+    are cut from the book whenever the excerpt is viewed."""
+    return f"{course}/excerpts/{proposal_id}"
+
+
+def excerpt_proposal(plan: Plan, path: str) -> Proposal | None:
+    """The proposal an excerpt in the plan's files stands for, with its book pages."""
+    for proposal in plan.proposals:
+        if proposal.excerpt == path and None not in (proposal.pdf_start, proposal.pdf_end):
+            return proposal
+    return None
+
+
 def plan_file(course_dir: Path) -> Path:
     return course_dir / "plan.json"
 
@@ -79,9 +93,9 @@ def materials_fingerprint(plan: Plan) -> str:
 
 
 def session_fingerprint(plan: Plan, session_id: str) -> str:
-    """One lecture's readings: its files and, for excerpts, the book pages they were cut from.
+    """One lecture's readings: its files and, for excerpts, the book pages they cover.
 
-    Pages count because an excerpt cut again from other pages may reuse its file name.
+    Pages count because an excerpt approved again with other pages keeps its reference.
     """
     entry = next(s for s in plan.sessions if s.id == session_id)
     excerpts = {p.excerpt: p for p in plan.proposals if p.excerpt}

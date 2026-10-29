@@ -154,8 +154,3 @@ def subset_pdf(book: Path, pages: list[int]) -> bytes:
     buffer = io.BytesIO()
     writer.write(buffer)
     return buffer.getvalue()
-
-
-def cut_excerpt(book: Path, start: int, end: int, dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(subset_pdf(book, list(range(start, end + 1))))

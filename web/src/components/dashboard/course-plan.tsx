@@ -58,8 +58,8 @@ export function FileRow({
   onRemove: () => void;
 }) {
   const openFile = useFileViewer();
-  const name = fileName(file.path);
   const excerpt = file.excerpt;
+  const name = excerpt ? excerpt.label : fileName(file.path);
   return (
     <Item
       variant="outline"
@@ -86,7 +86,7 @@ export function FileRow({
           variant="ghost"
           size="icon-sm"
           aria-label={`Open ${name}`}
-          onClick={() => openFile({ path: file.path })}
+          onClick={() => openFile({ path: file.path, title: name })}
         >
           <EyeIcon />
         </Button>
