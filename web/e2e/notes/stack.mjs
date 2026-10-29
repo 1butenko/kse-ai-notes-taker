@@ -97,9 +97,6 @@ function pythonEnv(uploads) {
     NOTES_CONCURRENCY: "1",
     QUARTO_CONCURRENCY: "1",
     QUARTO_BIN: path.join(root, "quarto"),
-    LANGFUSE_PUBLIC_KEY: "",
-    LANGFUSE_SECRET_KEY: "",
-    LANGFUSE_BASE_URL: `${url(PORTS.mock)}/unused-langfuse`,
     NOTES_E2E_MOCK_LOG: path.join(root, "logs", "openrouter.jsonl"),
   };
 }

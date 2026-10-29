@@ -2,8 +2,6 @@
 
 import json
 
-from langfuse import get_client
-
 from app.notes import (
     CourseNotation,
     CoursePlan,
@@ -196,78 +194,69 @@ async def plan_course(
     A lecture run passes the course notation sheet: it is binding, so where the plan
     disagrees with it the sheet's meaning is kept.
     """
-    with get_client().start_as_current_observation(
-        name="plan-course",
-        input={"sessions": len(transcript.sessions), "sources": len(inputs.sources)},
-    ) as span:
-        plan: CoursePlan | None = None
-        issues: list[CoverageIssue] = []
-        lecture = LECTURE_RULE if is_lecture(transcript) else ""
-        for round in range(1, rounds + 1):
-            plan = await ask(
-                client,
-                chat(
-                    PLANNER_PROMPT + lecture,
-                    planner_input(transcript, inputs, plan, issues, sheet),
-                ),
-                CoursePlan,
-                "course_plan",
-                step="draft-course-plan",
-                spec=models.planner,
-            )
-            store.write(f"plan/draft-{round}.json", plan)
-
-            review = await ask(
-                client,
-                chat(
-                    COVERAGE_PROMPT + lecture,
-                    "\n".join(
-                        [
-                            "Syllabus sessions:",
-                            syllabus_text(transcript),
-                            "",
-                            "Course materials:",
-                            inventory_text(inputs),
-                            "",
-                            "Plan:",
-                            plan.model_dump_json(indent=1),
-                        ]
-                    ),
-                ),
-                CoverageReview,
-                "coverage_review",
-                step="check-coverage",
-                spec=models.coverage,
-            )
-            for problem in check_references(plan, transcript, inputs):
-                review.issues.append(
-                    CoverageIssue(
-                        kind="ordering" if "prerequisites" in problem else "missing_topic",
-                        severity="blocking",
-                        topics=[],
-                        detail=problem,
-                        fix="Fix the reference.",
-                    )
-                )
-            store.write(f"plan/review-{round}.json", review)
-            blocking = review.blocking()
-            issues = blocking + review.evidence_gaps()
-            store.log("planning", f"Round {round}: {len(blocking)} blocking issues")
-            if not blocking:
-                break
-        else:
-            store.warn(
-                f"Course plan still has {len(blocking)} blocking issues after {rounds} rounds"
-            )
-        for gap in review.evidence_gaps():
-            store.warn(f"Thin evidence for {', '.join(gap.topics) or 'a topic'}: {gap.detail}")
-
-        assert plan is not None
-        if sheet is not None:
-            plan = bind_notation(plan, sheet)
-        validate_topic_ids([topic.id for _, topic in plan.topics()])
-        store.write("plan.json", plan)
-        span.update(
-            output={"topics": [t.title for _, t in plan.topics()], "open_issues": len(blocking)}
+    plan: CoursePlan | None = None
+    issues: list[CoverageIssue] = []
+    lecture = LECTURE_RULE if is_lecture(transcript) else ""
+    for round in range(1, rounds + 1):
+        plan = await ask(
+            client,
+            chat(
+                PLANNER_PROMPT + lecture,
+                planner_input(transcript, inputs, plan, issues, sheet),
+            ),
+            CoursePlan,
+            "course_plan",
+            step="draft-course-plan",
+            spec=models.planner,
         )
-        return plan
+        store.write(f"plan/draft-{round}.json", plan)
+
+        review = await ask(
+            client,
+            chat(
+                COVERAGE_PROMPT + lecture,
+                "\n".join(
+                    [
+                        "Syllabus sessions:",
+                        syllabus_text(transcript),
+                        "",
+                        "Course materials:",
+                        inventory_text(inputs),
+                        "",
+                        "Plan:",
+                        plan.model_dump_json(indent=1),
+                    ]
+                ),
+            ),
+            CoverageReview,
+            "coverage_review",
+            step="check-coverage",
+            spec=models.coverage,
+        )
+        for problem in check_references(plan, transcript, inputs):
+            review.issues.append(
+                CoverageIssue(
+                    kind="ordering" if "prerequisites" in problem else "missing_topic",
+                    severity="blocking",
+                    topics=[],
+                    detail=problem,
+                    fix="Fix the reference.",
+                )
+            )
+        store.write(f"plan/review-{round}.json", review)
+        blocking = review.blocking()
+        issues = blocking + review.evidence_gaps()
+        store.log("planning", f"Round {round}: {len(blocking)} blocking issues")
+        if not blocking:
+            break
+    else:
+        store.warn(f"Course plan still has {len(blocking)} blocking issues after {rounds} rounds")
+    for gap in review.evidence_gaps():
+        store.warn(f"Thin evidence for {', '.join(gap.topics) or 'a topic'}: {gap.detail}")
+
+    assert plan is not None
+    if sheet is not None:
+        plan = bind_notation(plan, sheet)
+    validate_topic_ids([topic.id for _, topic in plan.topics()])
+    store.write("plan.json", plan)
+    return plan

@@ -27,9 +27,6 @@ class WorkerSettings(BaseSettings):
     notes_revision_rounds: int = 2
     quarto_bin: str = "quarto"
     quarto_concurrency: int = 4
-    langfuse_public_key: str | None = None
-    langfuse_secret_key: str | None = None
-    langfuse_base_url: str = "http://localhost:3001"
 
 
 @lru_cache

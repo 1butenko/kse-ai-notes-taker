@@ -2,9 +2,6 @@
 #   web: http://localhost:3000
 #   api: http://localhost:${API_PORT}  (docs at /docs), port set in .env
 #   worker: internal only (http://worker:8000); every model call and PDF render goes through it
-#   langfuse: http://localhost:3001  (traces of every model call)
-include:
-  - langfuse.compose.yaml
 
 services:
   api:
@@ -33,7 +30,7 @@ services:
       timeout: 3s
       retries: 5
 
-  # Owns OpenRouter and Langfuse: the api never calls a model itself.
+  # Owns OpenRouter: the api never calls a model itself.
   worker:
     build:
       context: ./api
@@ -44,8 +41,6 @@ services:
       ENVIRONMENT: local
       WATCHFILES_FORCE_POLLING: "true"
       UPLOADS_DIR: /data/uploads
-      LANGFUSE_BASE_URL: http://langfuse-web:3000
-      OTEL_SERVICE_NAME: kse-ai-notes-taker-worker
     volumes:
       - ./api:/app
       - uploads:/data/uploads

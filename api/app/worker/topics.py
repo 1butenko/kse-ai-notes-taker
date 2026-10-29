@@ -3,8 +3,6 @@
 import json
 from typing import Literal
 
-from langfuse import get_client
-
 from app.note_quality import normalized, substantive
 from app.note_structure import evidence_gap, structure_gaps
 from app.note_verification_identity import (
@@ -405,96 +403,88 @@ async def generate_topic(
     revisions: int,
 ) -> TopicNote:
     folder = f"topics/{topic_filename(topic.id)}"
-    with get_client().start_as_current_observation(
-        name="generate-topic", input={"topic": topic.title, "objectives": topic.objectives}
-    ) as span:
-        evidence, gaps = await select_evidence(
-            client, models.selector, section, topic, inputs, retriever
+    evidence, gaps = await select_evidence(
+        client, models.selector, section, topic, inputs, retriever
+    )
+    store.write(
+        f"{folder}/evidence.json",
+        json.dumps(
+            {"items": [e.model_dump() for e in evidence], "gaps": gaps},
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
+    if not evidence:
+        return TopicNote(
+            topic_id=topic.id,
+            objectives=list(topic.objectives),
+            title=topic.title,
+            status="no_evidence",
+            blocks=[],
+            evidence=[],
+            rounds=0,
+            verifier=None,
+            open_issues=[evidence_gap(gap) for gap in gaps],
         )
+
+    store.log("topics", f"{topic.id}: writing from {len(evidence)} excerpts")
+    draft = await synthesize(client, models.writer, plan, section, topic, evidence, language)
+    escalated = False
+    check: TopicCheck | None = None
+    spec = models.verifier
+    for round in range(1, revisions + 2):
+        store.write(f"{folder}/draft-{round}.json", draft)
+        spec = models.escalation if escalated else models.verifier
+        step = "verify-topic-escalated" if escalated else "verify-topic"
+        store.log("topics", f"{topic.id}: checking, round {round} ({spec.model})")
+        check = await verify(client, spec, plan, section, topic, evidence, draft, step)
+        if check.escalate and not escalated:
+            escalated = True
+            spec = models.escalation
+            store.log("topics", f"{topic.id}: escalated check, round {round} ({spec.model})")
+            check = await verify(
+                client, spec, plan, section, topic, evidence, draft, "verify-topic-escalated"
+            )
         store.write(
-            f"{folder}/evidence.json",
-            json.dumps(
-                {"items": [e.model_dump() for e in evidence], "gaps": gaps},
-                ensure_ascii=False,
-                indent=2,
+            f"{folder}/verification-{round}.json",
+            Verification(
+                round=round,
+                model=spec.model,
+                passed=is_clean(check),
+                issues=check.issues,
+                escalate=check.escalate,
+                escalation_reason=check.escalation_reason,
             ),
         )
-        if not evidence:
-            span.update(level="WARNING", status_message="No evidence")
-            return TopicNote(
-                topic_id=topic.id,
-                objectives=list(topic.objectives),
-                title=topic.title,
-                status="no_evidence",
-                blocks=[],
-                evidence=[],
-                rounds=0,
-                verifier=None,
-                open_issues=[evidence_gap(gap) for gap in gaps],
-            )
-
-        store.log("topics", f"{topic.id}: writing from {len(evidence)} excerpts")
-        draft = await synthesize(client, models.writer, plan, section, topic, evidence, language)
-        escalated = False
-        check: TopicCheck | None = None
-        spec = models.verifier
-        for round in range(1, revisions + 2):
-            store.write(f"{folder}/draft-{round}.json", draft)
-            spec = models.escalation if escalated else models.verifier
-            step = "verify-topic-escalated" if escalated else "verify-topic"
-            store.log("topics", f"{topic.id}: checking, round {round} ({spec.model})")
-            check = await verify(client, spec, plan, section, topic, evidence, draft, step)
-            if check.escalate and not escalated:
-                escalated = True
-                spec = models.escalation
-                store.log("topics", f"{topic.id}: escalated check, round {round} ({spec.model})")
-                check = await verify(
-                    client, spec, plan, section, topic, evidence, draft, "verify-topic-escalated"
-                )
-            store.write(
-                f"{folder}/verification-{round}.json",
-                Verification(
-                    round=round,
-                    model=spec.model,
-                    passed=is_clean(check),
-                    issues=check.issues,
-                    escalate=check.escalate,
-                    escalation_reason=check.escalation_reason,
-                ),
-            )
-            if is_clean(check) or round > revisions:
-                break
-            if round >= 2:
-                escalated = True
-            majors = sum(i.severity == "major" for i in check.issues)
-            store.log("topics", f"{topic.id}: revising {majors} major issues")
-            draft = await synthesize(
-                client,
-                models.writer,
-                plan,
-                section,
-                topic,
-                evidence,
-                language,
-                draft,
-                check.issues,
-            )
-
-        assert check is not None
-        open_issues = [i for i in verification_issues(check) if i.severity == "major"]
-        open_issues += [evidence_gap(gap) for gap in gaps]
-        note = to_note(
+        if is_clean(check) or round > revisions:
+            break
+        if round >= 2:
+            escalated = True
+        majors = sum(i.severity == "major" for i in check.issues)
+        store.log("topics", f"{topic.id}: revising {majors} major issues")
+        draft = await synthesize(
+            client,
+            models.writer,
+            plan,
+            section,
             topic,
-            draft,
             evidence,
-            "verified" if is_clean(check) else "unresolved",
-            round,
-            spec.model,
-            open_issues,
+            language,
+            draft,
+            check.issues,
         )
-        add_structure_issues(note)
-        span.update(
-            output={"status": note.status, "blocks": len(note.blocks), "rounds": round},
-            level="DEFAULT" if is_clean(check) else "WARNING",
-        )
-        return note
+
+    assert check is not None
+    open_issues = [i for i in verification_issues(check) if i.severity == "major"]
+    open_issues += [evidence_gap(gap) for gap in gaps]
+    note = to_note(
+        topic,
+        draft,
+        evidence,
+        "verified" if is_clean(check) else "unresolved",
+        round,
+        spec.model,
+        open_issues,
+    )
+    add_structure_issues(note)
+    return note

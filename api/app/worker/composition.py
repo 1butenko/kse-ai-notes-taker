@@ -3,8 +3,6 @@
 import re
 from collections import Counter
 
-from langfuse import get_client
-
 from app.note_verification_identity import DraftBlock, TopicDraft
 from app.notes import CoursePlan, NotesSection, TopicNote, VerificationIssue
 from app.schemas import Strict
@@ -194,37 +192,33 @@ async def harmonize(
     outline = outline_text(sections)
     applied = 0
     changed: set[str] = set()
-    with get_client().start_as_current_observation(
-        name="compose-notes", input={"topics": len(notes)}
-    ) as span:
-        for start in range(0, len(notes), BATCH_TOPICS):
-            batch = notes[start : start + BATCH_TOPICS]
-            result = await ask(
-                client,
-                chat(
-                    CONSISTENCY_PROMPT,
-                    registry_text(plan),
-                    "Document outline:\n" + outline,
-                    "\n\n".join(topic_blocks(n) for n in batch),
-                ),
-                ConsistencyEdits,
-                "consistency_edits",
-                step="harmonize-notes",
-                spec=models.consistency,
-            )
-            allowed = {b.id for n in batch for b in n.blocks}
-            for edit in result.edits:
-                if (
-                    edit.block in allowed
-                    and edit.content.strip()
-                    and edit.content != blocks[edit.block].content
-                    and preserves_content(blocks[edit.block].content, edit.content)
-                ):
-                    blocks[edit.block].content = edit.content
-                    changed.add(edit.block)
-                    applied += 1
-        for note in notes:
-            if any(b.id in changed for b in note.blocks):
-                await recheck_topic(client, models, plan, note)
-        span.update(output={"edits": applied})
+    for start in range(0, len(notes), BATCH_TOPICS):
+        batch = notes[start : start + BATCH_TOPICS]
+        result = await ask(
+            client,
+            chat(
+                CONSISTENCY_PROMPT,
+                registry_text(plan),
+                "Document outline:\n" + outline,
+                "\n\n".join(topic_blocks(n) for n in batch),
+            ),
+            ConsistencyEdits,
+            "consistency_edits",
+            step="harmonize-notes",
+            spec=models.consistency,
+        )
+        allowed = {b.id for n in batch for b in n.blocks}
+        for edit in result.edits:
+            if (
+                edit.block in allowed
+                and edit.content.strip()
+                and edit.content != blocks[edit.block].content
+                and preserves_content(blocks[edit.block].content, edit.content)
+            ):
+                blocks[edit.block].content = edit.content
+                changed.add(edit.block)
+                applied += 1
+    for note in notes:
+        if any(b.id in changed for b in note.blocks):
+            await recheck_topic(client, models, plan, note)
     return applied

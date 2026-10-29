@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from langfuse import get_client
-
 from app.books import (
     BookIndex,
     entry_end,
@@ -245,13 +243,7 @@ def proposal_summary(proposal: Proposal) -> dict[str, Any]:
 async def map_book(
     client: OpenRouterClient, course_dir: Path, book: Book, title: str, targets: list[Target]
 ) -> list[Proposal]:
-    with get_client().start_as_current_observation(
-        name="map-book",
-        input={"book": title, "readings": [t.reading.raw for t in targets]},
-        metadata={"file": book.path, "outline": book.index.method},
-    ) as span:
-        proposals = await book_proposals(client, course_dir, book, title, targets)
-        span.update(output=[proposal_summary(p) for p in proposals])
+    proposals = await book_proposals(client, course_dir, book, title, targets)
     return proposals
 
 

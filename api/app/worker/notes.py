@@ -41,7 +41,6 @@ from app.worker.references import revision_context
 from app.worker.render import to_quarto, topic_to_quarto
 from app.worker.sources import Retriever, build_inputs, session_materials
 from app.worker.topics import generate_topic
-from app.worker.tracing import course_trace
 
 ACTIVE: set[str] = set()
 COMPLETED_RUN = (
@@ -306,80 +305,76 @@ async def run_notes(
     store.run.status = "running"
     store.run.models = models.summary()
     try:
-        with course_trace(
-            "generate-notes", course, {"run": store.run.id, "sessions": len(plan.sessions)}
-        ) as span:
-            async with opener() as client:
-                store.log("inputs", "Collecting mapped chunks")
-                provenance = store.read("provenance.json", GenerationProvenance)
-                inputs = store.read("inputs.json", Inputs)
-                if (
-                    provenance is None
-                    or inputs is None
-                    or inputs_digest(inputs) != provenance.inputs_sha256
-                ):
-                    raise ValueError(RESUME_PROVENANCE)
-                # Use the context saved alongside these exact source IDs, even if a
-                # caller's in-memory request was modified after admission.
-                plan, transcript = provenance.plan, provenance.transcript
-                for skipped in inputs.skipped:
-                    store.warn(skipped)
-                if not inputs.chunks:
-                    raise ValueError("No session material has extractable text")
-                store.log("inputs", f"{len(inputs.sources)} sources, {len(inputs.chunks)} chunks")
+        async with opener() as client:
+            store.log("inputs", "Collecting mapped chunks")
+            provenance = store.read("provenance.json", GenerationProvenance)
+            inputs = store.read("inputs.json", Inputs)
+            if (
+                provenance is None
+                or inputs is None
+                or inputs_digest(inputs) != provenance.inputs_sha256
+            ):
+                raise ValueError(RESUME_PROVENANCE)
+            # Use the context saved alongside these exact source IDs, even if a
+            # caller's in-memory request was modified after admission.
+            transcript = provenance.transcript
+            for skipped in inputs.skipped:
+                store.warn(skipped)
+            if not inputs.chunks:
+                raise ValueError("No session material has extractable text")
+            store.log("inputs", f"{len(inputs.sources)} sources, {len(inputs.chunks)} chunks")
 
-                sheet = (
-                    store.read(COURSE_NOTATION, CourseNotation) or CourseNotation()
-                    if store.run.session_id
-                    else None
-                )
-                course_plan = store.read("plan.json", CoursePlan)
-                if course_plan is None:
-                    store.log("planning", "Drafting the course plan")
-                    course_plan = await plan_course(
-                        client,
-                        models,
-                        store,
-                        transcript,
-                        inputs,
-                        settings.notes_plan_rounds,
-                        sheet,
-                    )
-                validate_topic_ids([topic.id for _, topic in course_plan.topics()])
-                store.log("planning", f"Plan ready: {len(course_plan.topics())} topics")
-
-                notes = await topic_notes(
-                    client, models, store, course_plan, inputs, transcript.language, settings
-                )
-                failed = [n.topic_id for n in notes.values() if n.status == "failed"]
-                if failed:
-                    store.warn(f"Topics failed and can be retried by resuming: {failed}")
-
-                store.log("composition", "Harmonizing notation and cross-references")
-                sections = collect(course_plan, notes)
-                edits = await harmonize(client, models, course_plan, sections)
-                store.log("composition", f"Applied {edits} consistency edits")
-
-            document = NotesDocument(
-                schema_version=2,
-                language=transcript.language if transcript.language in ("uk", "en") else None,
-                course=course,
-                run=store.run.id,
-                title=course_plan.title,
-                created_at=now(),
-                sections=sections,
-                sources=inputs.sources,
-                notation=course_plan.notation,
-                terminology=course_plan.terminology,
-                models=store.run.models,
+            sheet = (
+                store.read(COURSE_NOTATION, CourseNotation) or CourseNotation()
+                if store.run.session_id
+                else None
             )
-            store.write("notes.json", document)
-            await render_notes_outputs(document, store, settings)
-            if store.run.session_id:
-                extend_course_notation(store, course_plan)
-            store.run.status = "done"
-            store.log("done", "Notes are ready")
-            span.update(output={"topics": len(notes), "failed": failed, "edits": edits})
+            course_plan = store.read("plan.json", CoursePlan)
+            if course_plan is None:
+                store.log("planning", "Drafting the course plan")
+                course_plan = await plan_course(
+                    client,
+                    models,
+                    store,
+                    transcript,
+                    inputs,
+                    settings.notes_plan_rounds,
+                    sheet,
+                )
+            validate_topic_ids([topic.id for _, topic in course_plan.topics()])
+            store.log("planning", f"Plan ready: {len(course_plan.topics())} topics")
+
+            notes = await topic_notes(
+                client, models, store, course_plan, inputs, transcript.language, settings
+            )
+            failed = [n.topic_id for n in notes.values() if n.status == "failed"]
+            if failed:
+                store.warn(f"Topics failed and can be retried by resuming: {failed}")
+
+            store.log("composition", "Harmonizing notation and cross-references")
+            sections = collect(course_plan, notes)
+            edits = await harmonize(client, models, course_plan, sections)
+            store.log("composition", f"Applied {edits} consistency edits")
+
+        document = NotesDocument(
+            schema_version=2,
+            language=transcript.language if transcript.language in ("uk", "en") else None,
+            course=course,
+            run=store.run.id,
+            title=course_plan.title,
+            created_at=now(),
+            sections=sections,
+            sources=inputs.sources,
+            notation=course_plan.notation,
+            terminology=course_plan.terminology,
+            models=store.run.models,
+        )
+        store.write("notes.json", document)
+        await render_notes_outputs(document, store, settings)
+        if store.run.session_id:
+            extend_course_notation(store, course_plan)
+        store.run.status = "done"
+        store.log("done", "Notes are ready")
     except Exception as error:
         print(f"Notes run {course}/{store.run.id} failed: {error!r}")
         store.run.status = "failed"

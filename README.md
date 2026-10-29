@@ -51,7 +51,7 @@ To run without Docker you also need:
 
    The API reads these from the root `.env` (compose passes it to the container). It refuses to start if `MOODLE_URL` or `MOODLE_TOKEN` is missing. Never commit `.env`.
 
-3. Build and start everything (this also adds the Langfuse secrets to `.env`, see [Tracing](#tracing-with-langfuse)):
+3. Build and start everything:
 
    ```bash
    make up
@@ -61,9 +61,8 @@ To run without Docker you also need:
 
    - Web: http://localhost:3000
    - API: http://localhost:8000 (interactive docs at http://localhost:8000/docs)
-   - Langfuse: http://localhost:3001 (log in with `LANGFUSE_INIT_USER_EMAIL` / `LANGFUSE_INIT_USER_PASSWORD` from `.env`)
 
-Both services mount their source code, so code changes reload automatically. Changes to `.env` only reach a container when it is recreated (`docker compose restart` keeps the old values): `docker compose up -d --force-recreate api worker`. `OPENROUTER_*` and `LANGFUSE_*` are read by the worker. After adding npm packages, rebuild the web container with `docker compose up -d --build -V web`.
+Both services mount their source code, so code changes reload automatically. Changes to `.env` only reach a container when it is recreated (`docker compose restart` keeps the old values): `docker compose up -d --force-recreate api worker`. `OPENROUTER_*` is read by the worker. After adding npm packages, rebuild the web container with `docker compose up -d --build -V web`.
 
 ### Running without Docker
 
@@ -258,7 +257,7 @@ notes.qmd, notes.pdf     the Quarto document and its PDF (quarto.log on failure)
 
 `/preview/<course>/<run>` in the web app shows the full notes PDF with every topic listed next to it; `/preview/<course>/<run>/<topic>` shows one topic's PDF. The page has no dashboard around it, so the link can be shared as is (**Copy link**), and it carries the notes or topic title for link previews. The **Lecture notes** card links to it (**Preview page**) and opens each topic's PDF in the viewer (**Open**).
 
-Langfuse trace: `generate-notes` → `plan-course` (`draft-course-plan`, `check-coverage`), one `generate-topic` per topic (`select-evidence`, `synthesize-topic`, `verify-topic`, `verify-topic-escalated`, `revise-topic`), `compose-notes` (`harmonize-notes`). Code: `api/app/notes.py` (artifacts) and `api/app/worker/` (`sources.py`, `planning.py`, `topics.py`, `composition.py`, `render.py`, `notes.py`, `models.py`).
+Code: `api/app/notes.py` (artifacts) and `api/app/worker/` (`sources.py`, `planning.py`, `topics.py`, `composition.py`, `render.py`, `notes.py`, `models.py`).
 
 The worker image (`worker-dev` / `worker-prod` targets) adds Quarto, whose bundled Typst makes the PDF, so no LaTeX is needed. Its build renders a sample document, so a broken Quarto or font setup fails the build instead of the first run. Without Quarto (e.g. running the worker outside Docker) the run still finishes with `notes.qmd` and a warning instead of a PDF.
 
@@ -379,7 +378,7 @@ Setup, the environment variables (`NOTES_E2E_QUARTO_BIN`, `TYPST_FONT_PATHS`, `N
 
 ## Worker
 
-The API never calls a model. `POST /syllabus/transcribe` and `POST /plans/{course}/map` validate the request, then forward it to the `worker` container (`api/app/worker/`, same image as the API, run with `uvicorn app.worker.main:app`), which owns OpenRouter and Langfuse and is not published to the host. The API keeps the plan, transcripts and Moodle; both containers share the `uploads` volume, so the worker reads syllabi and books and caches book indexes there.
+The API never calls a model. `POST /syllabus/transcribe` and `POST /plans/{course}/map` validate the request, then forward it to the `worker` container (`api/app/worker/`, same image as the API, run with `uvicorn app.worker.main:app`), which owns OpenRouter and is not published to the host. The API keeps the plan, transcripts and Moodle; both containers share the `uploads` volume, so the worker reads syllabi and books and caches book indexes there.
 
 | Worker endpoint | Called by | Does |
 | --- | --- | --- |
@@ -392,28 +391,7 @@ The API never calls a model. `POST /syllabus/transcribe` and `POST /plans/{cours
 | `POST /notes/verify` | `POST .../topics/{topic}/verify` | Re-checks one saved topic against its sources (`202`) |
 | `GET /health` | compose healthcheck | |
 
-The request and response shapes are in `api/app/worker_contract.py`; the API side is `WorkerClient` in `api/app/worker_client.py` (`WORKER_URL`, default `http://localhost:8001`). Worker errors pass through with their status (`422`, `502`, `503`, `504`); an unreachable worker is `502`, a slow one `504`. `OPENROUTER_*` and `LANGFUSE_*` are read by the worker only. Tests run the worker in-process over ASGI.
-
-## Tracing with Langfuse
-
-Every model call is traced to a self-hosted [Langfuse](https://langfuse.com) v4 that runs in Docker next to the app (`langfuse.compose.yaml`, included by `compose.yaml`: web, worker, Postgres, ClickHouse, Redis, MinIO). `make langfuse-env` adds any missing `LANGFUSE_*` keys and secrets to `.env` with random values; on first start Langfuse creates the `KSE` organization, the `kse-ai-notes-taker` project with those API keys, and the admin user. Tracing is off when `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` are empty, and always off in tests.
-
-Each request that calls the model is one trace; a course's traces share the session `course-<id>`:
-
-```
-transcribe-syllabus          span: syllabus in, counts of sessions/materials/readings out
-└─ extract-reading-plan      generation
-map-materials                span: materials and book files in, book matches and proposals out
-├─ match-books               generation
-└─ map-book (one per book)   span: citations in, page proposals out
-   ├─ read-book-toc          generation, only for PDFs without bookmarks
-   ├─ locate-reading-pages   generation
-   └─ read-page-offset       generation, only when printed pages need an offset
-```
-
-Generations record the model OpenRouter served, the full prompt (PDFs are attached as viewable files), token usage and OpenRouter's reported cost, and are marked `ERROR` when the call fails or the answer doesn't validate. Code: `api/app/worker/tracing.py` and `ask()` in `api/app/worker/llm.py`. Keep observation names stable: Langfuse dashboards and evaluators filter by them.
-
-The browser and the worker container both reach MinIO as `http://minio.localhost:9090` (`*.localhost` resolves to your machine), so uploaded PDFs open in the Langfuse UI. The Langfuse Agent Skill for Claude Code is listed in `skills-lock.json`; restore it with `npx skills experimental_install`.
+The request and response shapes are in `api/app/worker_contract.py`; the API side is `WorkerClient` in `api/app/worker_client.py` (`WORKER_URL`, default `http://localhost:8001`). Worker errors pass through with their status (`422`, `502`, `503`, `504`); an unreachable worker is `502`, a slow one `504`. `OPENROUTER_*` is read by the worker only. Tests run the worker in-process over ASGI.
 
 ## Development
 
@@ -423,8 +401,7 @@ make test   # API tests (use test values from api/tests/conftest.py, not your .e
 # cd api && LIVE=1 uv run pytest tests/test_syllabus_live.py -s
 make lint   # ruff + eslint
 make logs   # follow container logs
-make down   # stop everything (Langfuse data stays in its kse-ai-notes-taker_langfuse_* volumes)
-make langfuse  # open the Langfuse UI
+make down   # stop everything
 ```
 
 ## Demo deployment (free)

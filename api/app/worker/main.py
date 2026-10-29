@@ -18,12 +18,11 @@ from app.notes_revisions import (
 )
 from app.notes_suggestions import NoteSuggestion, VerificationJob
 from app.plan import UnknownSession
-from app.storage import sha256
 from app.syllabus import SyllabusExtraction
 from app.worker import lectures, note_suggestions, revisions, vision
 from app.worker.config import WorkerSettings, get_worker_settings
 from app.worker.llm import ask
-from app.worker.mapping import proposal_summary, run_mapping
+from app.worker.mapping import run_mapping
 from app.worker.models import NotesModels
 from app.worker.notes import ACTIVE, fail_interrupted, open_run
 from app.worker.openrouter import (
@@ -32,7 +31,6 @@ from app.worker.openrouter import (
     get_openrouter_client,
     get_openrouter_opener,
 )
-from app.worker.tracing import course_trace, init_langfuse
 from app.worker.transcribe import EmptyDocument, build_messages, drop_bad_refs
 from app.worker_contract import (
     ApprovalRequest,
@@ -58,7 +56,6 @@ from app.worker_contract import (
 COURSE = re.compile(r"^(local|\d+)$")
 
 settings = get_worker_settings()
-langfuse = init_langfuse(settings)
 
 
 @asynccontextmanager
@@ -78,7 +75,6 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             await asyncio.to_thread(note_suggestions.fail_interrupted_jobs, settings.uploads_dir)
             yield
         finally:
-            langfuse.shutdown()
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
@@ -110,28 +106,10 @@ async def transcribe(
     except EmptyDocument as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
 
-    source_path = file.relative_to(settings.uploads_dir.resolve()).as_posix()
-    with course_trace(
-        "transcribe-syllabus", source_path.split("/")[0], {"syllabus": file.name}
-    ) as span:
-        span.update(metadata={"path": source_path, "sha256": sha256(file), "forced": body.force})
-        extraction = await ask(
-            client, messages, SyllabusExtraction, "transcript", plugins, step="extract-reading-plan"
-        )
-        dropped = drop_bad_refs(extraction)
-        span.update(
-            output={
-                "language": extraction.language,
-                "learning_materials": len(extraction.learning_materials),
-                "sessions": len(extraction.sessions),
-                "readings": sum(
-                    len(s.required_readings) + len(s.optional_readings) for s in extraction.sessions
-                ),
-                "notes": extraction.notes,
-            },
-        )
-        if dropped:
-            span.update(level="WARNING", status_message=f"Dropped {dropped} bad material_ref")
+    extraction = await ask(
+        client, messages, SyllabusExtraction, "transcript", plugins, step="extract-reading-plan"
+    )
+    drop_bad_refs(extraction)
 
     return TranscribeResponse(extraction=extraction, model=client.model)
 
@@ -148,20 +126,9 @@ async def map_materials(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Mapping is not configured")
 
     directory = settings.uploads_dir / body.course
-    with course_trace(
-        "map-materials",
-        body.course,
-        {"materials": [m.raw for m in body.transcript.learning_materials], "books": body.books},
-    ) as span:
-        matches, proposals = await run_mapping(
-            client, settings.uploads_dir, directory, body.plan, body.transcript, body.books
-        )
-        span.update(
-            output={
-                "books": [m.model_dump(include={"raw", "file"}) for m in matches if m.file],
-                "proposals": [proposal_summary(p) for p in proposals],
-            }
-        )
+    matches, proposals = await run_mapping(
+        client, settings.uploads_dir, directory, body.plan, body.transcript, body.books
+    )
     return MapResponse(matches=matches, proposals=proposals)
 
 
