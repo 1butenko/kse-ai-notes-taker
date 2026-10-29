@@ -101,7 +101,9 @@ type Opener = Callable[[], AbstractAsyncContextManager[OpenRouterClient]]
 def openrouter_opener(settings: WorkerSettings, timeout: float) -> Opener:
     @asynccontextmanager
     async def open_client() -> AsyncIterator[OpenRouterClient]:
-        async with httpx2.AsyncClient(timeout=timeout) as http:
+        # A model may take minutes to answer, but a connection that doesn't open in
+        # seconds won't: fail fast instead of holding a request for the whole timeout.
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(timeout, connect=15)) as http:
             yield OpenRouterClient(
                 settings.openrouter_url,
                 settings.openrouter_api_key or "",

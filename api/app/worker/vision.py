@@ -99,11 +99,13 @@ async def transcribe_pages(
             pages_to_read, course_dir, book, digest, spans, set(cached.pages)
         )
         gate = asyncio.Semaphore(CONCURRENCY)
+        saving = asyncio.Lock()
+        target = transcript_cache(course_dir, digest)
         failed: list[int] = []
 
         async def read(page: int) -> None:
-            pdf = await asyncio.to_thread(subset_pdf, book, [page])
             async with gate:
+                pdf = await asyncio.to_thread(subset_pdf, book, [page])
                 try:
                     result = await ask(
                         client,
@@ -122,12 +124,12 @@ async def transcribe_pages(
                     print(f"Can't transcribe {book.name} p. {page}: {error.detail}")
                     failed.append(page)
                     return
-            cached.pages[page] = result.markdown
+            # Saved page by page: a job that stops keeps every page it paid for.
+            async with saving:
+                cached.pages[page] = result.markdown
+                await asyncio.to_thread(atomic_json, target, cached.model_dump(mode="json"))
 
         await asyncio.gather(*(read(page) for page in todo))
-        if len(todo) > len(failed):
-            target = transcript_cache(course_dir, digest)
-            await asyncio.to_thread(atomic_json, target, cached.model_dump(mode="json"))
     return len(todo) - len(failed), sorted(failed)
 
 
