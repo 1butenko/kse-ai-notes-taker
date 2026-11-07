@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { CircleAlertIcon, SparklesIcon } from "lucide-react";
 
-import { useMoodleCourse } from "@/components/dashboard/moodle-course-context";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -13,12 +12,9 @@ import {
   ApiError,
   courseKey,
   getCourse,
-  getCourseContents,
   saveCourseInfo,
-  uploadMoodleFiles,
-  uploadMoodleLinks,
+  startAgentSync,
 } from "@/lib/api";
-import { findMaterialFiles, findSyllabusFiles } from "@/lib/moodle-files";
 
 /** The Moodle course ID from a course link (`.../course/view.php?id=4510`) or a bare number. */
 export function parseMoodleCourseId(input: string): number | null {
@@ -39,12 +35,15 @@ type AutonomousCourseFormProps = {
   cancel: React.ReactNode;
 };
 
+/**
+ * Creates the course from its Moodle link and hands it to the AI Note Taker, which gathers the
+ * syllabus and readings, reads the lectures and attaches the readings on the course page.
+ */
 export function AutonomousCourseForm({
   onCreated,
   onBusyChange,
   cancel,
 }: AutonomousCourseFormProps) {
-  const { setImported } = useMoodleCourse();
   const [link, setLink] = useState("");
   const [step, setStep] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,58 +57,16 @@ export function AutonomousCourseForm({
     if (courseId === null) return;
     setError(null);
     onBusyChange(true);
-    setStep("Reading the course from Moodle…");
+    setStep("Finding the course…");
     try {
-      const [course, sections] = await Promise.all([
-        getCourse(courseId),
-        getCourseContents(courseId),
-      ]);
-
-      const syllabus = findSyllabusFiles(sections)[0];
-      if (!syllabus) {
-        setError(
-          "No syllabus file found in this Moodle course. Switch to Manual to upload one yourself.",
-        );
-        return;
-      }
-
+      const course = await getCourse(courseId);
       setStep("Creating the course…");
       const info = await saveCourseInfo(
         courseKey(courseId),
         course.fullname.trim(),
       );
-
-      setStep("Importing the syllabus…");
-      await uploadMoodleFiles(
-        "syllabus",
-        [{ fileurl: syllabus.fileurl, filename: syllabus.saveAs }],
-        courseId,
-      );
-
-      const readings = findMaterialFiles(sections).flatMap(
-        (section) => section.files,
-      );
-      const files = readings.filter((f) => f.kind === "file");
-      const links = readings.filter((f) => f.kind === "link");
-      if (readings.length > 0) {
-        setStep(
-          `Importing ${readings.length} reading${readings.length === 1 ? "" : "s"}…`,
-        );
-      }
-      if (files.length > 0) {
-        await uploadMoodleFiles(
-          "reading",
-          files.map((f) => ({ fileurl: f.fileurl, filename: f.saveAs })),
-          courseId,
-        );
-      }
-      if (links.length > 0)
-        await uploadMoodleLinks(
-          courseId,
-          links.map((f) => f.moduleId),
-        );
-
-      setImported({ course, sections });
+      setStep("Starting the AI Note Taker…");
+      await startAgentSync(info.course);
       onCreated(info.course, info.name);
     } catch (err) {
       setError(
@@ -138,8 +95,9 @@ export function AutonomousCourseForm({
           autoFocus
         />
         <FieldDescription>
-          That&apos;s all we need. The name, syllabus and readings are imported
-          from Moodle for you.
+          That&apos;s all we need. The AI Note Taker gathers the syllabus and
+          readings from Moodle, reads the lectures and attaches each one&apos;s
+          readings.
         </FieldDescription>
       </Field>
 

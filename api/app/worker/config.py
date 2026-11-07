@@ -25,6 +25,11 @@ class WorkerSettings(BaseSettings):
     notes_concurrency: int = 4
     notes_plan_rounds: int = 3
     notes_revision_rounds: int = 2
+    # The AI Note Taker agent (app/note_taker); its own variable so it never changes the
+    # transcription model above.
+    note_taker_model: str = "openai/gpt-5.5"
+    # The app's API, which the AI Note Taker uses to fill the course (files, lectures, readings).
+    api_url: str = "http://localhost:8000"
     quarto_bin: str = "quarto"
     quarto_concurrency: int = 4
 

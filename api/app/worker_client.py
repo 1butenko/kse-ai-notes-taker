@@ -19,6 +19,8 @@ from app.worker_contract import (
     MapResponse,
     NotesRequest,
     NotesResponse,
+    NoteTakerRequest,
+    NoteTakerResponse,
     RenderRequest,
     RestoreRequest,
     ReviseRequest,
@@ -79,6 +81,9 @@ class WorkerClient:
 
     async def transcribe_books(self, request: BooksRequest) -> BooksResponse:
         return await self.call("/books/transcribe", request, BooksResponse)
+
+    async def run_note_taker(self, request: NoteTakerRequest) -> NoteTakerResponse:
+        return await self.call("/note-taker/runs", request, NoteTakerResponse)
 
     async def call[T: BaseModel](self, path: str, request: BaseModel, response: type[T]) -> T:
         try:

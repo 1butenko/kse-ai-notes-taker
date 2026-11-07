@@ -42,6 +42,8 @@ from app.worker_contract import (
     MapResponse,
     NotesRequest,
     NotesResponse,
+    NoteTakerRequest,
+    NoteTakerResponse,
     RenderRequest,
     RestoreRequest,
     ReviseRequest,
@@ -73,9 +75,21 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             await asyncio.to_thread(lectures.drop_queues, settings.uploads_dir)
             await asyncio.to_thread(revisions.fail_interrupted_renders, settings.uploads_dir)
             await asyncio.to_thread(note_suggestions.fail_interrupted_jobs, settings.uploads_dir)
+            await asyncio.to_thread(fail_interrupted_note_taker_runs)
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def fail_interrupted_note_taker_runs() -> None:
+    """Without its database (not configured, or AWS logged out) the worker still starts."""
+    try:
+        from app.note_taker import sync
+
+        if count := sync.fail_interrupted_runs():
+            print(f"Marked {count} interrupted AI Note Taker run(s) as failed")
+    except Exception as error:
+        print(f"Could not check for interrupted AI Note Taker runs: {error!r}")
 
 
 app = FastAPI(title="kse-ai-notes-taker-worker", lifespan=lifespan)
@@ -148,6 +162,28 @@ async def transcribe_books(
         return BooksResponse(started=False)
     background.add_task(vision.keep_transcribing, opener, spec, settings.uploads_dir, body.course)
     return BooksResponse(started=True)
+
+
+@app.post("/note-taker/runs", status_code=status.HTTP_202_ACCEPTED)
+async def run_note_taker(
+    body: NoteTakerRequest,
+    background: BackgroundTasks,
+    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
+) -> NoteTakerResponse:
+    """Run the AI Note Taker for a course in the background. The run's outcome is written to its
+    `sync_runs` row (see `app.note_taker.sync`), which the API reads."""
+    if not settings.openrouter_api_key:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "OPENROUTER_API_KEY is not set on the worker"
+        )
+    # Imported here so the worker starts without building the agent's dependencies.
+    from app.note_taker import sync
+
+    # A sync function: Starlette runs it in a thread, off the event loop.
+    background.add_task(
+        sync.execute_run, body.run_id, body.course_id, body.moodle_course_id, body.focus
+    )
+    return NoteTakerResponse(started=True)
 
 
 @app.post("/notes", status_code=status.HTTP_202_ACCEPTED)

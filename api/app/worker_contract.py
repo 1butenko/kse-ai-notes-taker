@@ -1,5 +1,7 @@
 """What the API and the worker send each other."""
 
+from uuid import UUID
+
 from pydantic import BaseModel, Field
 
 from app.notes import LectureQueue, NotesRun, QueueItem, RenderFormat
@@ -114,4 +116,17 @@ class BooksRequest(BaseModel):
 class BooksResponse(BaseModel):
     """Whether the pages of the course's approved excerpts are being transcribed."""
 
+    started: bool
+
+
+class NoteTakerRequest(BaseModel):
+    """One AI Note Taker run, already recorded in `sync_runs` by the API."""
+
+    run_id: UUID
+    course_id: UUID
+    moodle_course_id: int
+    focus: str | None = None
+
+
+class NoteTakerResponse(BaseModel):
     started: bool

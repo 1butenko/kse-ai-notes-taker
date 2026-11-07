@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   BookOpenTextIcon,
@@ -17,6 +17,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { AgentConsole } from "@/components/course/agent-console";
+import { AgentMaterials, useAgentCourse } from "@/components/course/agent-materials";
 import { LectureList } from "@/components/course/lecture-list";
 import { MaterialsPanel } from "@/components/course/materials-panel";
 import { ReadingsReview } from "@/components/course/readings-review";
@@ -57,6 +59,7 @@ import {
   listCourseFiles,
   previewPath,
   saveCourseInfo,
+  startAgentSync,
   setPrimarySyllabus,
   transcribeSyllabus,
   uploadFiles,
@@ -242,6 +245,10 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   const [notationOpen, setNotationOpen] = useState(false);
   const [notation, setNotation] = useState<CourseNotation | null>(null);
   const notes = useCourseNotes(course);
+  const agent = useAgentCourse(course, courseId !== undefined);
+  // A course the AI Note Taker sets up: it reads the syllabus and prepares the lectures.
+  const agentRun = agent.data?.latest_run ?? undefined;
+  const agentPrepared = agentRun?.status === "succeeded";
 
   const load = useCallback(
     () =>
@@ -280,18 +287,46 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
 
   const readingsApproved = Boolean(info?.readings_approved_at);
   const phase =
-    files === null || info === undefined
+    files === null || info === undefined || (agent.data === undefined && !agent.loadError)
       ? "loading"
       : files.syllabus.length === 0
         ? "syllabus"
         : !plan?.transcript
           ? "reading"
           : // Approved readings imply approved lectures, also for a syllabus without a reading list.
-            forceReview || !(plan.mapped || approvedHere || readingsApproved)
+            // The AI Note Taker prepared the lectures itself: nothing to check.
+            forceReview || !(plan.mapped || approvedHere || readingsApproved || agentPrepared)
             ? "review"
             : showReadings || !readingsApproved
               ? "readings"
               : "ready";
+  // While the AI Note Taker sets the course up (or could not finish), its console replaces
+  // the setup screens.
+  const agentSetup =
+    agentRun !== undefined &&
+    phase !== "loading" &&
+    phase !== "ready" &&
+    (agent.working || phase === "syllabus" || phase === "reading");
+
+  // Its work lands in the course's files and plan: load them once it stops.
+  const wasWorking = useRef(agent.working);
+  useEffect(() => {
+    if (wasWorking.current && !agent.working) load();
+    wasWorking.current = agent.working;
+  }, [agent.working, load]);
+
+  const [retrying, setRetrying] = useState(false);
+  const retryAgent = async () => {
+    setRetrying(true);
+    try {
+      await startAgentSync(course);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setRetrying(false);
+      agent.refresh();
+    }
+  };
 
   const read = async (path: string, force: boolean) => {
     setReading(true);
@@ -306,7 +341,8 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   };
 
   // The syllabus is read as soon as it is stored; no button to press.
-  const autoRead = phase === "reading" && !readError ? syllabusPath : null;
+  // Not for an AI Note Taker course: the agent reads its syllabus.
+  const autoRead = phase === "reading" && !readError && !agentRun ? syllabusPath : null;
   useEffect(() => {
     if (!autoRead) return;
     let cancelled = false;
@@ -423,7 +459,9 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
         <div className="flex min-w-0 flex-col gap-1">
           <h1 className="text-3xl">{name}</h1>
           <p className="text-muted-foreground">
-            {phase === "ready"
+            {agentSetup
+              ? "Setting up with the AI Note Taker"
+              : phase === "ready"
               ? plural(lectures, "lecture", "lectures")
               : phase === "review"
                 ? "Setting up: check the lectures"
@@ -514,14 +552,25 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
       )}
 
       {phase === "loading" && !loadError && (
-        <div className="flex flex-col gap-3">
+        // Shown only when loading takes a moment, so a fresh course goes straight to the
+        // agent's console without a flash of placeholders.
+        <div className="flex flex-col gap-3 animate-in fade-in duration-500 delay-300 fill-mode-backwards">
           {Array.from({ length: 6 }, (_, index) => (
             <Skeleton key={index} className="h-14 w-full" />
           ))}
         </div>
       )}
 
-      {phase === "syllabus" && (
+      {agentSetup && agentRun && (
+        <AgentConsole
+          run={agentRun}
+          onRetry={retryAgent}
+          retrying={retrying}
+          incomplete={phase === "syllabus" || phase === "reading"}
+        />
+      )}
+
+      {!agentSetup && phase === "syllabus" && (
         <section className="flex max-w-xl flex-col gap-4">
           <p className="text-muted-foreground">
             This course has no syllabus yet. Add it, and it is read into lectures.
@@ -541,7 +590,8 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
         </section>
       )}
 
-      {(phase === "reading" || (phase === "review" && (reading || readError))) &&
+      {!agentSetup &&
+        (phase === "reading" || (phase === "review" && (reading || readError))) &&
         (readError ? (
           <Alert variant="destructive">
             <CircleAlertIcon />
@@ -568,7 +618,12 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
           />
         ))}
 
-      {phase === "review" && !reading && !readError && plan?.transcript && syllabusPath && (
+      {!agentSetup &&
+        phase === "review" &&
+        !reading &&
+        !readError &&
+        plan?.transcript &&
+        syllabusPath && (
         <SetupReview
           // A fresh transcript starts a fresh review.
           key={plan.transcript.created_at}
@@ -584,7 +639,7 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
         />
       )}
 
-      {phase === "readings" && plan && files && (
+      {!agentSetup && phase === "readings" && plan && files && (
         <ReadingsReview
           plan={plan}
           courseId={courseId}
@@ -626,12 +681,17 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
             <MaterialsPanel
               plan={plan}
               courseId={courseId}
+              syllabusFiles={files.syllabus}
               readingFiles={files.reading}
               onPlan={setPlan}
               onUploaded={reloadFiles}
             />
           </div>
         </>
+      )}
+
+      {courseId !== undefined && phase !== "loading" && !agentSetup && (
+        <AgentMaterials course={course} agent={agent} />
       )}
 
       <Dialog

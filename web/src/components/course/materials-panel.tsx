@@ -31,6 +31,8 @@ import { formatSize } from "@/lib/format";
 type MaterialsPanelProps = {
   plan: PlanView;
   courseId?: number;
+  /** The syllabus files, shown above the readings. */
+  syllabusFiles: SavedFile[];
   readingFiles: SavedFile[];
   onPlan: (plan: PlanView) => void;
   onUploaded: () => void;
@@ -47,14 +49,66 @@ function lecturesUsing(plan: PlanView, path: string) {
   ).length;
 }
 
+function PanelTitle({ id, title, count }: { id: string; title: string; count: number }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <h2 id={id} className="text-base">
+        {title}
+      </h2>
+      <span className="text-sm text-muted-foreground tabular-nums">{count}</span>
+    </div>
+  );
+}
+
+/** Files that open in the viewer: PDFs and Markdown readings inline, others to download. */
+function FileList({
+  labelledBy,
+  files,
+  detail,
+}: {
+  labelledBy: string;
+  files: SavedFile[];
+  detail: (file: SavedFile) => string;
+}) {
+  const openFile = useFileViewer();
+  return (
+    <ul aria-labelledby={labelledBy} className="flex flex-col">
+      {files.map((file) => {
+        const name = fileName(file.path);
+        return (
+          <li key={file.path} className="border-b border-border last:border-b-0">
+            <button
+              type="button"
+              onClick={() => openFile({ path: file.path })}
+              className="group flex w-full items-start gap-2 py-2.5 text-left"
+            >
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span
+                  className="line-clamp-2 text-sm font-medium break-words group-hover:underline"
+                  title={name}
+                >
+                  {name}
+                </span>
+                <span className="text-xs text-muted-foreground">{detail(file)}</span>
+              </span>
+              <EyeIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="sr-only">Open {name}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export function MaterialsPanel({
   plan,
   courseId,
+  syllabusFiles,
   readingFiles,
   onPlan,
   onUploaded,
 }: MaterialsPanelProps) {
-  const openFile = useFileViewer();
   const inputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<"idle" | "uploading" | "matching">("idle");
   const [booksOpen, setBooksOpen] = useState(false);
@@ -90,43 +144,33 @@ export function MaterialsPanel({
 
   return (
     <aside
-      aria-labelledby="materials-title"
+      aria-label="Course materials"
       className="flex min-w-0 flex-col gap-4 rounded-xl bg-muted p-4 lg:sticky lg:top-4"
     >
-      <div className="flex items-center justify-between gap-2">
-        <h2 id="materials-title" className="text-base">
-          Readings
-        </h2>
-        <span className="text-sm text-muted-foreground tabular-nums">{readingFiles.length}</span>
-      </div>
+      {syllabusFiles.length > 0 && (
+        <div className="flex flex-col gap-4 border-b pb-4">
+          <PanelTitle id="syllabus-title" title="Syllabus" count={syllabusFiles.length} />
+          <FileList
+            labelledBy="syllabus-title"
+            files={syllabusFiles}
+            detail={(file) =>
+              `${formatSize(file.size)}${file.path === plan.primary ? ", read into the lectures" : ""}`
+            }
+          />
+        </div>
+      )}
+
+      <PanelTitle id="materials-title" title="Readings" count={readingFiles.length} />
 
       {readingFiles.length > 0 ? (
-        <ul className="flex flex-col">
-          {readingFiles.map((file) => {
+        <FileList
+          labelledBy="materials-title"
+          files={readingFiles}
+          detail={(file) => {
             const uses = lecturesUsing(plan, file.path);
-            const name = fileName(file.path);
-            return (
-              <li key={file.path} className="border-b border-border last:border-b-0">
-                <button
-                  type="button"
-                  onClick={() => openFile({ path: file.path })}
-                  className="group flex w-full items-start gap-2 py-2.5 text-left"
-                >
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="line-clamp-2 text-sm font-medium break-words group-hover:underline" title={name}>
-                      {name}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatSize(file.size)}, {uses === 0 ? "not used yet" : `${uses} ${uses === 1 ? "lecture" : "lectures"}`}
-                    </span>
-                  </span>
-                  <EyeIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  <span className="sr-only">Open {name}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+            return `${formatSize(file.size)}, ${uses === 0 ? "not used yet" : `${uses} ${uses === 1 ? "lecture" : "lectures"}`}`;
+          }}
+        />
       ) : (
         <p className="text-sm text-muted-foreground">
           No readings yet. Add the books or papers the syllabus cites.

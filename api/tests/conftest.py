@@ -11,6 +11,7 @@ import httpx2  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app import prompts  # noqa: E402
 from app.config import Settings, get_settings  # noqa: E402
 from app.main import app  # noqa: E402
 from app.moodle import MoodleClient, get_moodle_client  # noqa: E402
@@ -40,6 +41,12 @@ def in_process_worker() -> Iterator[None]:
     yield
     app.dependency_overrides.pop(get_worker_client, None)
     worker_app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def no_langfuse(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Load prompts from the local Markdown files, even when Langfuse keys are in .env."""
+    monkeypatch.setattr(prompts, "langfuse_client", lambda: None)
 
 
 @pytest.fixture

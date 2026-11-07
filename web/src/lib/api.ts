@@ -881,3 +881,73 @@ export async function fetchNotesRun(course: string, run: string): Promise<NotesR
   if (!res.ok) throw new ApiError(`Request failed (${res.status})`, res.status);
   return res.json();
 }
+
+// The AI Note Taker: Moodle materials fetched by the agent into S3 (`/agent/courses`).
+
+export type AgentMaterial = {
+  id: string;
+  name: string;
+  mimetype: string;
+  size: number;
+  reason: string;
+  /** A temporary S3 download link. */
+  url: string;
+};
+
+export type AgentTopic = {
+  section: number;
+  name: string;
+  summary: string;
+  materials: AgentMaterial[];
+};
+
+export type AgentTodo = {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+};
+
+export type AgentAction = {
+  text: string;
+  status: "running" | "done" | "failed";
+  detail: string;
+};
+
+export type AgentRun = {
+  id: string;
+  status: "running" | "succeeded" | "failed";
+  focus: string | null;
+  /** What the agent is doing right now. */
+  step: string | null;
+  /** The agent's todo list, as it keeps it. */
+  todos: AgentTodo[];
+  /** Its latest actions, oldest first. */
+  actions: AgentAction[];
+  report: string | null;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export type AgentCourse = {
+  id: string;
+  course_key: string;
+  title: string;
+  moodle_course_id: number;
+  materials: number;
+  topics: AgentTopic[];
+  latest_run: AgentRun | null;
+};
+
+/** The course's fetched materials and latest run; a 404 means the agent never ran for it. */
+export function getAgentCourse(course: string): Promise<AgentCourse> {
+  return request(`/agent/courses/${course}`, { cache: "no-store" });
+}
+
+/** Starts the AI Note Taker for a course created from Moodle; poll `getAgentCourse`. */
+export function startAgentSync(course: string, focus?: string): Promise<AgentRun> {
+  return request(`/agent/courses/${course}/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ focus: focus?.trim() || null }),
+  });
+}

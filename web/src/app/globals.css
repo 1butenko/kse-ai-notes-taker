@@ -119,3 +119,70 @@
     @apply font-sans;
   }
 }
+
+/* A Markdown reading in the file viewer: saved web pages and lecture slides. */
+@layer components {
+  .markdown-preview {
+    @apply text-sm leading-relaxed;
+  }
+  .markdown-preview > * + * {
+    @apply mt-3;
+  }
+  .markdown-preview h1 {
+    @apply font-heading text-2xl;
+  }
+  .markdown-preview h2 {
+    @apply mt-8 border-t pt-6 font-heading text-lg;
+  }
+  .markdown-preview h3,
+  .markdown-preview h4 {
+    @apply mt-5 font-medium;
+  }
+  .markdown-preview ul {
+    @apply list-disc pl-5;
+  }
+  .markdown-preview ol {
+    @apply list-decimal pl-5;
+  }
+  .markdown-preview li + li {
+    @apply mt-1;
+  }
+  .markdown-preview a {
+    @apply underline underline-offset-2;
+  }
+  .markdown-preview img {
+    @apply mx-auto max-h-[28rem] max-w-full rounded-md bg-white;
+  }
+  .markdown-preview table {
+    @apply block overflow-x-auto text-left tabular-nums;
+  }
+  .markdown-preview th,
+  .markdown-preview td {
+    @apply border px-2 py-1;
+  }
+  .markdown-preview pre {
+    @apply overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs;
+  }
+  .markdown-preview :not(pre) > code {
+    @apply rounded bg-muted px-1 font-mono text-xs;
+  }
+  .markdown-preview blockquote {
+    @apply border-l-2 pl-3 text-muted-foreground;
+  }
+  .markdown-preview .katex-display {
+    @apply overflow-x-auto py-1;
+  }
+}
+
+/* The AI Note Taker console: an indeterminate bar for downloads and other waits. */
+@theme {
+  --animate-indeterminate: indeterminate 1.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  @keyframes indeterminate {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(250%);
+    }
+  }
+}

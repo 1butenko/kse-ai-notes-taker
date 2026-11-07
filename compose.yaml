@@ -21,6 +21,9 @@ services:
     volumes:
       - ./api:/app
       - uploads:/data/uploads
+      # AWS credentials (`aws login`) for the AI Note Taker's Aurora and S3. Writable: the
+      # login session refreshes its cached token.
+      - ~/.aws:/root/.aws
     depends_on:
       worker:
         condition: service_healthy
@@ -41,9 +44,13 @@ services:
       ENVIRONMENT: local
       WATCHFILES_FORCE_POLLING: "true"
       UPLOADS_DIR: /data/uploads
+      # The AI Note Taker fills the course through the API.
+      API_URL: http://api:8000
     volumes:
       - ./api:/app
       - uploads:/data/uploads
+      # The AI Note Taker runs here and writes to Aurora and S3.
+      - ~/.aws:/root/.aws
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
