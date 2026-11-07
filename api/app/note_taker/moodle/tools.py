@@ -229,7 +229,9 @@ def make_moodle_tools(
     def select_files(item: CatalogItem, filename: str | None) -> list[CatalogFile]:
         if filename is None:
             return item.files
-        return [f for f in item.files if f.filename == filename]
+        # The outline reads "name | file": a name copied with the file still means that file.
+        names = {filename, filename.rsplit(" | ", 1)[-1].strip()}
+        return [f for f in item.files if f.filename in names]
 
     def fetch_one(item: CatalogItem, file: CatalogFile, reason: str) -> dict:
         entry = {

@@ -301,3 +301,12 @@ def test_preview_link_reads_pages_as_markdown_and_names_videos() -> None:
     )
     assert preview_link("https://slides.test/arima", 500, http) == "## ARIMA\n\nModel $y_t$"
     assert "video" in preview_link("https://www.youtube.com/watch?v=x", 500)
+
+
+def test_a_file_name_copied_with_the_module_name_still_fetches_the_file() -> None:
+    tools, client, _, _, _ = make_tools()
+    result = tools["fetch_materials"].invoke(
+        {"items": [{"module_id": 10, "filename": "Slides | slides.pdf", "reason": "x"}]}
+    )
+    assert "fetched 1" in result and "failed 0" in result
+    assert client.downloads == [PDF_URL]
