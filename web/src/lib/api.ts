@@ -58,11 +58,6 @@ export type SavedFile = {
   size: number;
 };
 
-export type MoodleFileRef = {
-  fileurl: string;
-  filename: string;
-};
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${PUBLIC_API_URL}${path}`, init);
   if (!res.ok) {
@@ -92,26 +87,6 @@ export function uploadFiles(
   if (courseId) form.append("course_id", String(courseId));
   for (const file of files) form.append("files", file);
   return request("/uploads", { method: "POST", body: form });
-}
-
-export function uploadMoodleFiles(
-  category: UploadCategory,
-  files: MoodleFileRef[],
-  courseId?: number,
-): Promise<SavedFile[]> {
-  return request("/uploads/moodle", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ category, course_id: courseId, files }),
-  });
-}
-
-export function uploadMoodleLinks(courseId: number, modules: number[]): Promise<SavedFile[]> {
-  return request("/uploads/moodle/links", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ course_id: courseId, modules }),
-  });
 }
 
 export type Reading = {
