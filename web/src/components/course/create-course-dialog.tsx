@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -30,11 +29,7 @@ export function CreateCourseDialog({
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent className="flex max-h-[90svh] flex-col gap-6 overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Create a course</DialogTitle>
-          <DialogDescription>
-            Paste the course&apos;s Moodle link. The AI Note Taker sets up the
-            rest.
-          </DialogDescription>
+          <DialogTitle>Create course environment</DialogTitle>
         </DialogHeader>
         <AutonomousCourseForm
           onCreated={onCreated}

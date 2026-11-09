@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  BookOpenTextIcon,
   CircleAlertIcon,
   CircleStopIcon,
   EllipsisIcon,
@@ -11,17 +10,15 @@ import {
   InfoIcon,
   RefreshCwIcon,
   SigmaIcon,
-  SparklesIcon,
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { AgentConsole } from "@/components/course/agent-console";
-import { AgentMaterials, useAgentCourse } from "@/components/course/agent-materials";
+import { AgentReport, useAgentCourse } from "@/components/course/agent-materials";
 import { LectureList } from "@/components/course/lecture-list";
 import { MaterialsPanel } from "@/components/course/materials-panel";
-import { ReadingsReview } from "@/components/course/readings-review";
 import { SetupReview } from "@/components/course/setup-review";
 import { useCourseNotes, type CourseNotes } from "@/components/course/use-course-notes";
 import { RunProgress } from "@/components/dashboard/notes-stage";
@@ -48,9 +45,10 @@ import {
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import { useDeveloperMode } from "@/hooks/use-developer-mode";
 import {
   ApiError,
-  approveReadings,
   deleteCourse,
   deleteSyllabus,
   getCourseInfo,
@@ -58,7 +56,6 @@ import {
   getPlan,
   listCourseFiles,
   previewPath,
-  saveCourseInfo,
   startAgentSync,
   setPrimarySyllabus,
   transcribeSyllabus,
@@ -225,6 +222,7 @@ function NotationTable({ notation }: { notation: CourseNotation | null }) {
 
 export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   const courseId = /^\d+$/.test(course) ? Number(course) : undefined;
+  const [developerMode, setDeveloperMode] = useDeveloperMode();
   const [files, setFiles] = useState<CourseFiles | null>(null);
   const [plan, setPlan] = useState<PlanView | null>(null);
   // undefined while loading; null for a course stored before course names existed.
@@ -236,8 +234,6 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   const [forceReview, setForceReview] = useState(false);
   // A syllabus without a reading list never gets book matches, so approval is remembered here.
   const [approvedHere, setApprovedHere] = useState(false);
-  // Readings per lecture, opened again from the course menu.
-  const [showReadings, setShowReadings] = useState(false);
   const [newSyllabus, setNewSyllabus] = useState<File[]>([]);
   const [replacing, setReplacing] = useState<"closed" | "open" | "saving">("closed");
   const [deleting, setDeleting] = useState<"closed" | "open" | "deleting">("closed");
@@ -297,9 +293,7 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
             // The AI Note Taker prepared the lectures itself: nothing to check.
             forceReview || !(plan.mapped || approvedHere || readingsApproved || agentPrepared)
             ? "review"
-            : showReadings || !readingsApproved
-              ? "readings"
-              : "ready";
+            : "ready";
   // While the AI Note Taker sets the course up (or could not finish), its console replaces
   // the setup screens.
   const agentSetup =
@@ -358,7 +352,6 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   const reread = async () => {
     if (!syllabusPath) return;
     setForceReview(true);
-    setShowReadings(false);
     forgetReadingsApproval();
     await read(syllabusPath, true);
   };
@@ -375,31 +368,12 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
       setNewSyllabus([]);
       setReplacing("closed");
       setForceReview(true);
-      setShowReadings(false);
-      forgetReadingsApproval();
+        forgetReadingsApproval();
       reloadFiles();
       await read(saved.path, true);
     } catch (err) {
       toast.error(errorMessage(err));
       setReplacing("open");
-    }
-  };
-
-  const approve = async () => {
-    try {
-      setInfo(await approveReadings(course));
-    } catch (err) {
-      if (!(err instanceof ApiError && err.status === 404)) {
-        toast.error(errorMessage(err));
-        return;
-      }
-      // A course stored before course names existed gets its record first.
-      try {
-        await saveCourseInfo(course, name);
-        setInfo(await approveReadings(course));
-      } catch (again) {
-        toast.error(errorMessage(again));
-      }
     }
   };
 
@@ -437,18 +411,6 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
     });
   };
 
-  const generateAll = async () => {
-    const queued = await notes.generateAll();
-    if (!queued) return;
-    const count = queued.waiting.length + (queued.active ? 1 : 0);
-    toast.success(`${plural(count, "lecture", "lectures")} queued`, {
-      description:
-        queued.skipped.length > 0
-          ? `${plural(queued.skipped.length, "lecture was", "lectures were")} skipped: no readings.`
-          : "They are written one at a time. You can close this tab.",
-    });
-  };
-
   const hasMaterials = Boolean(plan?.sessions.some((s) => s.files.length > 0));
   const lectures = plan?.transcript?.sessions.length ?? 0;
   const generating = notes.busy;
@@ -465,28 +427,16 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
               ? plural(lectures, "lecture", "lectures")
               : phase === "review"
                 ? "Setting up: check the lectures"
-                : phase === "readings" && !readingsApproved
-                  ? "Setting up: check the readings"
-                  : "Setting up"}
+                : "Setting up"}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {phase === "ready" &&
-            (generating ? (
-              <Button size="lg" variant="outline" disabled={notes.starting} onClick={notes.stop}>
-                {notes.starting ? <Spinner /> : <CircleStopIcon />}
-                Stop
-              </Button>
-            ) : (
-              <Button
-                size="lg"
-                disabled={!hasMaterials || notes.starting || notes.loading}
-                onClick={generateAll}
-              >
-                {notes.starting ? <Spinner /> : <SparklesIcon />}
-                Generate all
-              </Button>
-            ))}
+          {phase === "ready" && generating && (
+            <Button size="lg" variant="outline" disabled={notes.starting} onClick={notes.stop}>
+              {notes.starting ? <Spinner /> : <CircleStopIcon />}
+              Stop
+            </Button>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button variant="outline" size="icon-lg" aria-label="Course menu" />}
@@ -495,12 +445,19 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-56">
               <DropdownMenuItem
-                disabled={!readingsApproved || phase !== "ready"}
-                onClick={() => setShowReadings(true)}
+                closeOnClick={false}
+                onClick={() => setDeveloperMode(!developerMode)}
               >
-                <BookOpenTextIcon />
-                Readings per lecture
+                Developer mode
+                <Switch
+                  size="sm"
+                  checked={developerMode}
+                  tabIndex={-1}
+                  aria-label="Developer mode"
+                  className="pointer-events-none ml-auto"
+                />
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem disabled={phase === "loading"} onClick={openNotation}>
                 <SigmaIcon />
                 Course notation
@@ -639,19 +596,6 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
         />
       )}
 
-      {!agentSetup && phase === "readings" && plan && files && (
-        <ReadingsReview
-          plan={plan}
-          courseId={courseId}
-          readingFiles={files.reading}
-          onPlan={setPlan}
-          onUploaded={reloadFiles}
-          approved={readingsApproved}
-          onApprove={approve}
-          onClose={() => setShowReadings(false)}
-        />
-      )}
-
       {phase === "ready" && plan && files && (
         <>
           {generating && <QueueProgress plan={plan} notes={notes} />}
@@ -671,10 +615,6 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
                 <h2 id="notes-title" className="text-xl">
                   Notes
                 </h2>
-                <p className="text-sm text-muted-foreground">
-                  One note per lecture, written when you ask for it. Open a lecture to write its
-                  note or change its readings.
-                </p>
               </div>
               <LectureList plan={plan} notes={notes} />
             </section>
@@ -690,8 +630,8 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
         </>
       )}
 
-      {courseId !== undefined && phase !== "loading" && !agentSetup && (
-        <AgentMaterials course={course} agent={agent} />
+      {developerMode && phase !== "loading" && !agentSetup && (
+        <AgentReport agent={agent} />
       )}
 
       <Dialog

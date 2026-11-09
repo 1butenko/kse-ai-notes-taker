@@ -68,7 +68,7 @@ export function LectureList({ plan, notes }: LectureListProps) {
           <li key={entry.id} className="flex items-stretch border-b">
             <Link
               href={href}
-              className="grid min-w-0 flex-1 grid-cols-[3rem_minmax(0,1fr)_auto] items-start gap-x-3 py-4 transition-colors hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="grid min-w-0 flex-1 grid-cols-[3rem_minmax(0,1fr)_auto] items-start gap-x-3 -mx-3 rounded-md px-3 py-4 transition-colors hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
               <span className="text-2xl leading-none font-bold tabular-nums">
                 {session.number ?? index + 1}

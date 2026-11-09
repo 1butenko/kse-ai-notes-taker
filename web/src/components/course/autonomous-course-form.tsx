@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { CircleAlertIcon, SparklesIcon } from "lucide-react";
+import { CircleAlertIcon } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -94,11 +94,6 @@ export function AutonomousCourseForm({
           aria-invalid={showInvalid ? true : undefined}
           autoFocus
         />
-        <FieldDescription>
-          That&apos;s all we need. The AI Note Taker gathers the syllabus and
-          readings from Moodle, reads the lectures and attaches each one&apos;s
-          readings.
-        </FieldDescription>
       </Field>
 
       {error && (
@@ -112,7 +107,7 @@ export function AutonomousCourseForm({
       <div className="flex justify-end gap-2">
         {cancel}
         <Button type="submit" disabled={courseId === null || pending}>
-          {pending ? <Spinner /> : <SparklesIcon />}
+          {pending && <Spinner />}
           {step ?? "Create course"}
         </Button>
       </div>
