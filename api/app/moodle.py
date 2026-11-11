@@ -129,6 +129,16 @@ class MoodleClient:
                     size += len(chunk)
             return size
 
+    async def read_text(self, token: str, fileurl: str) -> str:
+        """A small Moodle file as text: the HTML of a page or a book chapter."""
+        url = httpx2.URL(fileurl).copy_merge_params({"token": token})
+        response = await self.http.get(url)
+        response.raise_for_status()
+        if "application/json" in response.headers.get("content-type", ""):
+            payload = response.json()
+            raise MoodleError(payload.get("errorcode", "unknown"), payload.get("message", ""))
+        return response.content.decode("utf-8", errors="replace")
+
 
 async def get_moodle_client(
     settings: Annotated[Settings, Depends(get_settings)],

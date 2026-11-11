@@ -1,8 +1,7 @@
-"""Mapped chunks: the text of every session material, cut into chunks with stable ids."""
+"""The text of a lecture's readings: PDF pages (cached by file hash), the vision transcriptions of
+pages their PDF text garbles, and Markdown, text and Word files as one page."""
 
-import math
 import re
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,13 +9,9 @@ import mammoth
 from pydantic import BaseModel
 from pypdf import PdfReader
 
-from app.books import load_index, printed_label
-from app.notes import Chunk, Inputs, Source
 from app.plan import Plan
-from app.storage import sha256
 from app.syllabus import Transcript
 
-CHUNK_CHARS = 1400
 MAX_PAGES = 600
 TEXT_SUFFIXES = {".txt", ".md", ".qmd", ".tex"}
 # Characters of text below which a page counts as having none: a scan, or a blank page.
@@ -153,28 +148,6 @@ def untranscribed(file: Path, pages: dict[int, str], transcribed: dict[int, str]
     ]
 
 
-def split_text(text: str) -> list[str]:
-    """Pieces of at most CHUNK_CHARS, cut at line ends where possible."""
-    pieces, current = [], ""
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        while len(line) > CHUNK_CHARS:
-            if current:
-                pieces.append(current)
-                current = ""
-            pieces.append(line[:CHUNK_CHARS])
-            line = line[CHUNK_CHARS:]
-        if current and len(current) + len(line) + 1 > CHUNK_CHARS:
-            pieces.append(current)
-            current = ""
-        current = f"{current}\n{line}" if current else line
-    if current:
-        pieces.append(current)
-    return pieces
-
-
 @dataclass
 class Material:
     file: str
@@ -206,132 +179,3 @@ def session_materials(plan: Plan, transcript: Transcript) -> list[tuple[Material
                 )
             found.append((material, number))
     return found
-
-
-def build_inputs(uploads_dir: Path, course_dir: Path, plan: Plan, transcript: Transcript) -> Inputs:
-    sources: list[Source] = []
-    chunks: dict[str, Chunk] = {}
-    by_key: dict[tuple, Source] = {}
-    skipped: list[str] = []
-
-    for material, session in session_materials(plan, transcript):
-        key = (material.file, material.pdf_start, material.pdf_end)
-        if key in by_key:
-            if session not in by_key[key].sessions:
-                by_key[key].sessions.append(session)
-            continue
-
-        file = uploads_dir / material.file
-        if not file.is_file():
-            skipped.append(f"{material.file}: file is missing")
-            continue
-        digest = sha256(file)
-        try:
-            pages = page_texts(course_dir, file, digest, material.pdf_start or 1, material.pdf_end)
-        except Exception as error:
-            print(f"Can't read {material.file}: {error!r}")
-            skipped.append(f"{material.file}: could not read the text")
-            continue
-
-        is_pdf = file.suffix.lower() == ".pdf"
-        garbled: list[int] = []
-        if is_pdf:
-            read = load_transcripts(course_dir, digest)
-            transcribed = read.pages if read else {}
-            if material.pdf_start is not None:
-                garbled = untranscribed(file, pages, transcribed)
-            pages = {page: transcribed.get(page, text) for page, text in pages.items()}
-        index = load_index(course_dir, file, digest) if is_pdf else None
-        first = material.pdf_start or 1
-        last = material.pdf_end or max(pages, default=0)
-        source = Source(
-            id=len(sources),
-            file=material.file,
-            title=material.title,
-            label=material.label,
-            pdf_start=material.pdf_start,
-            pdf_end=material.pdf_end,
-            sessions=[session],
-            outline=[
-                e.title for e in (index.entries if index else []) if first <= e.pdf_page <= last
-            ],
-            chunk_ids=[],
-        )
-        for page, text in pages.items():
-            for n, piece in enumerate(split_text(text)):
-                chunk_id = f"{digest[:8]}-p{page}-{n}" if is_pdf else f"{digest[:8]}-{n}"
-                source.chunk_ids.append(chunk_id)
-                chunks.setdefault(
-                    chunk_id,
-                    Chunk(
-                        id=chunk_id,
-                        source=source.id,
-                        file=material.file,
-                        pdf_page=page if is_pdf else None,
-                        printed_page=printed_label(index, page) if index else None,
-                        text=piece,
-                    ),
-                )
-        if not source.chunk_ids:
-            skipped.append(f"{material.file}: no extractable text (scanned or unsupported)")
-            continue
-        blank = [page for page, text in pages.items() if len(text.strip()) < NEAR_EMPTY]
-        if is_pdf and material.pdf_start is not None and blank:
-            skipped.append(
-                f"{material.file}: {page_ranges(blank)} of {material.label or 'the excerpt'} "
-                f"{'has' if len(blank) == 1 else 'have'} no extractable text (scanned or blank); "
-                "the notes miss what is on them"
-            )
-        if garbled:
-            skipped.append(
-                f"{material.file}: {page_ranges(garbled)} of {material.label or 'the excerpt'} "
-                f"{'has' if len(garbled) == 1 else 'have'} formulas or matrices their PDF text "
-                "garbles, and no vision transcription yet; the notes may misread them"
-            )
-        by_key[key] = source
-        sources.append(source)
-
-    return Inputs(sources=sources, chunks=list(chunks.values()), skipped=skipped)
-
-
-TOKEN = re.compile(r"\w{2,}", re.UNICODE)
-
-
-def tokens(text: str) -> list[str]:
-    return [t.casefold() for t in TOKEN.findall(text)]
-
-
-class Retriever:
-    """BM25 over chunk text: the retrieval index the evidence selector draws candidates from."""
-
-    def __init__(self, chunks: list[Chunk], k1: float = 1.4, b: float = 0.75) -> None:
-        self.chunks = chunks
-        self.k1, self.b = k1, b
-        self.terms = [Counter(tokens(c.text)) for c in chunks]
-        self.lengths = [sum(t.values()) for t in self.terms]
-        self.average = sum(self.lengths) / len(self.lengths) if chunks else 0
-        frequency = Counter(term for t in self.terms for term in t)
-        count = len(chunks)
-        self.idf = {
-            term: math.log(1 + (count - df + 0.5) / (df + 0.5)) for term, df in frequency.items()
-        }
-
-    def score(self, i: int, query: list[str]) -> float:
-        terms, length = self.terms[i], self.lengths[i]
-        total = 0.0
-        for term in query:
-            tf = terms.get(term)
-            if tf:
-                norm = tf + self.k1 * (1 - self.b + self.b * length / (self.average or 1))
-                total += self.idf[term] * tf * (self.k1 + 1) / norm
-        return total
-
-    def search(self, query: str, limit: int, within: set[str] | None = None) -> list[Chunk]:
-        words = list(dict.fromkeys(tokens(query)))
-        scored = [
-            (self.score(i, words), i)
-            for i, chunk in enumerate(self.chunks)
-            if within is None or chunk.id in within
-        ]
-        ranked = sorted((s for s in scored if s[0] > 0), key=lambda s: (-s[0], s[1]))
-        return [self.chunks[i] for _, i in ranked[:limit]]

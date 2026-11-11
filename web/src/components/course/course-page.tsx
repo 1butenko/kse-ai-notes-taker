@@ -1,32 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  BookOpenTextIcon,
   CircleAlertIcon,
-  CircleStopIcon,
   EllipsisIcon,
-  HistoryIcon,
   InfoIcon,
   RefreshCwIcon,
-  SigmaIcon,
-  SparklesIcon,
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { AgentConsole } from "@/components/course/agent-console";
+import { AgentReport, useAgentCourse } from "@/components/course/agent-materials";
 import { LectureList } from "@/components/course/lecture-list";
 import { MaterialsPanel } from "@/components/course/materials-panel";
-import { ReadingsReview } from "@/components/course/readings-review";
 import { SetupReview } from "@/components/course/setup-review";
-import { useCourseNotes, type CourseNotes } from "@/components/course/use-course-notes";
-import { RunProgress } from "@/components/dashboard/notes-stage";
 import { SyllabusUpload } from "@/components/dashboard/syllabus-upload";
+import { useCourseLectureNotes } from "@/components/lecture-notes/use-course-lecture-notes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogClose,
@@ -43,26 +36,23 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import { useDeveloperMode } from "@/hooks/use-developer-mode";
 import {
   ApiError,
-  approveReadings,
   deleteCourse,
   deleteSyllabus,
   getCourseInfo,
-  getCourseNotation,
   getPlan,
   listCourseFiles,
-  previewPath,
-  saveCourseInfo,
+  startAgentSync,
   setPrimarySyllabus,
   transcribeSyllabus,
   uploadFiles,
   type CourseFiles,
   type CourseInfo,
-  type CourseNotation,
   type PlanView,
 } from "@/lib/api";
 
@@ -82,15 +72,6 @@ function plural(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-function when(iso: string) {
-  return new Date(iso).toLocaleString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 /** Reads the syllabus into lectures and makes it the course plan. */
 async function readSyllabus(course: string, path: string, force: boolean) {
@@ -118,110 +99,9 @@ function SetupProgress({ title, detail }: { title: string; detail: string }) {
   );
 }
 
-/** The run being written, which lecture it is, and how many wait after it. */
-function QueueProgress({ plan, notes }: { plan: PlanView; notes: CourseNotes }) {
-  const active = notes.active;
-  const waiting = notes.queue.waiting.length;
-  const lecture = active?.session_id
-    ? plan.sessions.find((s) => s.id === active.session_id)
-    : undefined;
-  return (
-    <section aria-label="Notes being written" className="flex flex-col gap-2">
-      <p className="text-sm">
-        {active
-          ? lecture
-            ? `Writing ${lecture.session.topic || lecture.session.label}`
-            : "Writing whole-course notes"
-          : "Starting the next lecture"}
-        {waiting > 0 && `, ${plural(waiting, "lecture", "lectures")} queued after it`}
-      </p>
-      {active && <RunProgress run={active} />}
-    </section>
-  );
-}
-
-/** Whole-course generations from before lecture notes: still readable, never in the lectures. */
-function PreviousGenerations({ course, notes }: { course: string; notes: CourseNotes }) {
-  if (notes.legacy.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        No whole-course generations. Each lecture&apos;s earlier notes are on its lecture page,
-        under Previous versions.
-      </p>
-    );
-  }
-  return (
-    <ul className="flex flex-col border-t">
-      {notes.legacy.map((run) => (
-        <li key={run.id} className="flex flex-wrap items-center gap-3 border-b py-3">
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="font-medium">{when(run.created_at)}</span>
-            <span className="text-sm text-muted-foreground">
-              {run.status === "failed" ? run.error : "Whole-course notes"}
-            </span>
-          </span>
-          <Badge variant={run.status === "failed" ? "destructive" : "outline"}>
-            {run.status === "done" ? "Ready" : run.status === "failed" ? "Failed" : "Writing"}
-          </Badge>
-          {run.status === "done" && (
-            <Link href={previewPath(course, run.id)} className={buttonVariants({ size: "sm" })}>
-              Read notes
-            </Link>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function NotationTable({ notation }: { notation: CourseNotation | null }) {
-  if (notation === null) return <Skeleton className="h-32 w-full" />;
-  if (notation.notation.length === 0 && notation.terminology.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Empty until the first lecture note is written. Its symbols and terms start the sheet, and
-        every later lecture uses them and adds its own.
-      </p>
-    );
-  }
-  return (
-    <div className="flex max-h-[60svh] flex-col gap-6 overflow-y-auto">
-      {notation.notation.length > 0 && (
-        <table className="w-full text-sm">
-          <caption className="pb-2 text-left font-medium">Notation</caption>
-          <tbody>
-            {notation.notation.map((entry) => (
-              <tr key={entry.symbol} className="border-t align-top">
-                <th scope="row" className="w-1/3 py-2 pr-3 text-left font-normal tabular-nums">
-                  {entry.symbol}
-                </th>
-                <td className="py-2 text-muted-foreground">{entry.meaning}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {notation.terminology.length > 0 && (
-        <table className="w-full text-sm">
-          <caption className="pb-2 text-left font-medium">Terms</caption>
-          <tbody>
-            {notation.terminology.map((entry) => (
-              <tr key={entry.term} className="border-t align-top">
-                <th scope="row" className="w-1/3 py-2 pr-3 text-left font-medium">
-                  {entry.term}
-                </th>
-                <td className="py-2 text-muted-foreground">{entry.definition}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
 export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   const courseId = /^\d+$/.test(course) ? Number(course) : undefined;
+  const [developerMode, setDeveloperMode] = useDeveloperMode();
   const [files, setFiles] = useState<CourseFiles | null>(null);
   const [plan, setPlan] = useState<PlanView | null>(null);
   // undefined while loading; null for a course stored before course names existed.
@@ -233,15 +113,14 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   const [forceReview, setForceReview] = useState(false);
   // A syllabus without a reading list never gets book matches, so approval is remembered here.
   const [approvedHere, setApprovedHere] = useState(false);
-  // Readings per lecture, opened again from the course menu.
-  const [showReadings, setShowReadings] = useState(false);
   const [newSyllabus, setNewSyllabus] = useState<File[]>([]);
   const [replacing, setReplacing] = useState<"closed" | "open" | "saving">("closed");
   const [deleting, setDeleting] = useState<"closed" | "open" | "deleting">("closed");
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [notationOpen, setNotationOpen] = useState(false);
-  const [notation, setNotation] = useState<CourseNotation | null>(null);
-  const notes = useCourseNotes(course);
+  const notes = useCourseLectureNotes(course);
+  const agent = useAgentCourse(course, courseId !== undefined);
+  // A course the AI Note Taker sets up: it reads the syllabus and prepares the lectures.
+  const agentRun = agent.data?.latest_run ?? undefined;
+  const agentPrepared = agentRun?.status === "succeeded";
 
   const load = useCallback(
     () =>
@@ -280,18 +159,44 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
 
   const readingsApproved = Boolean(info?.readings_approved_at);
   const phase =
-    files === null || info === undefined
+    files === null || info === undefined || (agent.data === undefined && !agent.loadError)
       ? "loading"
       : files.syllabus.length === 0
         ? "syllabus"
         : !plan?.transcript
           ? "reading"
           : // Approved readings imply approved lectures, also for a syllabus without a reading list.
-            forceReview || !(plan.mapped || approvedHere || readingsApproved)
+            // The AI Note Taker prepared the lectures itself: nothing to check.
+            forceReview || !(plan.mapped || approvedHere || readingsApproved || agentPrepared)
             ? "review"
-            : showReadings || !readingsApproved
-              ? "readings"
-              : "ready";
+            : "ready";
+  // While the AI Note Taker sets the course up (or could not finish), its console replaces
+  // the setup screens.
+  const agentSetup =
+    agentRun !== undefined &&
+    phase !== "loading" &&
+    phase !== "ready" &&
+    (agent.working || phase === "syllabus" || phase === "reading");
+
+  // Its work lands in the course's files and plan: load them once it stops.
+  const wasWorking = useRef(agent.working);
+  useEffect(() => {
+    if (wasWorking.current && !agent.working) load();
+    wasWorking.current = agent.working;
+  }, [agent.working, load]);
+
+  const [retrying, setRetrying] = useState(false);
+  const retryAgent = async () => {
+    setRetrying(true);
+    try {
+      await startAgentSync(course);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setRetrying(false);
+      agent.refresh();
+    }
+  };
 
   const read = async (path: string, force: boolean) => {
     setReading(true);
@@ -306,7 +211,8 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   };
 
   // The syllabus is read as soon as it is stored; no button to press.
-  const autoRead = phase === "reading" && !readError ? syllabusPath : null;
+  // Not for an AI Note Taker course: the agent reads its syllabus.
+  const autoRead = phase === "reading" && !readError && !agentRun ? syllabusPath : null;
   useEffect(() => {
     if (!autoRead) return;
     let cancelled = false;
@@ -322,7 +228,6 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   const reread = async () => {
     if (!syllabusPath) return;
     setForceReview(true);
-    setShowReadings(false);
     forgetReadingsApproval();
     await read(syllabusPath, true);
   };
@@ -339,31 +244,12 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
       setNewSyllabus([]);
       setReplacing("closed");
       setForceReview(true);
-      setShowReadings(false);
-      forgetReadingsApproval();
+        forgetReadingsApproval();
       reloadFiles();
       await read(saved.path, true);
     } catch (err) {
       toast.error(errorMessage(err));
       setReplacing("open");
-    }
-  };
-
-  const approve = async () => {
-    try {
-      setInfo(await approveReadings(course));
-    } catch (err) {
-      if (!(err instanceof ApiError && err.status === 404)) {
-        toast.error(errorMessage(err));
-        return;
-      }
-      // A course stored before course names existed gets its record first.
-      try {
-        await saveCourseInfo(course, name);
-        setInfo(await approveReadings(course));
-      } catch (again) {
-        toast.error(errorMessage(again));
-      }
     }
   };
 
@@ -392,30 +278,8 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
     }
   };
 
-  const openNotation = () => {
-    setNotation(null);
-    setNotationOpen(true);
-    getCourseNotation(course).then(setNotation, (err) => {
-      toast.error(errorMessage(err));
-      setNotationOpen(false);
-    });
-  };
-
-  const generateAll = async () => {
-    const queued = await notes.generateAll();
-    if (!queued) return;
-    const count = queued.waiting.length + (queued.active ? 1 : 0);
-    toast.success(`${plural(count, "lecture", "lectures")} queued`, {
-      description:
-        queued.skipped.length > 0
-          ? `${plural(queued.skipped.length, "lecture was", "lectures were")} skipped: no readings.`
-          : "They are written one at a time. You can close this tab.",
-    });
-  };
-
   const hasMaterials = Boolean(plan?.sessions.some((s) => s.files.length > 0));
   const lectures = plan?.transcript?.sessions.length ?? 0;
-  const generating = notes.busy;
 
   return (
     <div className="flex flex-col gap-8">
@@ -423,32 +287,16 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
         <div className="flex min-w-0 flex-col gap-1">
           <h1 className="text-3xl">{name}</h1>
           <p className="text-muted-foreground">
-            {phase === "ready"
+            {agentSetup
+              ? "Setting up with the AI Note Taker"
+              : phase === "ready"
               ? plural(lectures, "lecture", "lectures")
               : phase === "review"
                 ? "Setting up: check the lectures"
-                : phase === "readings" && !readingsApproved
-                  ? "Setting up: check the readings"
-                  : "Setting up"}
+                : "Setting up"}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {phase === "ready" &&
-            (generating ? (
-              <Button size="lg" variant="outline" disabled={notes.starting} onClick={notes.stop}>
-                {notes.starting ? <Spinner /> : <CircleStopIcon />}
-                Stop
-              </Button>
-            ) : (
-              <Button
-                size="lg"
-                disabled={!hasMaterials || notes.starting || notes.loading}
-                onClick={generateAll}
-              >
-                {notes.starting ? <Spinner /> : <SparklesIcon />}
-                Generate all
-              </Button>
-            ))}
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button variant="outline" size="icon-lg" aria-label="Course menu" />}
@@ -457,43 +305,31 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-56">
               <DropdownMenuItem
-                disabled={!readingsApproved || phase !== "ready"}
-                onClick={() => setShowReadings(true)}
+                closeOnClick={false}
+                onClick={() => setDeveloperMode(!developerMode)}
               >
-                <BookOpenTextIcon />
-                Readings per lecture
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={phase === "loading"} onClick={openNotation}>
-                <SigmaIcon />
-                Course notation
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={phase !== "ready"} onClick={() => setHistoryOpen(true)}>
-                <HistoryIcon />
-                Previous generations
+                Developer mode
+                <Switch
+                  size="sm"
+                  checked={developerMode}
+                  tabIndex={-1}
+                  aria-label="Developer mode"
+                  className="pointer-events-none ml-auto"
+                />
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                disabled={!syllabusPath || reading || generating}
-                onClick={reread}
-              >
+              <DropdownMenuItem disabled={!syllabusPath || reading} onClick={reread}>
                 <RefreshCwIcon />
                 Read the syllabus again
               </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={reading || generating}
-                onClick={() => setReplacing("open")}
-              >
+              <DropdownMenuItem disabled={reading} onClick={() => setReplacing("open")}>
                 <UploadIcon />
                 Replace the syllabus file
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                disabled={generating}
-                onClick={() => setDeleting("open")}
-              >
+              <DropdownMenuItem variant="destructive" onClick={() => setDeleting("open")}>
                 <Trash2Icon />
-                {generating ? "Start over (stop the notes first)" : "Start over"}
+                Start over
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -514,14 +350,25 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
       )}
 
       {phase === "loading" && !loadError && (
-        <div className="flex flex-col gap-3">
+        // Shown only when loading takes a moment, so a fresh course goes straight to the
+        // agent's console without a flash of placeholders.
+        <div className="flex flex-col gap-3 animate-in fade-in duration-500 delay-300 fill-mode-backwards">
           {Array.from({ length: 6 }, (_, index) => (
             <Skeleton key={index} className="h-14 w-full" />
           ))}
         </div>
       )}
 
-      {phase === "syllabus" && (
+      {agentSetup && agentRun && (
+        <AgentConsole
+          run={agentRun}
+          onRetry={retryAgent}
+          retrying={retrying}
+          incomplete={phase === "syllabus" || phase === "reading"}
+        />
+      )}
+
+      {!agentSetup && phase === "syllabus" && (
         <section className="flex max-w-xl flex-col gap-4">
           <p className="text-muted-foreground">
             This course has no syllabus yet. Add it, and it is read into lectures.
@@ -541,7 +388,8 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
         </section>
       )}
 
-      {(phase === "reading" || (phase === "review" && (reading || readError))) &&
+      {!agentSetup &&
+        (phase === "reading" || (phase === "review" && (reading || readError))) &&
         (readError ? (
           <Alert variant="destructive">
             <CircleAlertIcon />
@@ -568,7 +416,12 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
           />
         ))}
 
-      {phase === "review" && !reading && !readError && plan?.transcript && syllabusPath && (
+      {!agentSetup &&
+        phase === "review" &&
+        !reading &&
+        !readError &&
+        plan?.transcript &&
+        syllabusPath && (
         <SetupReview
           // A fresh transcript starts a fresh review.
           key={plan.transcript.created_at}
@@ -584,29 +437,15 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
         />
       )}
 
-      {phase === "readings" && plan && files && (
-        <ReadingsReview
-          plan={plan}
-          courseId={courseId}
-          readingFiles={files.reading}
-          onPlan={setPlan}
-          onUploaded={reloadFiles}
-          approved={readingsApproved}
-          onApprove={approve}
-          onClose={() => setShowReadings(false)}
-        />
-      )}
-
       {phase === "ready" && plan && files && (
         <>
-          {generating && <QueueProgress plan={plan} notes={notes} />}
           {!hasMaterials && (
             <Alert>
               <InfoIcon />
               <AlertTitle>No lecture has readings yet</AlertTitle>
               <AlertDescription>
                 Add the books the syllabus cites, or drop a file on a lecture&apos;s page, to
-                generate its note.
+                write its notes.
               </AlertDescription>
             </Alert>
           )}
@@ -616,22 +455,23 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
                 <h2 id="notes-title" className="text-xl">
                   Notes
                 </h2>
-                <p className="text-sm text-muted-foreground">
-                  One note per lecture, written when you ask for it. Open a lecture to write its
-                  note or change its readings.
-                </p>
               </div>
               <LectureList plan={plan} notes={notes} />
             </section>
             <MaterialsPanel
               plan={plan}
               courseId={courseId}
+              syllabusFiles={files.syllabus}
               readingFiles={files.reading}
               onPlan={setPlan}
               onUploaded={reloadFiles}
             />
           </div>
         </>
+      )}
+
+      {developerMode && phase !== "loading" && !agentSetup && (
+        <AgentReport agent={agent} />
       )}
 
       <Dialog
@@ -674,9 +514,8 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
           <DialogHeader>
             <DialogTitle>Start over?</DialogTitle>
             <DialogDescription>
-              {name} leaves the app with its syllabus, readings, lectures and every generated note.
-              The files move to the server&apos;s trash folder, where an administrator can restore
-              them.
+              {name} leaves the app with its syllabus, readings and lectures. The files move to
+              the server&apos;s trash folder, where an administrator can restore them.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -689,35 +528,6 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={notationOpen} onOpenChange={setNotationOpen}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Course notation</DialogTitle>
-            <DialogDescription>
-              The symbols and terms every lecture note uses. Each new note adds what it introduces;
-              existing meanings never change.
-            </DialogDescription>
-          </DialogHeader>
-          <NotationTable notation={notation} />
-        </DialogContent>
-      </Dialog>
-
-      <Sheet
-        open={historyOpen}
-        onOpenChange={(open) => {
-          setHistoryOpen(open);
-          if (!open) notes.reload();
-        }}
-      >
-        <SheetContent className="w-full overflow-y-auto data-[side=right]:sm:max-w-2xl">
-          <SheetHeader>
-            <SheetTitle>Previous generations</SheetTitle>
-          </SheetHeader>
-          <div className="px-4 pb-4">
-            <PreviousGenerations course={course} notes={notes} />
-          </div>
-        </SheetContent>
-      </Sheet>
     </div>
   );
 }

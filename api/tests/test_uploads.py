@@ -191,7 +191,7 @@ def test_upload_moodle_links_saves_pages_as_text_and_pdfs(mock_moodle, tmp_uploa
     ]
     assert (tmp_uploads / "4510/reading/01 - Introduction.md").read_text() == (
         "# 01 - Introduction\n\nSource: https://slides.test/01/\n\n"
-        "## Forecasting\n\nA model $y = f(X)$ of the future.\n\n- one\n\n- two\n"
+        "## Forecasting\n\nA model $y = f(X)$ of the future.\n\n- one\n- two\n"
     )
     assert (tmp_uploads / "4510/reading/Paper.pdf").read_bytes() == b"%PDF-1.7 paper"
 
@@ -298,3 +298,69 @@ def test_moodle_reimports_the_same_book_but_not_a_changed_one(mock_moodle, tmp_u
     response = client.post("/uploads/moodle", json=body)
     assert response.status_code == 409 and "Week 2" in response.json()["detail"]
     assert (tmp_uploads / "4510/reading/book.pdf").read_bytes() == b"%PDF original"
+
+
+def test_upload_moodle_links_saves_page_and_book_modules_as_markdown(
+    mock_moodle, tmp_uploads
+) -> None:
+    chapter = "https://moodle.test/pluginfile.php/7/mod_book/chapter/{}/index.html"
+    course = [
+        {
+            "id": 1,
+            "section": 1,
+            "name": "Week 1",
+            "modules": [
+                {
+                    "id": 21,
+                    "name": "Notes",
+                    "modname": "page",
+                    "url": "https://moodle.test/mod/page/view.php?id=21",
+                    "contents": [
+                        {
+                            "type": "file",
+                            "filename": "index.html",
+                            "fileurl": "https://moodle.test/pluginfile.php/6/mod_page/content/index.html",
+                        },
+                        {
+                            "type": "file",
+                            "filename": "fig.png",
+                            "fileurl": "https://moodle.test/f.png",
+                        },
+                    ],
+                },
+                {
+                    "id": 22,
+                    "name": "Handbook",
+                    "modname": "book",
+                    "url": "https://moodle.test/mod/book/view.php?id=22",
+                    "contents": [
+                        {"type": "content", "filename": "structure", "fileurl": ""},
+                        {"type": "file", "filename": "index.html", "fileurl": chapter.format(1)},
+                        {"type": "file", "filename": "index.html", "fileurl": chapter.format(2)},
+                    ],
+                },
+            ],
+        }
+    ]
+    pages = {
+        "/pluginfile.php/6/mod_page/content/index.html": "<h3>Eigen</h3><p>values</p>",
+        "/pluginfile.php/7/mod_book/chapter/1/index.html": "<h3>One</h3>",
+        "/pluginfile.php/7/mod_book/chapter/2/index.html": "<h3>Two</h3>",
+    }
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path in pages:
+            assert request.url.params["token"]
+            return httpx2.Response(
+                200, text=pages[request.url.path], headers={"content-type": "text/html"}
+            )
+        return httpx2.Response(200, json=course)
+
+    client = mock_moodle(handler)
+    response = client.post("/uploads/moodle/links", json={"course_id": 4510, "modules": [21, 22]})
+
+    assert response.status_code == 200, response.text
+    assert (tmp_uploads / "4510/reading/Notes.md").read_text() == (
+        "# Notes\n\nSource: https://moodle.test/mod/page/view.php?id=21\n\n### Eigen\n\nvalues\n"
+    )
+    assert (tmp_uploads / "4510/reading/Handbook.md").read_text().endswith("### One\n\n### Two\n")

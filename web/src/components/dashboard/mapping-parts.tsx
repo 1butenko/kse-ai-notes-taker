@@ -255,7 +255,7 @@ export function BooksPanel({
             return (
               <span key={book.material} className="text-muted-foreground">
                 {book.raw}: {n} {n === 1 ? "session cites" : "sessions cite"} it. Upload it to the
-                reading materials and press Map materials again.
+                reading materials.
               </span>
             );
           })}

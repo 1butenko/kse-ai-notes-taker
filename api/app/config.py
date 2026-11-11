@@ -46,6 +46,23 @@ class Settings(BaseSettings):
     public_api_url: PublicAPIURL = "http://localhost:8000"
     worker_url: str = "http://localhost:8001"
 
+    # AI Note Taker storage (app/routers/agent.py): Aurora PostgreSQL rows, S3 files.
+    aws_region: str = "eu-central-1"
+    s3_bucket: str = ""
+    # Aurora PostgreSQL (express configuration): IAM authentication only, no password.
+    db_host: str = ""
+    db_port: int = 5432
+    db_name: str = "postgres"
+    db_user: str = "postgres"
+
+    # Langfuse Prompt Management (app/prompts.py). Empty keys: use the local prompts/*.md files.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    # Trace agent runs that opt in (the lecture-notes agent). Traces hold the readings the
+    # agent read, so turn this off when they must not leave the app.
+    langfuse_tracing: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

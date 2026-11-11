@@ -11,14 +11,15 @@ from pypdf import PdfReader, PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from app.main import app
+from app.note_taker.lecture_notes.readings import load_lecture
 from app.plan import Plan
 from app.storage import sha256
 from app.syllabus import Transcript
 from app.worker import vision
 from app.worker.models import ModelSpec
 from app.worker.openrouter import OpenRouterClient
-from app.worker.sources import build_inputs, load_transcripts, loses_text
-from tests.test_notes import course
+from app.worker.sources import load_transcripts, loses_text
+from tests.courses import course
 from tests.test_plans import put_plan
 
 PROSE = "Gaussian elimination reduces a linear system to an equivalent echelon form."
@@ -139,21 +140,19 @@ def excerpt_course(root: Path) -> tuple[Plan, Transcript]:
 
 
 def test_notes_read_the_transcripts_and_warn_until_there_are_some(tmp_path: Path) -> None:
-    plan, transcript = excerpt_course(tmp_path)
+    excerpt_course(tmp_path)
 
-    before = build_inputs(tmp_path, tmp_path / "1", plan, transcript)
-    assert before.skipped == [
-        "1/reading/book.pdf: PDF page 2 of Ch. 1 has no extractable text (scanned or blank); "
-        "the notes miss what is on them",
-        "1/reading/book.pdf: PDF page 3 of Ch. 1 has formulas or matrices their PDF text "
-        "garbles, and no vision transcription yet; the notes may misread them",
+    before = load_lecture(tmp_path, "1", "s1")
+    assert before.warnings == [
+        "1/reading/book.pdf: PDF page 3 have formulas their PDF text garbles; read them with care",
+        "1/reading/book.pdf: PDF page 2 have no extractable text (scanned or blank)",
     ]
 
     transcribe(tmp_path, model()[0])
-    after = build_inputs(tmp_path, tmp_path / "1", plan, transcript)
+    after = load_lecture(tmp_path, "1", "s1")
 
-    assert after.skipped == []
-    text = {c.pdf_page: c.text for c in after.chunks if c.source == 0}
+    assert after.warnings == []
+    text = {p.pdf_page: p.text for p in after.readings[0].pages}
     assert text[1] == PROSE and text[3] == f"Page 3: {TRANSCRIBED}"
 
 

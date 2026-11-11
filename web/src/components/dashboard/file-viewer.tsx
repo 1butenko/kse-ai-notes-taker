@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { DownloadIcon } from "lucide-react";
 
+import { MarkdownPreview } from "@/components/dashboard/markdown-preview";
 import { buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { fileName, fileUrl, isPdfPath } from "@/lib/api";
@@ -11,10 +12,12 @@ type Viewing = { path: string; page?: number; title?: string; url?: string };
 
 const FileViewerContext = createContext<((viewing: Viewing) => void) | null>(null);
 
-/** Opens uploaded files and excerpts in a modal: PDFs inline, other types as a download. */
+/** Opens uploaded files and excerpts in a modal: PDFs and Markdown readings inline, other types
+ * as a download. */
 export function FileViewerProvider({ children }: { children: ReactNode }) {
   const [viewing, setViewing] = useState<Viewing | null>(null);
   const isPdf = viewing ? isPdfPath(viewing.path) : false;
+  const isMarkdown = viewing ? /\.md$/i.test(viewing.path) : false;
 
   return (
     <FileViewerContext.Provider value={setViewing}>
@@ -42,6 +45,8 @@ export function FileViewerProvider({ children }: { children: ReactNode }) {
                   title={viewing.title ?? fileName(viewing.path)}
                   className="min-h-0 w-full flex-1 rounded-lg border"
                 />
+              ) : isMarkdown ? (
+                <MarkdownPreview url={viewing.url ?? fileUrl(viewing.path)} />
               ) : (
                 <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
                   <p className="text-muted-foreground">

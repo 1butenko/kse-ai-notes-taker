@@ -1,33 +1,25 @@
 from collections.abc import AsyncIterator
 from typing import Annotated
+from uuid import UUID
 
 import httpx2
 from fastapi import Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
-from app.notes import LectureQueue
-from app.notes_revisions import EditResult, RenderJob
-from app.notes_suggestions import NoteSuggestion, VerificationJob
 from app.worker_contract import (
-    ApprovalRequest,
     BooksRequest,
     BooksResponse,
-    LecturesRequest,
-    LecturesResponse,
+    LectureNotesCancel,
+    LectureNotesCancelResponse,
+    LectureNotesRequest,
+    LectureNotesResponse,
     MapRequest,
     MapResponse,
-    NotesRequest,
-    NotesResponse,
-    RenderRequest,
-    RestoreRequest,
-    ReviseRequest,
-    StopRequest,
-    SuggestionActionRequest,
-    SuggestRequest,
+    NoteTakerRequest,
+    NoteTakerResponse,
     TranscribeRequest,
     TranscribeResponse,
-    VerifyTopicRequest,
 )
 
 
@@ -44,41 +36,19 @@ class WorkerClient:
     async def map_materials(self, request: MapRequest) -> MapResponse:
         return await self.call("/map", request, MapResponse)
 
-    async def generate_notes(self, request: NotesRequest) -> NotesResponse:
-        return await self.call("/notes", request, NotesResponse)
-
-    async def queue_lectures(self, request: LecturesRequest) -> LecturesResponse:
-        return await self.call("/notes/lectures", request, LecturesResponse)
-
-    async def stop_notes(self, request: StopRequest) -> LectureQueue:
-        return await self.call("/notes/stop", request, LectureQueue)
-
-    async def revise_notes(self, request: ReviseRequest) -> EditResult:
-        return await self.call("/notes/revise", request, EditResult)
-
-    async def restore_notes(self, request: RestoreRequest) -> EditResult:
-        return await self.call("/notes/restore", request, EditResult)
-
-    async def decide_notes(self, request: ApprovalRequest) -> EditResult:
-        return await self.call("/notes/approval", request, EditResult)
-
-    async def render_notes(self, request: RenderRequest) -> RenderJob:
-        return await self.call("/notes/render", request, RenderJob)
-
-    async def suggest_notes(self, request: SuggestRequest) -> NoteSuggestion:
-        return await self.call("/notes/suggestions", request, NoteSuggestion)
-
-    async def apply_suggestion(self, request: SuggestionActionRequest) -> EditResult:
-        return await self.call("/notes/suggestions/apply", request, EditResult)
-
-    async def reject_suggestion(self, request: SuggestionActionRequest) -> NoteSuggestion:
-        return await self.call("/notes/suggestions/reject", request, NoteSuggestion)
-
-    async def verify_topic(self, request: VerifyTopicRequest) -> VerificationJob:
-        return await self.call("/notes/verify", request, VerificationJob)
-
     async def transcribe_books(self, request: BooksRequest) -> BooksResponse:
         return await self.call("/books/transcribe", request, BooksResponse)
+
+    async def run_note_taker(self, request: NoteTakerRequest) -> NoteTakerResponse:
+        return await self.call("/note-taker/runs", request, NoteTakerResponse)
+
+    async def run_lecture_notes(self, request: LectureNotesRequest) -> LectureNotesResponse:
+        return await self.call("/lecture-notes/runs", request, LectureNotesResponse)
+
+    async def cancel_lecture_notes(self, run_id: UUID) -> LectureNotesCancelResponse:
+        return await self.call(
+            "/lecture-notes/cancel", LectureNotesCancel(run_id=run_id), LectureNotesCancelResponse
+        )
 
     async def call[T: BaseModel](self, path: str, request: BaseModel, response: type[T]) -> T:
         try:

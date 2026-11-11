@@ -8,8 +8,15 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
-from app.links import PageTooLarge, fetch, get_web_client, html_to_text, is_video
-from app.moodle import MoodleClient, get_moodle_client
+from app.links import (
+    PageTooLarge,
+    fetch,
+    get_web_client,
+    html_to_markdown,
+    is_video,
+    reading_markdown,
+)
+from app.moodle import Module, MoodleClient, get_moodle_client
 from app.plan import load_plan
 from app.routers.courses import moodle_errors
 from app.storage import sha256
@@ -143,6 +150,28 @@ async def upload_moodle_files(
         return staging.commit()
 
 
+async def save_moodle_page(
+    staging: Staging, directory: Path, module: Module, moodle: MoodleClient, settings: Settings
+) -> None:
+    """A `page` or `book` module as one Markdown reading: its HTML files (a book's chapters, in
+    order) read from Moodle with the token and converted."""
+    chapters = [
+        c for c in module.contents if c.type == "file" and c.filename.lower().endswith(".html")
+    ]
+    parts = []
+    for chapter in chapters:
+        with moodle_errors():
+            html = await moodle.read_text(settings.moodle_token, chapter.fileurl)
+        parts.append(html_to_markdown(html, chapter.fileurl))
+    text = "\n\n".join(part for part in parts if part)
+    if not text:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{module.name}: no text")
+    source = module.url or f"{settings.moodle_url.rstrip('/')}/mod/{module.modname}/view.php"
+    staging.add(directory / f"{safe_name(module.name)}.md").write_text(
+        reading_markdown(module.name, source, text), encoding="utf-8"
+    )
+
+
 class MoodleLinksRequest(BaseModel):
     course_id: int
     modules: list[int] = Field(min_length=1)
@@ -155,14 +184,15 @@ async def upload_moodle_links(
     web: Annotated[httpx2.AsyncClient, Depends(get_web_client)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> list[SavedFile]:
-    """Save the web pages that the course's Moodle links point to as reading materials: PDFs
-    as they are, HTML pages as text. Only links of the course itself are fetched."""
+    """Save the course's web pages as reading materials: what its `url` modules point to (PDFs
+    as they are, HTML pages as Markdown) and its own `page` and `book` modules (as Markdown).
+    Only modules of the course itself are fetched."""
     with moodle_errors():
         sections = await moodle.get_course_contents(settings.moodle_token, body.course_id)
+    modules = {m.id: m for s in sections for m in s.modules}
     links = {
         m.id: (m.name, c.fileurl)
-        for s in sections
-        for m in s.modules
+        for m in modules.values()
         if m.modname == "url"
         for c in m.contents[:1]
         if c.type == "url"
@@ -170,6 +200,9 @@ async def upload_moodle_links(
     directory = target_dir(settings, body.course_id, "reading")
     with Staging(settings, directory) as staging:
         for module in body.modules:
+            if module in modules and modules[module].modname in ("page", "book"):
+                await save_moodle_page(staging, directory, modules[module], moodle, settings)
+                continue
             if module not in links:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"No link {module} in this course")
             name, url = links[module]
@@ -194,12 +227,11 @@ async def upload_moodle_links(
                 staging.add(directory / f"{safe_name(name)}.pdf").write_bytes(page)
             elif "html" in content_type or "text/plain" in content_type:
                 text = page.decode(errors="replace")
-                if "html" in content_type:
-                    text = html_to_text(text)
-                if not text.strip():
+                text = html_to_markdown(text, url) if "html" in content_type else text.strip()
+                if not text:
                     raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{name}: no text")
                 staging.add(directory / f"{safe_name(name)}.md").write_text(
-                    f"# {name}\n\nSource: {url}\n\n{text}\n"
+                    reading_markdown(name, url, text), encoding="utf-8"
                 )
             else:
                 raise HTTPException(
