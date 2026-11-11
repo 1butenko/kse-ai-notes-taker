@@ -4,6 +4,17 @@ import pytest
 from langfuse.api import NotFoundError
 
 from app import prompts
+from app.note_taker.lecture_notes import skill_library
+
+
+@pytest.fixture(autouse=True)
+def no_skill_sync(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Skills are pushed and pulled with the prompts; their sync is tested in
+    test_lecture_notes.py."""
+    calls: list = []
+    monkeypatch.setattr(skill_library, "push", lambda client, force=False: calls.append("push"))
+    monkeypatch.setattr(skill_library, "pull", lambda client: calls.append("pull"))
+    return calls
 
 
 class FakeLangfuse:
@@ -75,7 +86,11 @@ def test_push_creates_missing_prompts_and_keeps_langfuse_edits(monkeypatch, caps
         FakeLangfuse({"note-taker/orchestrator": unchanged, "note-taker/moodle": "old"}),
     )
     prompts.push()
-    assert client.created == []
+    # Only the prompts Langfuse does not have are created; the edited one is left alone.
+    assert {c["name"] for c in client.created} == set(prompts.PROMPTS) - {
+        "note-taker/orchestrator",
+        "note-taker/moodle",
+    }
     out = capsys.readouterr().out
     assert "note-taker/orchestrator: unchanged (version 1)" in out
     assert "note-taker/moodle: differs from Langfuse version 1" in out

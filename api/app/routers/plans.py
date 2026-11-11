@@ -78,7 +78,7 @@ class SessionView(BaseModel):
     session: Session
     files: list[FileView]
     proposals: list[Proposal]
-    # This lecture's readings; a lecture run records the one it was written from.
+    # Fingerprint of this lecture's readings; a notes run records the one it read.
     materials: str
 
 

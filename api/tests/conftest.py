@@ -11,7 +11,7 @@ import httpx2  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import prompts  # noqa: E402
+from app import db, prompts  # noqa: E402
 from app.config import Settings, get_settings  # noqa: E402
 from app.main import app  # noqa: E402
 from app.moodle import MoodleClient, get_moodle_client  # noqa: E402
@@ -41,6 +41,17 @@ def in_process_worker() -> Iterator[None]:
     yield
     app.dependency_overrides.pop(get_worker_client, None)
     worker_app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def no_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never reach the real Aurora, even when DB_HOST is set (as in the Docker containers): the
+    worker's startup would mark live runs failed. Tests replace the routers' seams instead."""
+
+    def refuse():
+        raise db.DatabaseNotConfigured("Tests do not use the database")
+
+    monkeypatch.setattr(db, "connect", refuse)
 
 
 @pytest.fixture(autouse=True)

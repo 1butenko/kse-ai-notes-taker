@@ -5,16 +5,20 @@ The prefix uses the course UUID, not its title, so renaming a course never moves
 
     courses/<course-id>/course.json                       manifest (id, title, created_at)
     courses/<course-id>/materials/<file-id>/<file-name>   materials fetched from Moodle
+    courses/<course-id>/lecture-notes/<session>/<run>/    a lecture-notes page: index.html,
+                                                          index_files/, assets/, index.qmd
 """
 
 import hashlib
 import json
+import mimetypes
+import os
 import re
 import unicodedata
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, BinaryIO
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import boto3
 
@@ -31,6 +35,17 @@ _UNSAFE_KEY_CHARS = re.compile(r"[^A-Za-z0-9!\-_.*'()]+")
 def sha256(file: Path) -> str:
     with file.open("rb") as f:
         return hashlib.file_digest(f, "sha256").hexdigest()
+
+
+def atomic_json(path: Path, value: Any) -> None:
+    """Write JSON so a reader never sees a half-written file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}-{uuid4().hex}")
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2))
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def course_prefix(course_id: UUID) -> str:
@@ -52,6 +67,10 @@ def material_key(course_id: UUID, file_id: UUID, file_name: str) -> str:
     return f"{course_prefix(course_id)}materials/{file_id}/{safe_file_name(file_name)}"
 
 
+def lecture_notes_prefix(course_id: UUID, session_id: str, run_id: UUID) -> str:
+    return f"{course_prefix(course_id)}lecture-notes/{safe_file_name(session_id)}/{run_id}/"
+
+
 @lru_cache
 def s3_client() -> Any:
     return boto3.client("s3", region_name=get_settings().aws_region)
@@ -61,6 +80,18 @@ def upload_stream(key: str, fileobj: BinaryIO, content_type: str | None = None) 
     """Stream a file-like object to S3 (multipart for large files) without buffering it all."""
     extra = {"ContentType": content_type} if content_type else {}
     s3_client().upload_fileobj(fileobj, get_settings().s3_bucket, key, ExtraArgs=extra)
+
+
+def put_file(key: str, path: Path) -> None:
+    """Upload one local file, with its content type from its name."""
+    content_type, _ = mimetypes.guess_type(path.name)
+    with path.open("rb") as f:
+        upload_stream(key, f, content_type or "application/octet-stream")
+
+
+def get_object(key: str) -> dict[str, Any]:
+    """An object's body (streaming) and metadata."""
+    return s3_client().get_object(Bucket=get_settings().s3_bucket, Key=key)
 
 
 def presigned_url(key: str, expires_in: int = 3600) -> str:

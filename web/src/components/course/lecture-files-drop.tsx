@@ -53,8 +53,8 @@ export function LectureFilesDrop({ course, sessionId, onPlan }: LectureFilesDrop
         upload(Array.from(event.dataTransfer.files));
       }}
       className={cn(
-        "flex flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-6 text-center transition-colors",
-        over && "border-ring bg-muted",
+        "flex flex-col items-center gap-2 rounded-lg border border-dashed border-muted-foreground/30 px-4 py-5 text-center transition-colors",
+        over && "border-ring bg-background",
       )}
     >
       <p className="text-sm font-medium">Drop slides, handouts or your own notes here</p>

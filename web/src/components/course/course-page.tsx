@@ -1,15 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import {
   CircleAlertIcon,
-  CircleStopIcon,
   EllipsisIcon,
-  HistoryIcon,
   InfoIcon,
   RefreshCwIcon,
-  SigmaIcon,
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
@@ -20,12 +16,10 @@ import { AgentReport, useAgentCourse } from "@/components/course/agent-materials
 import { LectureList } from "@/components/course/lecture-list";
 import { MaterialsPanel } from "@/components/course/materials-panel";
 import { SetupReview } from "@/components/course/setup-review";
-import { useCourseNotes, type CourseNotes } from "@/components/course/use-course-notes";
-import { RunProgress } from "@/components/dashboard/notes-stage";
 import { SyllabusUpload } from "@/components/dashboard/syllabus-upload";
+import { useCourseLectureNotes } from "@/components/lecture-notes/use-course-lecture-notes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogClose,
@@ -42,7 +36,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
@@ -52,17 +45,14 @@ import {
   deleteCourse,
   deleteSyllabus,
   getCourseInfo,
-  getCourseNotation,
   getPlan,
   listCourseFiles,
-  previewPath,
   startAgentSync,
   setPrimarySyllabus,
   transcribeSyllabus,
   uploadFiles,
   type CourseFiles,
   type CourseInfo,
-  type CourseNotation,
   type PlanView,
 } from "@/lib/api";
 
@@ -82,15 +72,6 @@ function plural(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-function when(iso: string) {
-  return new Date(iso).toLocaleString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 /** Reads the syllabus into lectures and makes it the course plan. */
 async function readSyllabus(course: string, path: string, force: boolean) {
@@ -118,108 +99,6 @@ function SetupProgress({ title, detail }: { title: string; detail: string }) {
   );
 }
 
-/** The run being written, which lecture it is, and how many wait after it. */
-function QueueProgress({ plan, notes }: { plan: PlanView; notes: CourseNotes }) {
-  const active = notes.active;
-  const waiting = notes.queue.waiting.length;
-  const lecture = active?.session_id
-    ? plan.sessions.find((s) => s.id === active.session_id)
-    : undefined;
-  return (
-    <section aria-label="Notes being written" className="flex flex-col gap-2">
-      <p className="text-sm">
-        {active
-          ? lecture
-            ? `Writing ${lecture.session.topic || lecture.session.label}`
-            : "Writing whole-course notes"
-          : "Starting the next lecture"}
-        {waiting > 0 && `, ${plural(waiting, "lecture", "lectures")} queued after it`}
-      </p>
-      {active && <RunProgress run={active} />}
-    </section>
-  );
-}
-
-/** Whole-course generations from before lecture notes: still readable, never in the lectures. */
-function PreviousGenerations({ course, notes }: { course: string; notes: CourseNotes }) {
-  if (notes.legacy.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        No whole-course generations. Each lecture&apos;s earlier notes are on its lecture page,
-        under Previous versions.
-      </p>
-    );
-  }
-  return (
-    <ul className="flex flex-col border-t">
-      {notes.legacy.map((run) => (
-        <li key={run.id} className="flex flex-wrap items-center gap-3 border-b py-3">
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="font-medium">{when(run.created_at)}</span>
-            <span className="text-sm text-muted-foreground">
-              {run.status === "failed" ? run.error : "Whole-course notes"}
-            </span>
-          </span>
-          <Badge variant={run.status === "failed" ? "destructive" : "outline"}>
-            {run.status === "done" ? "Ready" : run.status === "failed" ? "Failed" : "Writing"}
-          </Badge>
-          {run.status === "done" && (
-            <Link href={previewPath(course, run.id)} className={buttonVariants({ size: "sm" })}>
-              Read notes
-            </Link>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function NotationTable({ notation }: { notation: CourseNotation | null }) {
-  if (notation === null) return <Skeleton className="h-32 w-full" />;
-  if (notation.notation.length === 0 && notation.terminology.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Empty until the first lecture note is written. Its symbols and terms start the sheet, and
-        every later lecture uses them and adds its own.
-      </p>
-    );
-  }
-  return (
-    <div className="flex max-h-[60svh] flex-col gap-6 overflow-y-auto">
-      {notation.notation.length > 0 && (
-        <table className="w-full text-sm">
-          <caption className="pb-2 text-left font-medium">Notation</caption>
-          <tbody>
-            {notation.notation.map((entry) => (
-              <tr key={entry.symbol} className="border-t align-top">
-                <th scope="row" className="w-1/3 py-2 pr-3 text-left font-normal tabular-nums">
-                  {entry.symbol}
-                </th>
-                <td className="py-2 text-muted-foreground">{entry.meaning}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {notation.terminology.length > 0 && (
-        <table className="w-full text-sm">
-          <caption className="pb-2 text-left font-medium">Terms</caption>
-          <tbody>
-            {notation.terminology.map((entry) => (
-              <tr key={entry.term} className="border-t align-top">
-                <th scope="row" className="w-1/3 py-2 pr-3 text-left font-medium">
-                  {entry.term}
-                </th>
-                <td className="py-2 text-muted-foreground">{entry.definition}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
 export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   const courseId = /^\d+$/.test(course) ? Number(course) : undefined;
   const [developerMode, setDeveloperMode] = useDeveloperMode();
@@ -237,10 +116,7 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   const [newSyllabus, setNewSyllabus] = useState<File[]>([]);
   const [replacing, setReplacing] = useState<"closed" | "open" | "saving">("closed");
   const [deleting, setDeleting] = useState<"closed" | "open" | "deleting">("closed");
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [notationOpen, setNotationOpen] = useState(false);
-  const [notation, setNotation] = useState<CourseNotation | null>(null);
-  const notes = useCourseNotes(course);
+  const notes = useCourseLectureNotes(course);
   const agent = useAgentCourse(course, courseId !== undefined);
   // A course the AI Note Taker sets up: it reads the syllabus and prepares the lectures.
   const agentRun = agent.data?.latest_run ?? undefined;
@@ -402,18 +278,8 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
     }
   };
 
-  const openNotation = () => {
-    setNotation(null);
-    setNotationOpen(true);
-    getCourseNotation(course).then(setNotation, (err) => {
-      toast.error(errorMessage(err));
-      setNotationOpen(false);
-    });
-  };
-
   const hasMaterials = Boolean(plan?.sessions.some((s) => s.files.length > 0));
   const lectures = plan?.transcript?.sessions.length ?? 0;
-  const generating = notes.busy;
 
   return (
     <div className="flex flex-col gap-8">
@@ -431,12 +297,6 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {phase === "ready" && generating && (
-            <Button size="lg" variant="outline" disabled={notes.starting} onClick={notes.stop}>
-              {notes.starting ? <Spinner /> : <CircleStopIcon />}
-              Stop
-            </Button>
-          )}
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button variant="outline" size="icon-lg" aria-label="Course menu" />}
@@ -458,37 +318,18 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
                 />
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem disabled={phase === "loading"} onClick={openNotation}>
-                <SigmaIcon />
-                Course notation
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={phase !== "ready"} onClick={() => setHistoryOpen(true)}>
-                <HistoryIcon />
-                Previous generations
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                disabled={!syllabusPath || reading || generating}
-                onClick={reread}
-              >
+              <DropdownMenuItem disabled={!syllabusPath || reading} onClick={reread}>
                 <RefreshCwIcon />
                 Read the syllabus again
               </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={reading || generating}
-                onClick={() => setReplacing("open")}
-              >
+              <DropdownMenuItem disabled={reading} onClick={() => setReplacing("open")}>
                 <UploadIcon />
                 Replace the syllabus file
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                disabled={generating}
-                onClick={() => setDeleting("open")}
-              >
+              <DropdownMenuItem variant="destructive" onClick={() => setDeleting("open")}>
                 <Trash2Icon />
-                {generating ? "Start over (stop the notes first)" : "Start over"}
+                Start over
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -598,14 +439,13 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
 
       {phase === "ready" && plan && files && (
         <>
-          {generating && <QueueProgress plan={plan} notes={notes} />}
           {!hasMaterials && (
             <Alert>
               <InfoIcon />
               <AlertTitle>No lecture has readings yet</AlertTitle>
               <AlertDescription>
                 Add the books the syllabus cites, or drop a file on a lecture&apos;s page, to
-                generate its note.
+                write its notes.
               </AlertDescription>
             </Alert>
           )}
@@ -674,9 +514,8 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
           <DialogHeader>
             <DialogTitle>Start over?</DialogTitle>
             <DialogDescription>
-              {name} leaves the app with its syllabus, readings, lectures and every generated note.
-              The files move to the server&apos;s trash folder, where an administrator can restore
-              them.
+              {name} leaves the app with its syllabus, readings and lectures. The files move to
+              the server&apos;s trash folder, where an administrator can restore them.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -689,35 +528,6 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={notationOpen} onOpenChange={setNotationOpen}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Course notation</DialogTitle>
-            <DialogDescription>
-              The symbols and terms every lecture note uses. Each new note adds what it introduces;
-              existing meanings never change.
-            </DialogDescription>
-          </DialogHeader>
-          <NotationTable notation={notation} />
-        </DialogContent>
-      </Dialog>
-
-      <Sheet
-        open={historyOpen}
-        onOpenChange={(open) => {
-          setHistoryOpen(open);
-          if (!open) notes.reload();
-        }}
-      >
-        <SheetContent className="w-full overflow-y-auto data-[side=right]:sm:max-w-2xl">
-          <SheetHeader>
-            <SheetTitle>Previous generations</SheetTitle>
-          </SheetHeader>
-          <div className="px-4 pb-4">
-            <PreviousGenerations course={course} notes={notes} />
-          </div>
-        </SheetContent>
-      </Sheet>
     </div>
   );
 }

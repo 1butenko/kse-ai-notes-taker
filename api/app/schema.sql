@@ -68,3 +68,34 @@ ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS todos jsonb NOT NULL DEFAULT '[]'
 ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS actions jsonb NOT NULL DEFAULT '[]';
 
 CREATE INDEX IF NOT EXISTS sync_runs_course_idx ON sync_runs (course_id, started_at DESC);
+
+-- One row per run of the lecture-notes agent (app/note_taker/lecture_notes) for one lecture.
+CREATE TABLE IF NOT EXISTS lecture_note_runs (
+    id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    course_id            uuid NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    -- The lecture: its session id in the course plan, and its label when the run started.
+    session_id           text NOT NULL,
+    session_label        text NOT NULL DEFAULT '',
+    status               text NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'succeeded', 'failed', 'cancelled')),
+    step                 text,
+    todos                jsonb NOT NULL DEFAULT '[]',
+    actions              jsonb NOT NULL DEFAULT '[]',
+    report               text,
+    error                text,
+    -- The published page: courses/<course-id>/lecture-notes/<session>/<run>/ and its files.
+    s3_prefix            text,
+    files                jsonb NOT NULL DEFAULT '[]',
+    -- The lecture's readings when the run started (app.plan.session_fingerprint).
+    readings_fingerprint text NOT NULL DEFAULT '',
+    model                text,
+    -- Langfuse prompt and skill versions the run used ({"prompts": {...}, "skills": {...}}).
+    prompt_versions      jsonb NOT NULL DEFAULT '{}',
+    langfuse_trace_id    text,
+    renders              int NOT NULL DEFAULT 0,
+    started_at           timestamptz NOT NULL DEFAULT now(),
+    finished_at          timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS lecture_note_runs_session_idx
+    ON lecture_note_runs (course_id, session_id, started_at DESC);

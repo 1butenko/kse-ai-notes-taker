@@ -185,23 +185,29 @@ def course_detail(
     }
 
 
+def ensure_course(conn: Any, course_key: str, title: str, moodle_id: int | None) -> dict[str, Any]:
+    """The course's row, created on first use (with its S3 manifest), its title kept current."""
+    course = conn.execute(
+        "INSERT INTO courses (title, moodle_course_id, course_key) VALUES (%s, %s, %s)"
+        " ON CONFLICT (course_key) DO UPDATE SET title = EXCLUDED.title,"
+        " moodle_course_id = COALESCE(EXCLUDED.moodle_course_id, courses.moodle_course_id)"
+        " RETURNING id, title, created_at, (xmax = 0) AS inserted",
+        (title, moodle_id, course_key),
+    ).fetchone()
+    assert course is not None
+    if course["inserted"]:
+        # Rolls the row back if the S3 write fails.
+        storage.write_manifest(course)
+    return course
+
+
 def begin_run(
     course_key: str, title: str, moodle_id: int, focus: str | None
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Link the course to its row (created on first use, title kept current) and record a
-    `running` run. The run is None when one is already live for this course."""
+    """Link the course to its row and record a `running` run. The run is None when one is
+    already live for this course."""
     with db.transaction() as conn:
-        course = conn.execute(
-            "INSERT INTO courses (title, moodle_course_id, course_key) VALUES (%s, %s, %s)"
-            " ON CONFLICT (course_key) DO UPDATE"
-            " SET title = EXCLUDED.title, moodle_course_id = EXCLUDED.moodle_course_id"
-            " RETURNING id, title, created_at, (xmax = 0) AS inserted",
-            (title, moodle_id, course_key),
-        ).fetchone()
-        assert course is not None
-        if course["inserted"]:
-            # Rolls the row back if the S3 write fails.
-            storage.write_manifest(course)
+        course = ensure_course(conn, course_key, title, moodle_id)
         return course, sync.start_run(conn, course["id"], focus)
 
 

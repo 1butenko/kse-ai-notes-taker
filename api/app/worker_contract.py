@@ -2,11 +2,8 @@
 
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from app.notes import LectureQueue, NotesRun, QueueItem, RenderFormat
-from app.notes_revisions import ApprovalAction, TopicPatch
-from app.notes_suggestions import SuggestionRequest
 from app.plan import BookMatch, Plan, Proposal
 from app.syllabus import SyllabusExtraction, Transcript
 
@@ -33,82 +30,6 @@ class MapResponse(BaseModel):
     proposals: list[Proposal]
 
 
-class NotesRequest(BaseModel):
-    course: str
-    run: str
-    plan: Plan
-    transcript: Transcript
-
-
-NotesResponse = NotesRun
-
-
-class LecturesRequest(BaseModel):
-    """Write these lectures' notes one after another; the worker reads each from disk."""
-
-    course: str
-    items: list[QueueItem] = Field(min_length=1)
-
-
-class LecturesResponse(BaseModel):
-    run: NotesRun
-    queue: LectureQueue
-
-
-class StopRequest(BaseModel):
-    course: str
-
-
-class ReviseRequest(BaseModel):
-    course: str
-    run: str
-    topic: str
-    patch: TopicPatch
-
-
-class RestoreRequest(BaseModel):
-    course: str
-    run: str
-    revision: int
-    base_revision: int
-
-
-class ApprovalRequest(BaseModel):
-    course: str
-    run: str
-    topic: str
-    action: ApprovalAction
-
-
-class RenderRequest(BaseModel):
-    course: str
-    run: str
-    revision: int
-    formats: list[RenderFormat]
-
-
-class SuggestRequest(BaseModel):
-    course: str
-    run: str
-    suggestion: SuggestionRequest
-
-
-class SuggestionActionRequest(BaseModel):
-    """Apply (with the base revision the reviewer saw) or reject one suggestion."""
-
-    course: str
-    run: str
-    suggestion: str
-    base_revision: int | None = None
-
-
-class VerifyTopicRequest(BaseModel):
-    course: str
-    run: str
-    topic: str
-    base_revision: int
-
-
 class BooksRequest(BaseModel):
     course: str
 
@@ -130,3 +51,25 @@ class NoteTakerRequest(BaseModel):
 
 class NoteTakerResponse(BaseModel):
     started: bool
+
+
+class LectureNotesRequest(BaseModel):
+    """One lecture-notes run, already recorded in `lecture_note_runs` by the API."""
+
+    run_id: UUID
+    course_id: UUID
+    course: str  # the app's course key (uploads folder)
+    session_id: str
+
+
+class LectureNotesResponse(BaseModel):
+    started: bool
+
+
+class LectureNotesCancel(BaseModel):
+    run_id: UUID
+
+
+class LectureNotesCancelResponse(BaseModel):
+    # False when the worker is not running it (already finished, or lost in a restart).
+    cancelled: bool

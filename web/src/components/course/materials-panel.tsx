@@ -49,7 +49,7 @@ function lecturesUsing(plan: PlanView, path: string) {
   ).length;
 }
 
-function PanelTitle({ id, title, count }: { id: string; title: string; count: number }) {
+export function PanelTitle({ id, title, count }: { id: string; title: string; count: number }) {
   return (
     <div className="flex items-center justify-between gap-2">
       <h2 id={id} className="text-base">
