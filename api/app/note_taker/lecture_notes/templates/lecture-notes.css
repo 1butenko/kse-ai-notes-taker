@@ -1,0 +1,57 @@
+/* Lecture notes written by the lecture-notes agent. Quarto's default (Bootstrap) theme does the
+   rest; this keeps long reads comfortable and figures centred. */
+
+body {
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+
+main h2 {
+  margin-top: 2.5rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--bs-border-color, #dee2e6);
+}
+
+main h3 {
+  margin-top: 1.75rem;
+}
+
+.callout {
+  margin: 1.5rem 0;
+}
+
+.cell-output-display svg,
+figure svg,
+figure img {
+  max-width: 100%;
+  height: auto;
+}
+
+figure,
+.quarto-figure {
+  text-align: center;
+}
+
+.figure-caption,
+figcaption {
+  font-size: 0.9rem;
+  color: var(--bs-secondary-color, #6c757d);
+}
+
+pre.mermaid {
+  background: transparent;
+  border: 0;
+}
+
+.panel-tabset .nav-tabs {
+  flex-wrap: wrap;
+}
+
+table {
+  font-size: 0.95rem;
+}
+
+mjx-container[display="true"] {
+  overflow-x: auto;
+  overflow-y: hidden;
+}

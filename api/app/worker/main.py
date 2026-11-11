@@ -5,26 +5,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 
-from app.notes import RUN_ID, LectureQueue, run_dir
-from app.notes_revisions import (
-    EditResult,
-    InvalidEdit,
-    RenderJob,
-    RevisionConflict,
-    RevisionNotFound,
-)
-from app.notes_suggestions import NoteSuggestion, VerificationJob
-from app.plan import UnknownSession
 from app.syllabus import SyllabusExtraction
-from app.worker import lectures, note_suggestions, revisions, vision
+from app.worker import vision
 from app.worker.config import WorkerSettings, get_worker_settings
 from app.worker.llm import ask
 from app.worker.mapping import run_mapping
-from app.worker.models import NotesModels
-from app.worker.notes import ACTIVE, fail_interrupted, open_run
 from app.worker.openrouter import (
     Opener,
     OpenRouterClient,
@@ -33,26 +22,18 @@ from app.worker.openrouter import (
 )
 from app.worker.transcribe import EmptyDocument, build_messages, drop_bad_refs
 from app.worker_contract import (
-    ApprovalRequest,
     BooksRequest,
     BooksResponse,
-    LecturesRequest,
-    LecturesResponse,
+    LectureNotesCancel,
+    LectureNotesCancelResponse,
+    LectureNotesRequest,
+    LectureNotesResponse,
     MapRequest,
     MapResponse,
-    NotesRequest,
-    NotesResponse,
     NoteTakerRequest,
     NoteTakerResponse,
-    RenderRequest,
-    RestoreRequest,
-    ReviseRequest,
-    StopRequest,
-    SuggestionActionRequest,
-    SuggestRequest,
     TranscribeRequest,
     TranscribeResponse,
-    VerifyTopicRequest,
 )
 
 COURSE = re.compile(r"^(local|\d+)$")
@@ -71,11 +52,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 "Another worker is already serving this uploads directory"
             ) from error
         try:
-            await asyncio.to_thread(fail_interrupted, settings.uploads_dir)
-            await asyncio.to_thread(lectures.drop_queues, settings.uploads_dir)
-            await asyncio.to_thread(revisions.fail_interrupted_renders, settings.uploads_dir)
-            await asyncio.to_thread(note_suggestions.fail_interrupted_jobs, settings.uploads_dir)
             await asyncio.to_thread(fail_interrupted_note_taker_runs)
+            await asyncio.to_thread(fail_interrupted_lecture_note_runs)
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
@@ -90,6 +68,16 @@ def fail_interrupted_note_taker_runs() -> None:
             print(f"Marked {count} interrupted AI Note Taker run(s) as failed")
     except Exception as error:
         print(f"Could not check for interrupted AI Note Taker runs: {error!r}")
+
+
+def fail_interrupted_lecture_note_runs() -> None:
+    try:
+        from app.note_taker.lecture_notes import runs
+
+        if count := runs.fail_interrupted_runs():
+            print(f"Marked {count} interrupted lecture-notes run(s) as failed")
+    except Exception as error:
+        print(f"Could not check for interrupted lecture-notes runs: {error!r}")
 
 
 app = FastAPI(title="kse-ai-notes-taker-worker", lifespan=lifespan)
@@ -186,235 +174,52 @@ async def run_note_taker(
     return NoteTakerResponse(started=True)
 
 
-@app.post("/notes", status_code=status.HTTP_202_ACCEPTED)
-async def generate_notes(
-    body: NotesRequest,
+# Lecture-notes runs going on this worker; at most `lecture_notes_concurrency` at once.
+LECTURE_NOTES: set[UUID] = set()
+
+
+@app.post("/lecture-notes/runs", status_code=status.HTTP_202_ACCEPTED)
+async def run_lecture_notes(
+    body: LectureNotesRequest,
     background: BackgroundTasks,
     settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
-    opener: Annotated[Opener | None, Depends(get_openrouter_opener)],
-) -> NotesResponse:
-    """Start (or resume) a notes run; it continues after the response, see run.json."""
+) -> LectureNotesResponse:
+    """Write one lecture's notes in the background. The outcome is written to its
+    `lecture_note_runs` row (see `app.note_taker.lecture_notes.runs`), which the API reads."""
     if not COURSE.match(body.course):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {body.course!r}")
-    if not RUN_ID.match(body.run):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid run: {body.run!r}")
-    if opener is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Notes are not configured")
-    if body.course in ACTIVE:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Notes are already being generated")
-
-    ACTIVE.add(body.course)  # Reserved before admission waits for the run lock off the loop.
-    lectures.STOPPING.discard(body.course)
-    try:
-        store = await asyncio.to_thread(
-            open_run,
-            settings.uploads_dir / body.course,
-            body.course,
-            body.run,
-            NotesModels.from_settings(settings),
-            body.plan,
-            body.transcript,
-        )
-    except RevisionConflict as error:
-        ACTIVE.discard(body.course)
-        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
-    except BaseException:
-        ACTIVE.discard(body.course)
-        raise
-    lectures.QUEUES[body.course] = LectureQueue(active=store.run.id)
-    background.add_task(
-        lectures.drain, opener, settings, body.course, (store, body.plan, body.transcript)
-    )
-    return store.run
-
-
-@app.post("/notes/lectures", status_code=status.HTTP_202_ACCEPTED)
-async def queue_lectures(
-    body: LecturesRequest,
-    background: BackgroundTasks,
-    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
-    opener: Annotated[Opener | None, Depends(get_openrouter_opener)],
-) -> LecturesResponse:
-    """Write these lectures one at a time: the first is admitted now, the rest wait."""
-    if not COURSE.match(body.course):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {body.course!r}")
-    for item in body.items:
-        if any(run and not RUN_ID.match(run) for run in (item.resume, item.retry)):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid run to resume or retry")
-    if opener is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Notes are not configured")
-    if body.course in ACTIVE:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Notes are already being generated")
-
-    ACTIVE.add(body.course)
-    lectures.STOPPING.discard(body.course)
-    first, *rest = body.items
-    try:
-        admitted = await asyncio.to_thread(lectures.admit, settings, body.course, first)
-    except UnknownSession as error:
-        ACTIVE.discard(body.course)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Lecture not found") from error
-    except (lectures.NoReadings, RevisionConflict) as error:
-        ACTIVE.discard(body.course)
-        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
-    except BaseException:
-        ACTIVE.discard(body.course)
-        raise
-    store = admitted[0]
-    queue = LectureQueue(waiting=rest, active=store.run.id, active_session=store.run.session_id)
-    lectures.QUEUES[body.course] = queue
-    lectures.save_queue(settings.uploads_dir / body.course, queue)
-    background.add_task(lectures.drain, opener, settings, body.course, admitted)
-    return LecturesResponse(run=store.run, queue=queue)
-
-
-@app.post("/notes/stop")
-async def stop_notes(
-    body: StopRequest, settings: Annotated[WorkerSettings, Depends(get_worker_settings)]
-) -> LectureQueue:
-    """Cancel the run being written and empty the queue; the run stays resumable.
-
-    Async on purpose: the job's task can only be cancelled from its own event loop.
-    """
-    if not COURSE.match(body.course):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {body.course!r}")
-    return lectures.stop(settings, body.course)
-
-
-def run_directory(settings: WorkerSettings, course: str, run: str) -> Path:
-    if not COURSE.match(course):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {course!r}")
-    if not RUN_ID.match(run):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid run: {run!r}")
-    return run_dir(settings.uploads_dir / course, run)
-
-
-@app.post("/notes/revise")
-async def revise_notes(
-    body: ReviseRequest,
-    background: BackgroundTasks,
-    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
-) -> EditResult:
-    """Save one topic's blocks as a new immutable revision, without a model."""
-    directory = run_directory(settings, body.course, body.run)
-    result = await revisions.revise(directory, body.topic, body.patch)
-    if result.render:
-        background.add_task(revisions.render_revision, directory, result.render.id, settings)
-    return result
-
-
-@app.post("/notes/restore")
-async def restore_notes(
-    body: RestoreRequest,
-    background: BackgroundTasks,
-    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
-) -> EditResult:
-    """Copy an earlier revision's content into a new revision, without a model."""
-    directory = run_directory(settings, body.course, body.run)
-    result = await revisions.restore(directory, body.revision, body.base_revision)
-    if result.render:
-        background.add_task(revisions.render_revision, directory, result.render.id, settings)
-    return result
-
-
-@app.post("/notes/approval")
-async def decide_notes(
-    body: ApprovalRequest,
-    background: BackgroundTasks,
-    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
-) -> EditResult:
-    directory = run_directory(settings, body.course, body.run)
-    result = await revisions.decide(directory, body.topic, body.action)
-    if result.render:
-        background.add_task(revisions.render_revision, directory, result.render.id, settings)
-    return result
-
-
-@app.post("/notes/suggestions", status_code=status.HTTP_202_ACCEPTED)
-async def suggest_notes(
-    body: SuggestRequest,
-    background: BackgroundTasks,
-    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
-    opener: Annotated[Opener | None, Depends(get_openrouter_opener)],
-) -> NoteSuggestion:
-    """Prepare a proposal for some blocks of one topic; it changes nothing until applied."""
-    directory = run_directory(settings, body.course, body.run)
-    if opener is None:
+    if not settings.openrouter_api_key:
         raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "AI suggestions are not configured"
+            status.HTTP_503_SERVICE_UNAVAILABLE, "OPENROUTER_API_KEY is not set on the worker"
         )
-    record = await revisions.guarded(
-        lambda: note_suggestions.create_suggestion(directory, body.suggestion)
-    )
-    background.add_task(note_suggestions.run_suggestion, directory, record.id, settings, opener)
-    return record.public()
-
-
-@app.post("/notes/suggestions/apply")
-async def apply_suggestion(
-    body: SuggestionActionRequest,
-    background: BackgroundTasks,
-    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
-) -> EditResult:
-    """Commit a ready suggestion as a new revision, once."""
-    directory = run_directory(settings, body.course, body.run)
-    if body.base_revision is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "base_revision is required")
-    result, _ = await note_suggestions.apply(directory, body.suggestion, body.base_revision)
-    if result.render:
-        background.add_task(revisions.render_revision, directory, result.render.id, settings)
-    return result
-
-
-@app.post("/notes/suggestions/reject")
-async def reject_suggestion(
-    body: SuggestionActionRequest,
-    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
-) -> NoteSuggestion:
-    directory = run_directory(settings, body.course, body.run)
-    record = await revisions.guarded(
-        lambda: note_suggestions.reject_suggestion(directory, body.suggestion)
-    )
-    return record.public()
-
-
-@app.post("/notes/verify", status_code=status.HTTP_202_ACCEPTED)
-async def verify_topic(
-    body: VerifyTopicRequest,
-    background: BackgroundTasks,
-    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
-    opener: Annotated[Opener | None, Depends(get_openrouter_opener)],
-) -> VerificationJob:
-    """Check one topic's saved text against its evidence, without rewriting anything."""
-    directory = run_directory(settings, body.course, body.run)
-    if opener is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Verification is not configured")
-    job = await revisions.guarded(
-        lambda: note_suggestions.create_verification(directory, body.topic, body.base_revision)
-    )
-    background.add_task(note_suggestions.run_verification, directory, job.id, settings, opener)
-    return job
-
-
-@app.post("/notes/render", status_code=status.HTTP_202_ACCEPTED)
-async def render_saved_notes(
-    body: RenderRequest,
-    background: BackgroundTasks,
-    settings: Annotated[WorkerSettings, Depends(get_worker_settings)],
-) -> RenderJob:
-    directory = run_directory(settings, body.course, body.run)
-    try:
-        job = await asyncio.to_thread(
-            revisions.enqueue_render, directory, body.revision, body.formats
+    if len(LECTURE_NOTES) >= max(1, settings.lecture_notes_concurrency):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Other lectures' notes are being written; try again in a few minutes",
         )
-    except RevisionNotFound as error:
-        raise HTTPException(404, str(error)) from error
-    except InvalidEdit as error:
-        raise HTTPException(422, str(error)) from error
-    except RevisionConflict as error:
-        raise HTTPException(409, str(error)) from error
-    background.add_task(revisions.render_revision, directory, job.id, settings)
-    return job
+    from app.note_taker.lecture_notes import runs
+
+    LECTURE_NOTES.add(body.run_id)
+
+    def execute() -> None:
+        try:
+            runs.execute_run(body.run_id, body.course_id, body.course, body.session_id)
+        finally:
+            LECTURE_NOTES.discard(body.run_id)
+
+    # A sync function: Starlette runs it in a thread, off the event loop.
+    background.add_task(execute)
+    return LectureNotesResponse(started=True)
+
+
+@app.post("/lecture-notes/cancel")
+async def cancel_lecture_notes(body: LectureNotesCancel) -> LectureNotesCancelResponse:
+    from app.note_taker.lecture_notes import runs
+
+    event = runs.CANCEL.get(body.run_id)
+    if event is not None:
+        event.set()
+    return LectureNotesCancelResponse(cancelled=event is not None)
 
 
 @app.get("/health")

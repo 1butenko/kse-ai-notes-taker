@@ -4,11 +4,10 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, StringConstraints, ValidationError
+from pydantic import BaseModel, StringConstraints
 
 from app.config import Settings, get_settings
 from app.course import CourseInfo, load_info, save_info
-from app.notes import CourseNotation, load_course_notation, load_queue, load_run, notes_dir
 from app.routers.plans import COURSE, course_dir
 
 router = APIRouter(prefix="/course-info", tags=["course-info"])
@@ -67,7 +66,7 @@ def approval(settings: Settings, course: str, approved_at: str | None) -> Course
 def approve_readings(
     course: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> CourseInfo:
-    """The lecturer approved the readings per lecture; the notes section opens."""
+    """The lecturer approved the readings per lecture."""
     return approval(settings, course, datetime.now(UTC).isoformat(timespec="seconds"))
 
 
@@ -78,33 +77,6 @@ def revoke_readings_approval(
     return approval(settings, course, None)
 
 
-@router.get("/{course}/notation")
-def get_notation(
-    course: str, settings: Annotated[Settings, Depends(get_settings)]
-) -> CourseNotation:
-    """The notation and terms lecture notes share; read-only."""
-    return load_course_notation(course_dir(settings, course))
-
-
-def generating(directory: Path) -> bool:
-    """A run of the course is queued or running, or lectures wait in its queue; unreadable
-    run files count as idle."""
-    queue = load_queue(directory)
-    if queue.waiting or queue.active:
-        return True
-    runs = notes_dir(directory)
-    if not runs.is_dir():
-        return False
-    for entry in runs.iterdir():
-        try:
-            run = load_run(directory, entry.name)
-        except (OSError, ValidationError):
-            continue
-        if run and run.status in ("queued", "running"):
-            return True
-    return False
-
-
 def trash_dir(settings: Settings) -> Path:
     """Where Start over puts a course. Not a course key, so it is never listed."""
     return settings.uploads_dir / ".trash"
@@ -112,17 +84,11 @@ def trash_dir(settings: Settings) -> Path:
 
 @router.delete("/{course}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_course(course: str, settings: Annotated[Settings, Depends(get_settings)]) -> None:
-    """Start over: the course folder, uploads and notes included, moves to the trash.
-
-    Refused while notes are generating: the worker would recreate the folder it writes to.
-    """
+    """Start over: the course folder and its uploads move to the trash. Visual notes live in S3
+    and Aurora and are not touched; a run going on keeps the readings it already read."""
     directory = course_dir(settings, course)
     if not directory.is_dir():
         return
-    if generating(directory):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Notes are generating. Stop or wait for them first."
-        )
     trash_dir(settings).mkdir(parents=True, exist_ok=True)
     target = trash_dir(settings) / f"{course}-{datetime.now(UTC):%Y%m%d-%H%M%S-%f}"
     shutil.move(directory, target)

@@ -10,11 +10,15 @@ sync with it, so commit them after a pull.
     uv run python -m app.prompts pull           # Langfuse production -> Markdown files
     uv run python -m app.prompts push           # create prompts Langfuse does not have yet
     uv run python -m app.prompts push --force   # overwrite Langfuse with the files
+
+Agent skills (SKILL.md directories, see `app.note_taker.lecture_notes.skill_library`) are Langfuse
+Skills and are pushed and pulled with the prompts.
 """
 
 import sys
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from langfuse import Langfuse
 from langfuse.api import NotFoundError
@@ -23,11 +27,16 @@ from app.config import get_settings
 
 LABEL = "production"
 APP_DIR = Path(__file__).resolve().parent
+LECTURE_NOTES = APP_DIR / "note_taker" / "lecture_notes" / "prompts"
 
 # Langfuse prompt name -> fallback Markdown file.
 PROMPTS: dict[str, Path] = {
     "note-taker/orchestrator": APP_DIR / "note_taker" / "prompts" / "orchestrator.md",
     "note-taker/moodle": APP_DIR / "note_taker" / "prompts" / "moodle.md",
+    "note-taker/lecture-notes/writer": LECTURE_NOTES / "writer.md",
+    "note-taker/lecture-notes/reviewer": LECTURE_NOTES / "reviewer.md",
+    "note-taker/lecture-notes/skills-system": LECTURE_NOTES / "skills_system.md",
+    "note-taker/lecture-notes/request": LECTURE_NOTES / "request.md",
 }
 
 
@@ -41,8 +50,8 @@ def langfuse_client() -> Langfuse | None:
         public_key=settings.langfuse_public_key,
         secret_key=settings.langfuse_secret_key,
         base_url=settings.langfuse_base_url,
-        # Prompts only; tracing is not wired up yet.
-        tracing_enabled=False,
+        # Agent runs that opt in are traced (app.note_taker.lecture_notes.tracing).
+        tracing_enabled=settings.langfuse_tracing,
     )
 
 
@@ -50,17 +59,28 @@ def read_fallback(name: str) -> str:
     return PROMPTS[name].read_text(encoding="utf-8").strip()
 
 
+def fill(text: str, variables: dict[str, object]) -> str:
+    for key, value in variables.items():
+        text = text.replace("{{" + key + "}}", str(value))
+    return text
+
+
 def get_prompt(name: str, **variables: object) -> str:
     """The `production` version of a prompt, with its variables filled in."""
+    return get_prompt_ref(name, **variables)[0]
+
+
+def get_prompt_ref(name: str, **variables: object) -> tuple[str, Any | None]:
+    """The prompt's text and its Langfuse prompt, to link the generations that use it. The
+    prompt is None when the local file was used (Langfuse off, unreachable, or the prompt
+    missing), so a fallback is never linked."""
     fallback = read_fallback(name)
     client = langfuse_client()
     if client is None:
-        text = fallback
-        for key, value in variables.items():
-            text = text.replace("{{" + key + "}}", str(value))
-        return text
+        return fill(fallback, variables), None
     prompt = client.get_prompt(name, label=LABEL, type="text", fallback=fallback)
-    return prompt.compile(**{key: str(value) for key, value in variables.items()})
+    text = prompt.compile(**{key: str(value) for key, value in variables.items()})
+    return text, None if getattr(prompt, "is_fallback", False) else prompt
 
 
 def _production_text(client: Langfuse, name: str) -> tuple[str, int] | None:
@@ -99,6 +119,10 @@ def push(force: bool = False) -> None:
         )
         print(f"{name}: created version {created.version}")
 
+    from app.note_taker.lecture_notes import skill_library as skills
+
+    skills.push(client, force=force)
+
 
 def pull() -> None:
     """Write the Langfuse `production` text of every prompt to its Markdown file."""
@@ -114,6 +138,10 @@ def pull() -> None:
         else:
             path.write_text(current[0] + "\n", encoding="utf-8")
             print(f"{name}: updated {path.name} from version {current[1]}")
+
+    from app.note_taker.lecture_notes import skill_library as skills
+
+    skills.pull(client)
 
 
 if __name__ == "__main__":

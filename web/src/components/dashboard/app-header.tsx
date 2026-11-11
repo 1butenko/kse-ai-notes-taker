@@ -1,6 +1,8 @@
 import Image from "next/image";
 import Link from "next/link";
 
+import { Badge } from "@/components/ui/badge";
+
 /** The app's one bar: the KSE logo top-left, as the brand requires, and the product name. */
 export function AppHeader() {
   return (
@@ -16,7 +18,7 @@ export function AppHeader() {
             unoptimized
             priority
           />
-          <span className="flex h-8 items-center border-l pl-3 text-2xl font-medium leading-none">Notes</span>
+          <Badge className="h-8 px-4 text-lg font-medium">Notes</Badge>
         </Link>
       </div>
     </header>

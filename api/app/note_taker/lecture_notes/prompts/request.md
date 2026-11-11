@@ -1,0 +1,1 @@
+Write the study notes for the lecture "{{topic}}" ({{label}}) in {{language}}. The brief is at /lecture/brief.md and the readings are under /readings/. Make the page visual and easy to understand, faithful to the readings, and render it with render_notes until it is clean.

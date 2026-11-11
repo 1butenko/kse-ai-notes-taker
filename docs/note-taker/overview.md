@@ -8,7 +8,7 @@ It lives in [`api/app/note_taker/`](../../api/app/note_taker/) and is separate f
 |-------|------|--------|-----|
 | Orchestrator (`ai-note-taker`) | Plans the job, delegates, reviews, reports | Built | [orchestrator.md](orchestrator.md) |
 | `moodle` subagent | Finds the relevant course files in Moodle and stores them in S3 | Built | [moodle-subagent.md](moodle-subagent.md) |
-| Note writers (`material-reader`, `notes-writer`) | Read the stored files and write `.qmd` notes | Not built yet | planned in [`docs/plans/note-taker-agent.md`](../plans/note-taker-agent.md) |
+| Lecture-notes agent (`lecture-notes-writer` + `reviewer`) | Writes one lecture's visual Quarto page from its readings; started from the lecture page, not from the orchestrator | Built | [lecture-notes.md](lecture-notes.md) |
 
 ## Current state
 
@@ -96,6 +96,8 @@ Prompts are managed in Langfuse and the Markdown files in the repo are a synced 
 |-----------------|------|
 | `note-taker/orchestrator` | `prompts/orchestrator.md` |
 | `note-taker/moodle` | `prompts/moodle.md` |
+| `note-taker/lecture-notes/writer`, `/reviewer`, `/skills-system`, `/request` | `lecture_notes/prompts/*.md` |
+| Skills tagged `lecture-notes` (Langfuse Skills) | `lecture_notes/skills/<name>/SKILL.md` |
 
 Edit them in the Langfuse UI, then run `make prompts-pull` and commit the files. See the prompts section of the [README](../../README.md).
 
@@ -107,7 +109,7 @@ Edit them in the Langfuse UI, then run `make prompts-pull` and commit the files.
 | `MOODLE_URL`, `MOODLE_TOKEN` | Moodle site and web-service token |
 | `NOTE_TAKER_APPROVAL` | Ask a human before the `moodle` subagent downloads |
 | `S3_BUCKET`, `DB_*` | Storage, see [storage.md](../storage.md) |
-| `LANGFUSE_*` | Prompt management |
+| `LANGFUSE_*` | Prompt and skill management; `LANGFUSE_TRACING` traces lecture-notes runs |
 
 ## Tests
 

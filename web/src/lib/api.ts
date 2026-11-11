@@ -247,17 +247,7 @@ export function approveReadings(course: string): Promise<CourseInfo> {
   return request(`/course-info/${course}/readings-approval`, { method: "POST" });
 }
 
-export type CourseNotation = {
-  notation: { symbol: string; meaning: string }[];
-  terminology: { term: string; definition: string }[];
-};
-
-/** The notation and terms the course's lecture notes share; it only ever grows. */
-export function getCourseNotation(course: string): Promise<CourseNotation> {
-  return request(`/course-info/${course}/notation`);
-}
-
-/** Deletes everything stored for the course: files, plan, transcripts and notes. */
+/** Moves the course (files, plan, transcripts) to the server trash. */
 export function deleteCourse(course: string): Promise<void> {
   return request(`/course-info/${course}`, { method: "DELETE" });
 }
@@ -376,485 +366,8 @@ export function addExcerpt(
   });
 }
 
-export type NotesRunState = "queued" | "running" | "done" | "failed";
-
-export type NotesRunEvent = {
-  at: string;
-  stage: string;
-  message: string;
-};
-
-export type NotesRun = {
-  id: string;
-  course: string;
-  status: NotesRunState;
-  stage: string;
-  created_at: string;
-  updated_at: string;
-  models: Record<string, string>;
-  topics_total: number;
-  topics_done: number;
-  warnings: string[];
-  error: string | null;
-  events: NotesRunEvent[];
-  /** The plan's materials fingerprint when the run started; a lecture run's is its lecture's. */
-  materials?: string | null;
-  /** The lecture (plan session) a lecture run writes; null for whole-course runs. */
-  session_id?: string | null;
-  session_label?: string | null;
-  /** The finished run whose failed sections this run writes again. */
-  retried_from?: string | null;
-};
-
-export type VerificationIssue = {
-  block: number | null;
-  kind: string;
-  severity: "major" | "minor";
-  detail: string;
-  fix: string;
-};
-
-export type EvidenceItem = {
-  chunk_id: string;
-  source: number;
-  title: string;
-  page: string | null;
-  role: string;
-  relevance: number;
-  reason: string;
-  text: string;
-};
-
-export type NoteBlock = {
-  id: string;
-  kind: string;
-  title: string | null;
-  content: string;
-  citations: string[];
-};
-
-export type TopicStatus = "verified" | "unresolved" | "no_evidence" | "failed";
-
-export type TopicNote = {
-  objectives: string[];
-  topic_id: string;
-  title: string;
-  status: TopicStatus;
-  blocks: NoteBlock[];
-  evidence: EvidenceItem[];
-  rounds: number;
-  verifier: string | null;
-  open_issues: VerificationIssue[];
-  error: string | null;
-  verification_stale: boolean;
-  teacher_decision?: TeacherDecision | null;
-};
-
-export type TeacherDecision = {
-  decision: "approved" | "revoked";
-  reviewer: string;
-  at: string;
-  comment: string | null;
-  fingerprint: string | null;
-};
-
-export type NotesSource = {
-  id: number;
-  file: string;
-  title: string;
-  label: string | null;
-  pdf_start: number | null;
-  pdf_end: number | null;
-  sessions: number[];
-};
-
-export type NoteAsset = {
-  id: string;
-  name: string;
-  path: string;
-  media_type: "image/png" | "image/jpeg";
-  sha256: string;
-  width: number;
-  height: number;
-};
-
-export type NotesDocument = {
-  /** Images that saved revisions reference; uploads alone are not listed. */
-  assets: NoteAsset[];
-  schema_version: number;
-  language: "uk" | "en" | null;
-  course: string;
-  run: string;
-  title: string;
-  created_at: string;
-  sections: { title: string; topics: TopicNote[] }[];
-  sources: NotesSource[];
-  models: Record<string, string>;
-};
-
-export type RenderFormat = "html" | "pdf" | "docx" | "book";
-
-export type RenderedArtifact = {
-  format: RenderFormat;
-  path: string;
-  revision: number;
-  status: "ready" | "failed";
-  error: string | null;
-  topic_id: string | null;
-};
-
-export type NotesRunView = {
-  run: NotesRun;
-  /** The current revision's document; each artifact names the revision it shows. */
-  document: NotesDocument | null;
-  current_revision: number;
-  display_revision: number | null;
-  render: RenderJob | null;
-  pdf: boolean;
-  topic_pdfs: string[];
-  artifacts: RenderedArtifact[];
-  /** Each planned topic's syllabus session indices; empty before planning. */
-  topic_sessions?: Record<string, number[]>;
-};
-
-export type RevisionInfo = {
-  revision: number;
-  parent: number | null;
-  created_at: string;
-  origin: "generation" | "manual" | "restore" | "ai" | "verification" | "teacher_approval" | "teacher_revocation";
-  changed_topics: string[];
-  restored_from: number | null;
-  /** Older stored revisions have neither field. */
-  suggestion?: string | null;
-  verification_job?: string | null;
-  teacher_topic?: string | null;
-  teacher_decision?: TeacherDecision | null;
-};
-
-export type RevisionView = {
-  info: RevisionInfo;
-  document: NotesDocument;
-};
-
-/** A topic's complete new block order; a block with an empty id is new. */
-export type TopicPatch = {
-  base_revision: number;
-  blocks: NoteBlock[];
-  language?: "uk" | "en" | null;
-};
-
-export type RenderJob = {
-  id: string;
-  revision: number;
-  status: "queued" | "running" | "done" | "failed";
-  formats: RenderFormat[];
-  errors: string[];
-};
-
-export type EditResult = {
-  revision: RevisionInfo;
-  render: RenderJob | null;
-};
-
-export type Verification = {
-  round: number;
-  model: string;
-  passed: boolean;
-  issues: VerificationIssue[];
-  escalate: boolean;
-  escalation_reason: string | null;
-};
-
-export type SuggestionRequest = {
-  base_revision: number;
-  topic_id: string;
-  /** Empty means the whole topic. */
-  block_ids: string[];
-  instruction: string;
-};
-
-export type NoteSuggestion = {
-  id: string;
-  base_revision: number;
-  topic_id: string;
-  status: "queued" | "running" | "ready" | "failed" | "applied" | "rejected";
-  /** The complete proposed topic: every block, in its final order. */
-  proposed_blocks: NoteBlock[];
-  /** The fresh check of exactly `proposed_blocks`. */
-  verification: Verification | null;
-  error: string | null;
-  block_ids: string[];
-  instruction: string;
-  /** True only for a clean check: no major issue and no escalation. */
-  verified: boolean;
-  /** Standing evidence gaps that keep the topic from being verified by any check. */
-  blocking: VerificationIssue[];
-  unsafe_citations: VerificationIssue[];
-  applied_revision: number | null;
-  /** Read-time compatibility hint for the reported current revision; Apply rechecks under lock. */
-  current_revision: number | null;
-  compatible: boolean;
-};
-
-export type VerificationJob = {
-  id: string;
-  topic_id: string;
-  base_revision: number;
-  status: "queued" | "running" | "done" | "failed";
-  verification: Verification | null;
-  verified: boolean;
-  blocking: VerificationIssue[];
-  /** The metadata revision that recorded the result. */
-  revision: number | null;
-  /** The notes changed while the check ran, so the result was not recorded. */
-  conflict: boolean;
-  error: string | null;
-  refresh_note: string | null;
-};
-
-function notesPath(course: string, run: string): string {
-  return `/plans/${encodeURIComponent(course)}/notes/${encodeURIComponent(run)}`;
-}
-
-function sendJson(method: string, body: unknown): RequestInit {
-  return { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
-}
-
-/** The committed history, oldest first; uncommitted snapshots never appear. */
-export function listNotesRevisions(course: string, run: string): Promise<RevisionInfo[]> {
-  return request(`${notesPath(course, run)}/revisions`);
-}
-
-export function getNotesRevision(
-  course: string,
-  run: string,
-  revision: number,
-): Promise<RevisionView> {
-  return request(`${notesPath(course, run)}/revisions/${revision}`);
-}
-
-/** Saves one topic as a new revision; HTTP 409 means `base_revision` is no longer current. */
-export function saveNotesTopic(
-  course: string,
-  run: string,
-  topic: string,
-  patch: TopicPatch,
-): Promise<EditResult> {
-  return request(`${notesPath(course, run)}/topics/${encodeURIComponent(topic)}`, sendJson("PATCH", patch));
-}
-
-/** Copies an earlier revision's text into a new revision on top of `baseRevision`. */
-export function restoreNotesRevision(
-  course: string,
-  run: string,
-  revision: number,
-  baseRevision: number,
-): Promise<EditResult> {
-  return request(
-    `${notesPath(course, run)}/revisions/${revision}/restore`,
-    sendJson("POST", { base_revision: baseRevision }),
-  );
-}
-
-export function decideNotesTopic(
-  course: string,
-  run: string,
-  topic: string,
-  body: { base_revision: number; action: "approve" | "revoke"; reviewer: string; comment?: string | null },
-): Promise<EditResult> {
-  return request(
-    `${notesPath(course, run)}/topics/${encodeURIComponent(topic)}/approval`,
-    sendJson("POST", body),
-  );
-}
-
-/** Asks the model to propose changes; nothing in the notes changes until it is applied. */
-export function createNotesSuggestion(
-  course: string,
-  run: string,
-  body: SuggestionRequest,
-): Promise<NoteSuggestion> {
-  return request(`${notesPath(course, run)}/suggestions`, sendJson("POST", body));
-}
-
-export function getNotesSuggestion(
-  course: string,
-  run: string,
-  suggestion: string,
-): Promise<NoteSuggestion> {
-  return request(`${notesPath(course, run)}/suggestions/${encodeURIComponent(suggestion)}`);
-}
-
-/** Commits a reviewed suggestion; HTTP 409 means the candidate is no longer compatible. */
-export function applyNotesSuggestion(
-  course: string,
-  run: string,
-  suggestion: string,
-  baseRevision: number,
-): Promise<EditResult> {
-  return request(
-    `${notesPath(course, run)}/suggestions/${encodeURIComponent(suggestion)}/apply`,
-    sendJson("POST", { base_revision: baseRevision }),
-  );
-}
-
-export function rejectNotesSuggestion(
-  course: string,
-  run: string,
-  suggestion: string,
-): Promise<NoteSuggestion> {
-  return request(
-    `${notesPath(course, run)}/suggestions/${encodeURIComponent(suggestion)}/reject`,
-    { method: "POST" },
-  );
-}
-
-/** Rechecks a topic's saved text against its evidence, without rewriting it. */
-export function verifyNotesTopic(
-  course: string,
-  run: string,
-  topic: string,
-  baseRevision: number,
-): Promise<VerificationJob> {
-  return request(
-    `${notesPath(course, run)}/topics/${encodeURIComponent(topic)}/verify`,
-    sendJson("POST", { base_revision: baseRevision }),
-  );
-}
-
-export function getVerificationJob(
-  course: string,
-  run: string,
-  job: string,
-): Promise<VerificationJob> {
-  return request(`${notesPath(course, run)}/verification-jobs/${encodeURIComponent(job)}`);
-}
-
-export type NoteAssetUpload = {
-  asset: NoteAsset;
-  /** The relative path a figure's Markdown uses, e.g. `assets/<sha256>.png`. */
-  markdown_path: string;
-};
-
-/** Imports a PNG/JPEG into the run's catalog; no revision changes until one references it. */
-export function uploadNoteAsset(course: string, run: string, file: File): Promise<NoteAssetUpload> {
-  const form = new FormData();
-  form.append("file", file);
-  return request(`${notesPath(course, run)}/assets`, { method: "POST", body: form });
-}
-
-export function listNotesRuns(course: string): Promise<NotesRun[]> {
-  return request(`/plans/${course}/notes`);
-}
-
-export function getNotesRun(course: string, run: string): Promise<NotesRunView> {
-  return request(`/plans/${course}/notes/${run}`);
-}
-
-export function generateNotes(course: string, resume?: string): Promise<NotesRunView> {
-  return request(`/plans/${course}/notes`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(resume ? { resume } : {}),
-  });
-}
-
-/** Write one lecture's note, resume its unfinished run, or retry a finished run's failed sections. */
-export function generateLectureNotes(
-  course: string,
-  sessionId: string,
-  from?: { resume: string } | { retry: string },
-): Promise<NotesRunView> {
-  return request(`/plans/${course}/sessions/${sessionId}/notes`, sendJson("POST", from ?? {}));
-}
-
-export type NotesQueue = {
-  /** Lectures (session ids) waiting, in the order they are written. */
-  waiting: string[];
-  /** The run being written. */
-  active: string | null;
-  active_session: string | null;
-  /** Generate all only: lectures it left out. */
-  skipped: { session_id: string; reason: string }[];
-};
-
-/** Generate all: every lecture without a note that has readings, one at a time. */
-export function generateAllLectures(course: string): Promise<NotesQueue> {
-  return request(`/plans/${course}/notes/queue`, { method: "POST" });
-}
-
-export function getNotesQueue(course: string): Promise<NotesQueue> {
-  return request(`/plans/${course}/notes/queue`);
-}
-
-/** Cancels the lecture being written (it keeps its finished sections) and clears the queue. */
-export function stopNotes(course: string): Promise<NotesQueue> {
-  return request(`/plans/${course}/notes/stop`, { method: "POST" });
-}
-
-/** Rebuild a saved revision's files; no model is called. */
-export function renderNotesRevision(
-  course: string,
-  run: string,
-  revision: number,
-  formats: RenderFormat[] = ["html", "pdf"],
-): Promise<RenderJob> {
-  return request(
-    `${notesPath(course, run)}/revisions/${revision}/render`,
-    sendJson("POST", { formats }),
-  );
-}
-
-export function getRenderJob(course: string, run: string, job: string): Promise<RenderJob> {
-  return request(`${notesPath(course, run)}/render-jobs/${encodeURIComponent(job)}`);
-}
-
-/** The canonical URL of one revision's file; it never falls back to another revision. */
-export function revisionArtifactUrl(
-  course: string,
-  run: string,
-  revision: number,
-  kind: RenderFormat,
-  topic?: string | null,
-): string {
-  const scope = topic ? `/topics/${encodeURIComponent(topic)}` : "";
-  return `${PUBLIC_API_URL}${notesPath(course, run)}/revisions/${revision}${scope}/artifacts/${kind}`;
-}
-
-export function revisionBookUrl(course: string, run: string, revision: number): string {
-  return `${PUBLIC_API_URL}${notesPath(course, run)}/revisions/${revision}/book/`;
-}
-
-export function notesFileUrl(course: string, run: string, kind: RenderFormat | "qmd"): string {
-  return `${PUBLIC_API_URL}/plans/${course}/notes/${run}/${kind}`;
-}
-
-export function topicPdfUrl(course: string, run: string, topic: string): string {
-  return topicNotesUrl(course, run, topic, "pdf");
-}
-
-export function topicNotesUrl(course: string, run: string, topic: string, kind: "html" | "pdf"): string {
-  return `${PUBLIC_API_URL}/plans/${course}/notes/${run}/topics/${encodeURIComponent(topic)}/${kind}`;
-}
-
-export function previewPath(course: string, run: string, topic?: string): string {
-  const path = `/preview/${encodeURIComponent(course)}/${encodeURIComponent(run)}`;
-  return topic ? `${path}/${encodeURIComponent(topic)}` : path;
-}
-
 export function lecturePath(course: string, sessionId: string): string {
   return `/lectures/${encodeURIComponent(course)}/${encodeURIComponent(sessionId)}`;
-}
-
-/** Server-side read of a notes run, through the API's internal address. */
-export async function fetchNotesRun(course: string, run: string): Promise<NotesRunView | null> {
-  const res = await fetch(
-    `${API_URL}/plans/${encodeURIComponent(course)}/notes/${encodeURIComponent(run)}`,
-    { cache: "no-store" },
-  );
-  if (res.status === 404) return null;
-  if (!res.ok) throw new ApiError(`Request failed (${res.status})`, res.status);
-  return res.json();
 }
 
 // The AI Note Taker: Moodle materials fetched by the agent into S3 (`/agent/courses`).
@@ -916,6 +429,68 @@ export type AgentCourse = {
 /** The course's fetched materials and latest run; a 404 means the agent never ran for it. */
 export function getAgentCourse(course: string): Promise<AgentCourse> {
   return request(`/agent/courses/${course}`, { cache: "no-store" });
+}
+
+// Visual lecture notes: the lecture-notes agent writes one lecture as a Quarto page
+// (`/lecture-notes`).
+
+export type LectureNotesRun = {
+  id: string;
+  session_id: string;
+  session_label: string;
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  step: string | null;
+  todos: AgentTodo[];
+  actions: AgentAction[];
+  report: string | null;
+  error: string | null;
+  /** The published page's files; `index.html` is the page. */
+  files: string[];
+  model: string | null;
+  renders: number;
+  /** The lecture's readings changed since this run read them. */
+  readings_changed: boolean;
+  started_at: string;
+  finished_at: string | null;
+};
+
+/** One lecture's notes: its latest run, and the latest that published a page. */
+export type LectureNotesStatus = {
+  session_id: string;
+  latest: LectureNotesRun;
+  published: LectureNotesRun | null;
+};
+
+/** Every lecture with notes (or a run) in the course. */
+export function listCourseLectureNotes(course: string): Promise<LectureNotesStatus[]> {
+  return request(`/lecture-notes/${encodeURIComponent(course)}/runs`, { cache: "no-store" });
+}
+
+function lectureNotesPath(course: string, sessionId: string): string {
+  return `/lecture-notes/${encodeURIComponent(course)}/${encodeURIComponent(sessionId)}/runs`;
+}
+
+/** The lecture's visual-notes runs, newest first. */
+export function listLectureNotes(course: string, sessionId: string): Promise<LectureNotesRun[]> {
+  return request(lectureNotesPath(course, sessionId), { cache: "no-store" });
+}
+
+export function startLectureNotes(course: string, sessionId: string): Promise<LectureNotesRun> {
+  return request(lectureNotesPath(course, sessionId), { method: "POST" });
+}
+
+export function cancelLectureNotes(run: string): Promise<LectureNotesRun> {
+  return request(`/lecture-notes/runs/${encodeURIComponent(run)}/cancel`, { method: "POST" });
+}
+
+/** The published page, for a sandboxed iframe or a new tab. */
+export function lectureNotesSiteUrl(run: string, file = "index.html"): string {
+  return `${PUBLIC_API_URL}/lecture-notes/runs/${encodeURIComponent(run)}/site/${file}`;
+}
+
+export function visualNotesPath(course: string, sessionId: string, run?: string): string {
+  const path = `${lecturePath(course, sessionId)}/visual`;
+  return run ? `${path}/${encodeURIComponent(run)}` : path;
 }
 
 /** Starts the AI Note Taker for a course created from Moodle; poll `getAgentCourse`. */

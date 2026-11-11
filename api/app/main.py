@@ -5,7 +5,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import agent, course_info, courses, files, notes, plans, syllabus, uploads
+from app.routers import (
+    agent,
+    course_info,
+    courses,
+    files,
+    lecture_notes,
+    plans,
+    syllabus,
+    uploads,
+)
 
 settings = get_settings()
 
@@ -57,8 +66,8 @@ app.include_router(uploads.router)
 app.include_router(syllabus.router)
 app.include_router(plans.router)
 app.include_router(files.router)
-app.include_router(notes.router)
 app.include_router(agent.router)
+app.include_router(lecture_notes.router)
 
 
 @app.get("/health")

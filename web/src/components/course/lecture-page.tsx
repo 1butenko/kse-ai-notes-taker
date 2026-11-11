@@ -2,48 +2,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  ArrowLeftIcon,
-  CircleAlertIcon,
-  CircleStopIcon,
-  FileTextIcon,
-  InfoIcon,
-  NotebookPenIcon,
-  RotateCwIcon,
-  SparklesIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, CircleAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { LectureFilesDrop } from "@/components/course/lecture-files-drop";
-import { StatusBadge } from "@/components/course/lecture-list";
-import {
-  failedSections,
-  noteStatus,
-  readingsChanged,
-  useCourseNotes,
-  type LectureNotes,
-} from "@/components/course/use-course-notes";
+import { PanelTitle } from "@/components/course/materials-panel";
 import { AddMaterialDialog } from "@/components/dashboard/add-material-dialog";
 import { FileRow } from "@/components/dashboard/course-plan";
 import { FileViewerProvider } from "@/components/dashboard/file-viewer";
 import { SessionProposals } from "@/components/dashboard/mapping-parts";
-import { RunProgress } from "@/components/dashboard/notes-stage";
 import { ReadingList } from "@/components/dashboard/transcript-parts";
+import { VisualNotesSection } from "@/components/lecture-notes/visual-notes-section";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import {
   Empty,
-  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -51,15 +24,12 @@ import {
 } from "@/components/ui/empty";
 import { ItemGroup } from "@/components/ui/item";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
 import {
   ApiError,
   detachFile,
   getCourseInfo,
   getPlan,
   listCourseFiles,
-  previewPath,
-  type NotesRun,
   type PlanView,
   type SavedFile,
   type SessionView,
@@ -72,215 +42,6 @@ type LecturePageProps = {
 
 function errorMessage(err: unknown) {
   return err instanceof ApiError ? err.message : "Couldn't reach the server. Please try again.";
-}
-
-function plural(count: number, one: string, many: string) {
-  return `${count} ${count === 1 ? one : many}`;
-}
-
-function when(iso: string) {
-  return new Date(iso).toLocaleString(undefined, {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-type NoteSectionProps = {
-  course: string;
-  entry: SessionView;
-  lecture: LectureNotes;
-  notes: ReturnType<typeof useCourseNotes>;
-};
-
-/** What the lecture's note is: missing, queued, being written, stopped, or ready. */
-function NoteSection({ course, entry, lecture, notes }: NoteSectionProps) {
-  const [confirming, setConfirming] = useState(false);
-  const hasReadings = entry.files.length > 0;
-  // One job per course: while another lecture is written, nothing else can start.
-  const otherBusy = notes.busy && !lecture.active && !lecture.queued;
-  const canStart = hasReadings && !notes.busy && !notes.starting;
-  const blocked = !hasReadings
-    ? "Add readings to this lecture first."
-    : otherBusy
-      ? "Another lecture is being written. Wait for it, or stop it from the course page."
-      : null;
-  const failed = failedSections(lecture);
-  const { note, unfinished, active } = lecture;
-  const stopped = unfinished?.error?.startsWith("Stopped") ?? false;
-
-  const regenerate = async () => {
-    setConfirming(false);
-    await notes.generate(entry.id);
-  };
-
-  return (
-    <section aria-labelledby="note-title" className="flex flex-col gap-4">
-      <h2 id="note-title" className="text-xl">
-        Note
-      </h2>
-
-      {active && (
-        <div className="flex flex-col gap-3">
-          <RunProgress run={active} />
-          <div className="flex flex-wrap items-center gap-3">
-            <Button variant="outline" disabled={notes.starting} onClick={notes.stop}>
-              {notes.starting ? <Spinner /> : <CircleStopIcon />}
-              Stop
-            </Button>
-            <p className="text-sm text-muted-foreground">
-              {note
-                ? "The current note stays readable until the new one is ready."
-                : "You can close this tab; the note is written on the server."}{" "}
-              Stop keeps the finished sections, and Resume writes the rest.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {lecture.queued && !active && (
-        <Alert>
-          <InfoIcon />
-          <AlertTitle>Queued</AlertTitle>
-          <AlertDescription className="flex flex-col items-start gap-2">
-            This lecture is written after the ones queued before it.
-            <Button size="sm" variant="outline" disabled={notes.starting} onClick={notes.stop}>
-              <CircleStopIcon />
-              Stop and clear the queue
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {unfinished && !active && (
-        <Alert variant={stopped ? "default" : "destructive"}>
-          {stopped ? <InfoIcon /> : <CircleAlertIcon />}
-          <AlertTitle>{stopped ? "Stopped" : "Writing the note failed"}</AlertTitle>
-          <AlertDescription className="flex flex-col items-start gap-2">
-            <span>
-              {stopped ? "Stopped before the note was finished." : unfinished.error}{" "}
-              {unfinished.topics_done > 0
-                ? `${plural(unfinished.topics_done, "finished section is", "finished sections are")} kept; Resume writes the rest.`
-                : "Resume continues where it stopped."}
-            </span>
-            <span className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!canStart}
-                onClick={() => notes.generate(entry.id, { resume: unfinished.id })}
-              >
-                <RotateCwIcon />
-                Resume
-              </Button>
-              {!note && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={!canStart}
-                  onClick={() => notes.generate(entry.id)}
-                >
-                  Start a new note
-                </Button>
-              )}
-            </span>
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {note ? (
-        <div className="flex flex-col gap-3 rounded-lg border p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <FileTextIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-            <span className="font-medium">
-              {lecture.view?.document?.title ?? entry.session.topic ?? entry.session.label}
-            </span>
-            <StatusBadge status={noteStatus(lecture)} lecture={lecture} />
-            <span className="text-sm text-muted-foreground">Written {when(note.created_at)}</span>
-          </div>
-          {readingsChanged(lecture, entry) && (
-            <p className="text-sm text-warning">
-              Readings changed since this note was written. Regenerate to write it from the
-              current readings.
-            </p>
-          )}
-          {failed.length > 0 && (
-            <p className="text-sm text-destructive">
-              {plural(failed.length, "section", "sections")} failed:{" "}
-              {failed.map((t) => t.title).join(", ")}.
-            </p>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <Link href={previewPath(course, note.id)} className={buttonVariants()}>
-              <FileTextIcon />
-              Open note
-            </Link>
-            {failed.length > 0 && (
-              <Button
-                variant="outline"
-                disabled={!canStart}
-                onClick={() => notes.generate(entry.id, { retry: note.id })}
-              >
-                <RotateCwIcon />
-                Retry failed section{failed.length === 1 ? "" : "s"}
-              </Button>
-            )}
-            <Button variant="outline" disabled={!canStart} onClick={() => setConfirming(true)}>
-              <SparklesIcon />
-              Regenerate
-            </Button>
-          </div>
-        </div>
-      ) : (
-        !active &&
-        !lecture.queued &&
-        !unfinished && (
-          <Empty className="border border-dashed">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <NotebookPenIcon />
-              </EmptyMedia>
-              <EmptyTitle>This lecture has no note yet</EmptyTitle>
-              <EmptyDescription>
-                It is written from the readings below, in a few minutes. You can close the tab
-                meanwhile.
-              </EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              <Button disabled={!canStart} onClick={() => notes.generate(entry.id)}>
-                {notes.starting ? <Spinner /> : <SparklesIcon />}
-                Generate note
-              </Button>
-            </EmptyContent>
-          </Empty>
-        )
-      )}
-
-      {blocked && !active && !lecture.queued && (
-        <p className="text-sm text-muted-foreground">{blocked}</p>
-      )}
-
-      <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Regenerate this lecture&apos;s note?</DialogTitle>
-            <DialogDescription>
-              A new note is written from the current readings. The current one stays open until
-              the new one is ready, then moves to Previous versions with its edits and approvals.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" />}>Cancel</DialogClose>
-            <Button onClick={regenerate}>
-              <SparklesIcon />
-              Regenerate
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </section>
-  );
 }
 
 type ReadingsSectionProps = {
@@ -310,36 +71,53 @@ function ReadingsSection({ plan, entry, readingFiles, onPlan, onUploaded }: Read
   const materials = plan.transcript?.learning_materials ?? [];
   const shared = entry.files.filter((f) => !f.lecture_only);
   const own = entry.files.filter((f) => f.lecture_only);
+  const cited = session.required_readings.length + session.optional_readings.length;
 
   return (
-    <section aria-labelledby="readings-title" className="flex flex-col gap-4">
-      <h2 id="readings-title" className="text-xl">
-        Readings
-      </h2>
+    <aside
+      aria-label="Lecture materials"
+      className="flex min-w-0 flex-col gap-4 rounded-xl bg-muted p-4 lg:sticky lg:top-4"
+    >
       {session.subtopics.length > 0 && (
-        <ul className="list-disc pl-5 text-sm text-muted-foreground">
-          {session.subtopics.map((subtopic, index) => (
-            <li key={index}>{subtopic}</li>
-          ))}
-        </ul>
+        <div className="flex flex-col gap-3 border-b pb-4">
+          <PanelTitle id="topics-title" title="Topics" count={session.subtopics.length} />
+          <ul aria-labelledby="topics-title" className="flex flex-col">
+            {session.subtopics.map((subtopic, index) => (
+              <li
+                key={index}
+                className="border-b border-border py-2 text-sm last:border-b-0 last:pb-0"
+              >
+                {subtopic}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
-      <ReadingList
-        title="Required in the syllabus"
-        readings={session.required_readings}
-        materials={materials}
-      />
-      <ReadingList
-        title="Optional in the syllabus"
-        readings={session.optional_readings}
-        materials={materials}
-      />
-      <SessionProposals proposals={entry.proposals} course={plan.course} update={update} />
-      <div className="flex flex-col gap-2">
-        <span className="text-xs font-medium text-muted-foreground">
-          Course readings the note is written from
-        </span>
+
+      {cited > 0 && (
+        <div className="flex flex-col gap-3 border-b pb-4">
+          <PanelTitle id="syllabus-readings-title" title="Syllabus" count={cited} />
+          <ReadingList
+            title="Required"
+            readings={session.required_readings}
+            materials={materials}
+          />
+          <ReadingList
+            title="Optional"
+            readings={session.optional_readings}
+            materials={materials}
+          />
+        </div>
+      )}
+
+      <div className="flex flex-col gap-3 border-b pb-4">
+        <PanelTitle id="readings-title" title="Readings" count={shared.length} />
+        <p className="-mt-2 text-xs text-muted-foreground">
+          Course readings the note is written from.
+        </p>
+        <SessionProposals proposals={entry.proposals} course={plan.course} update={update} />
         {shared.length > 0 ? (
-          <ItemGroup className="gap-2">
+          <ItemGroup aria-labelledby="readings-title" className="gap-2">
             {shared.map((file) => (
               <FileRow
                 key={file.path}
@@ -363,12 +141,11 @@ function ReadingsSection({ plan, entry, readingFiles, onPlan, onUploaded }: Read
           />
         </div>
       </div>
-      <div className="flex flex-col gap-2">
-        <span className="text-xs font-medium text-muted-foreground">
-          Files for this lecture only
-        </span>
+
+      <div className="flex flex-col gap-3">
+        <PanelTitle id="own-files-title" title="This lecture only" count={own.length} />
         {own.length > 0 && (
-          <ItemGroup className="gap-2">
+          <ItemGroup aria-labelledby="own-files-title" className="gap-2">
             {own.map((file) => (
               <FileRow
                 key={file.path}
@@ -381,42 +158,16 @@ function ReadingsSection({ plan, entry, readingFiles, onPlan, onUploaded }: Read
         )}
         <LectureFilesDrop course={plan.course} sessionId={entry.id} onPlan={onPlan} />
       </div>
-    </section>
+    </aside>
   );
 }
 
-function PreviousVersions({ course, runs }: { course: string; runs: NotesRun[] }) {
-  if (runs.length === 0) return null;
-  return (
-    <section aria-labelledby="versions-title" className="flex flex-col gap-2">
-      <h2 id="versions-title" className="text-base">
-        Previous versions
-      </h2>
-      <ul className="flex flex-col border-t">
-        {runs.map((run) => (
-          <li key={run.id} className="border-b">
-            <Link
-              href={previewPath(course, run.id)}
-              className="flex min-h-11 items-center gap-3 px-2 py-2 transition-colors hover:bg-muted"
-            >
-              <FileTextIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-              <span className="flex-1">Written {when(run.created_at)}</span>
-              {run.retried_from && <Badge variant="outline">Retry</Badge>}
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-/** One lecture: its note (or the way to write it) and the readings it is written from. */
+/** One lecture: its notes (or the way to write them) and the readings they are written from. */
 export function LecturePage({ course, sessionId }: LecturePageProps) {
   const [plan, setPlan] = useState<PlanView | null>(null);
   const [readingFiles, setReadingFiles] = useState<SavedFile[]>([]);
   const [courseName, setCourseName] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const notes = useCourseNotes(course);
 
   const load = useCallback(
     () =>
@@ -445,7 +196,6 @@ export function LecturePage({ course, sessionId }: LecturePageProps) {
 
   const index = plan?.sessions.findIndex((s) => s.id === sessionId) ?? -1;
   const entry = plan && index >= 0 ? plan.sessions[index] : null;
-  const lecture = entry ? notes.lecture(entry.id) : null;
 
   return (
     <FileViewerProvider>
@@ -487,13 +237,13 @@ export function LecturePage({ course, sessionId }: LecturePageProps) {
               </EmptyMedia>
               <EmptyTitle>This lecture is no longer in the syllabus</EmptyTitle>
               <EmptyDescription>
-                Its earlier notes stay readable under Previous generations on the course page.
+                Its notes stay in the app, but it no longer has a lecture page.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
         )}
 
-        {plan && entry && lecture && (
+        {plan && entry && (
           <>
             <header className="grid grid-cols-[3.5rem_minmax(0,1fr)] items-start gap-x-3">
               <span className="text-4xl leading-none font-bold tabular-nums">
@@ -508,10 +258,13 @@ export function LecturePage({ course, sessionId }: LecturePageProps) {
                 </p>
               </div>
             </header>
-            <div className="grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+            <div className="grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">
               <div className="flex flex-col gap-8">
-                <NoteSection course={course} entry={entry} lecture={lecture} notes={notes} />
-                <PreviousVersions course={course} runs={lecture.previous} />
+                <VisualNotesSection
+                  course={course}
+                  sessionId={entry.id}
+                  hasReadings={entry.files.length > 0}
+                />
               </div>
               <ReadingsSection
                 plan={plan}

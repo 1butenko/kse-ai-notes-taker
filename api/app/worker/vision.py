@@ -1,9 +1,10 @@
 """Vision transcription: book pages whose PDF text loses formulas, matrices or everything (a scan)
-are read once by a vision model into Markdown with LaTeX, and notes use that text instead.
+are read once by a vision model into Markdown with LaTeX, and the lecture-notes agent reads that
+text instead.
 
 Approving an excerpt starts it in the background (POST /books/transcribe); the transcripts are
-cached per page next to the PDF text (see `sources.PageTranscripts`), so a run admitted later
-freezes them with its inputs. For excerpts approved before, run once from api/:
+cached per page next to the PDF text (see `sources.PageTranscripts`). For excerpts approved
+before, run once from api/:
 
     uv run python -m app.worker.vision [--uploads DIR] <course> ...
 """
@@ -17,10 +18,9 @@ from fastapi import HTTPException
 from pypdf import PdfReader
 
 from app.books import subset_pdf
-from app.notes_artifacts import atomic_json
 from app.plan import load_plan
 from app.schemas import Strict
-from app.storage import sha256
+from app.storage import atomic_json, sha256
 from app.worker.config import WorkerSettings
 from app.worker.llm import PDF_PLUGINS, ask, chat, pdf_part
 from app.worker.models import ModelSpec
