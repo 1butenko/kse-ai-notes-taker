@@ -21,7 +21,6 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
-  id-token: write
 
 jobs:
   docs:
@@ -69,23 +68,33 @@ jobs:
             git checkout FETCH_HEAD -- docs/dev || true
           fi
 
-      - name: Write the docs with Claude
-        uses: anthropics/claude-code-action@v1
+      # claude-code-action does not accept push events, so run the CLI directly.
+      - uses: actions/setup-node@v4
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            Read .github/prompts/dev-docs.md and follow it exactly.
+          node-version: 22
 
-            Mode: ${{ steps.range.outputs.mode }}
-            Change range: ${{ steps.range.outputs.range }}
-            Branch: ${{ github.ref_name }}
-            Head commit: ${{ steps.range.outputs.short }}
-            Today: run `date -u +%F`.
-          claude_args: >-
-            --model claude-sonnet-5-5
-            --max-turns 60
-            --allowedTools "Read,Glob,Grep,Edit(docs/dev/**),Write(docs/dev/**),Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(date:*)"
+      - name: Write the docs with Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          MODE: ${{ steps.range.outputs.mode }}
+          RANGE: ${{ steps.range.outputs.range }}
+          BRANCH: ${{ github.ref_name }}
+          SHORT: ${{ steps.range.outputs.short }}
+        run: |
+          [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
+          npm install -g @anthropic-ai/claude-code
+          claude -p "Read .github/prompts/dev-docs.md and follow it exactly.
+
+          Mode: $MODE
+          Change range: $RANGE
+          Branch: $BRANCH
+          Head commit: $SHORT
+          Today: $(date -u +%F)" \
+            --model claude-sonnet-5-5 \
+            --max-turns 60 \
+            --allowedTools "Read,Glob,Grep,Edit(docs/dev/**),Write(docs/dev/**),Bash(git log:*),Bash(git diff:*),Bash(git show:*)" \
+            --output-format text
 
       - name: Keep only docs/dev changes
         run: |
