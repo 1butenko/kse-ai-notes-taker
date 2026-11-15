@@ -1,0 +1,123 @@
+# Writes the development docs (docs/dev/) for every push and opens a PR with them.
+# Claude only edits docs/dev/; this workflow opens the PR, not Claude.
+# One PR per source branch: branch dev-docs/<branch>, updated on every push.
+name: Dev docs
+
+on:
+  push:
+    branches: [main, "feature/**"]
+    paths-ignore: ["docs/dev/**"]
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: "Rewrite the area docs from the whole codebase, not just the last push"
+        type: boolean
+        default: false
+
+concurrency:
+  group: dev-docs-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  docs:
+    # Skip the bot's own merges and pushes.
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out the change range
+        id: range
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+          BOOTSTRAP: ${{ inputs.bootstrap }}
+        run: |
+          if [ "$BOOTSTRAP" = "true" ]; then
+            echo "mode=bootstrap" >> "$GITHUB_OUTPUT"
+            echo "range=" >> "$GITHUB_OUTPUT"
+          elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            # New branch, force push or manual run: everything since it left main.
+            base=$(git merge-base origin/main "$AFTER" 2>/dev/null || git rev-list --max-parents=0 "$AFTER" | tail -1)
+            [ "$base" = "$AFTER" ] && base="$AFTER~1"
+            echo "mode=changes" >> "$GITHUB_OUTPUT"
+            echo "range=$base..$AFTER" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=changes" >> "$GITHUB_OUTPUT"
+            echo "range=$BEFORE..$AFTER" >> "$GITHUB_OUTPUT"
+          fi
+          echo "docs_branch=dev-docs/$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short "$AFTER")" >> "$GITHUB_OUTPUT"
+
+      - name: Carry over docs from the open docs PR
+        # So successive pushes add to the same PR instead of replacing it.
+        env:
+          DOCS_BRANCH: ${{ steps.range.outputs.docs_branch }}
+        run: |
+          if git ls-remote --exit-code --heads origin "$DOCS_BRANCH" >/dev/null; then
+            git fetch origin "$DOCS_BRANCH"
+            git checkout FETCH_HEAD -- docs/dev || true
+          fi
+
+      # claude-code-action does not accept push events, so run the CLI directly.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Write the docs with Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          MODE: ${{ steps.range.outputs.mode }}
+          RANGE: ${{ steps.range.outputs.range }}
+          BRANCH: ${{ github.ref_name }}
+          SHORT: ${{ steps.range.outputs.short }}
+        run: |
+          [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
+          npm install -g @anthropic-ai/claude-code
+          claude -p "Read .github/prompts/dev-docs.md and follow it exactly.
+
+          Mode: $MODE
+          Change range: $RANGE
+          Branch: $BRANCH
+          Head commit: $SHORT
+          Today: $(date -u +%F)" \
+            --model claude-sonnet-5-5 \
+            --max-turns 60 \
+            --allowedTools "Read,Glob,Grep,Edit(docs/dev/**),Write(docs/dev/**),Bash(git log:*),Bash(git diff:*),Bash(git show:*)" \
+            --output-format text
+
+      - name: Keep only docs/dev changes
+        run: |
+          git status --short
+          git stash push --include-untracked -- docs/dev >/dev/null 2>&1 || true
+          git reset --hard HEAD
+          git clean -fd
+          git stash pop >/dev/null 2>&1 || true
+
+      - name: Open or update the docs PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: ${{ steps.range.outputs.docs_branch }}
+          base: ${{ github.ref_name }}
+          add-paths: docs/dev/**
+          commit-message: "docs(dev): ${{ steps.range.outputs.short }} on ${{ github.ref_name }}"
+          title: "Dev docs for ${{ github.ref_name }}"
+          body: |
+            Development docs written by Claude for the latest pushes to `${{ github.ref_name }}`
+            (last: `${{ steps.range.outputs.range || 'bootstrap' }}`).
+
+            Each push updates this PR. Review, then merge it into `${{ github.ref_name }}`.
+
+            🤖 Generated with [Claude Code](https://claude.com/claude-code)
+          labels: documentation
+          delete-branch: true

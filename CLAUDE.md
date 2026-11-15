@@ -14,6 +14,10 @@ Monorepo: `api/` (FastAPI, Python 3.12, uv; `api/app/worker` is the model-callin
 
 `web/AGENTS.md` applies: this Next.js has breaking changes, so read the guide in `web/node_modules/next/dist/docs/` before writing Next.js code.
 
+## Development docs
+
+Before changing code, read `docs/dev/README.md` (area docs and recent changes), then the area doc for what you touch and the recent entries in `docs/dev/changes/`. They are written by the Dev docs GitHub workflow on every push; don't edit them by hand in feature work, the workflow updates them.
+
 ## Working here
 
 - Use the project skill `kse-notes-taker` (`.claude/skills/kse-notes-taker`) for commands, layout and conventions.
