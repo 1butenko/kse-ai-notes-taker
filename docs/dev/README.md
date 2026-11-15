@@ -18,4 +18,6 @@ Read this page, then the area doc for what you are changing.
 
 <!-- Newest first, at most 20. One line each: - YYYY-MM-DD [title](changes/file.md): summary -->
 
+- 2026-11-15 [Dev docs workflow runs the Claude Code CLI directly](changes/2026-11-15-84bc5d6.md): replaced claude-code-action, which rejects push events, with `claude -p`.
+
 All entries: [changes/](changes/).
