@@ -1,6 +1,27 @@
-# KSE AI Notes Taker
+<a id="readme-top"></a>
 
-A dashboard for KSE lecturers to collect their course materials in one place and turn them into AI-generated notes.
+<br />
+<div align="center">
+  <a href="https://github.com/1butenko/kse-ai-notes-taker">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+      <img src="docs/images/logo.svg" alt="KSE Notes" height="78">
+    </picture>
+  </a>
+
+  <h3 align="center">KSE AI Notetaker Platform</h3>
+
+  <p align="center">
+    A dashboard for KSE lecturers to collect their course materials in one place and turn them into AI-generated notes.
+    <br />
+    <a href="docs/note-taker/"><strong>Explore the docs »</strong></a>
+    <br />
+    <br />
+    <a href="https://github.com/1butenko/kse-ai-notes-taker/issues">Report Bug</a>
+    &middot;
+    <a href="https://github.com/1butenko/kse-ai-notes-taker/issues">Request Feature</a>
+  </p>
+</div>
 
 Lecturers can:
 
