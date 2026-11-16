@@ -1,0 +1,54 @@
+# Production backend on the AWS EC2 host (see README "AWS deployment").
+#   docker compose -f compose.prod.yaml up -d --build   (or scripts/aws/deploy.sh)
+# CloudFront forwards HTTPS to port 80 here. The web runs on Vercel.
+# AWS credentials come from the instance role (IMDS, hop limit 2), not ~/.aws.
+
+services:
+  api:
+    build:
+      context: ./api
+      target: prod
+    ports:
+      - "80:8000"
+    env_file: .env
+    environment:
+      UPLOADS_DIR: /data/uploads
+      WORKER_URL: http://worker:8000
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      worker:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  # Owns OpenRouter and Quarto; runs the AI Note Taker. Internal only.
+  worker:
+    build:
+      context: ./api
+      target: worker-prod
+    env_file: .env
+    environment:
+      UPLOADS_DIR: /data/uploads
+      API_URL: http://api:8000
+    volumes:
+      - uploads:/data/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    logging: *logging
+
+volumes:
+  uploads:
