@@ -15,6 +15,13 @@ else
 fi
 echo "Deploying $(git rev-parse --short HEAD) ($REF)"
 
+# Secrets live in SSM Parameter Store (SecureString /kse-notes/env); refresh .env from it.
+umask 077
+aws ssm get-parameter --name "${ENV_PARAMETER:-/kse-notes/env}" --with-decryption \
+  --query Parameter.Value --output text > .env.new
+mv .env.new .env
+umask 022
+
 docker compose -f compose.prod.yaml up -d --build --remove-orphans
 docker image prune -f
 docker compose -f compose.prod.yaml ps
