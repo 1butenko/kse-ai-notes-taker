@@ -24,7 +24,7 @@ web (Next.js :3000) ──/api/*──► api (FastAPI :8000) ──HTTP──�
 | `api` | Moodle import, file uploads, course plan (syllabus sessions ↔ readings), read views of runs and revisions. Forwards every AI action to the worker. |
 | `worker` | Owns OpenRouter. Image `typeset` = API image + Quarto (Typst PDF). Takes a file lock (`.worker.lock`) on `uploads_dir`, so **only one worker instance can run**. |
 | `web` | Dashboard: Moodle import, syllabus, readings, lectures, notes editor. |
-| Demo | `render.yaml` / `demo/start.sh` run API and worker in one container. |
+| Demo | `demo/start.sh` runs API and worker in one container (Hugging Face Spaces). Production: `compose.prod.yaml` on AWS EC2. |
 
 ## 2. What happens after a teacher submits textbooks
 
@@ -166,7 +166,7 @@ A run's progress is visible in `run.json` (`topics_done/topics_total`, `log`). *
 | 8 | Low | **No prompt-injection guard.** None of the prompts on `main` tells the model to treat excerpts as data and ignore instructions inside them (the `engine-reset` prompts did). Readings come from teacher-uploaded files and Moodle pages. | `worker/topics.py` prompts |
 | 9 | Low | **The 4 parallel topics times several rounds of calls can hit provider rate limits**, and with no retry (issue 1) this surfaces as failed topics. Models are named `gpt-6.1-sol`, `gemini-3.7-flash` etc.; a renamed or retired model id fails at runtime, not at startup. | `worker/config.py`, `worker/models.py` |
 | 10 | Low | **Background tasks die with the process.** `BackgroundTasks` runs inside uvicorn; a deploy or crash mid-run leaves `running` runs that are only failed at the next worker start. | `worker/main.py` |
-| 11 | Low | **Stale docs/config:** `render.yaml` deploys the branch `notes-generation-engine`; README still lists only syllabus transcription for `OPENROUTER_*` although the worker has many roles. | `render.yaml`, `README.md` |
+| 11 | Low | **Stale docs/config:** README still lists only syllabus transcription for `OPENROUTER_*` although the worker has many roles. | `README.md` |
 
 ## 8. What is not on `main` (so you don't confuse the two codebases)
 
