@@ -102,8 +102,8 @@ USER app
 EXPOSE 8000
 CMD ["uvicorn", "app.worker.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
-# Demo hosting (Render, Hugging Face Spaces): API and worker in one container on $PORT (7860).
-# The default stage, since those hosts build the last one; keep it last.
+# Demo hosting (Hugging Face Spaces): API and worker in one container on $PORT (7860).
+# The default stage, since Spaces builds the last one; keep it last.
 FROM typeset AS demo
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
