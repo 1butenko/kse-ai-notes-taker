@@ -5,7 +5,8 @@ Teachers sign in with Google in the web app (Auth.js, KSE accounts only). The we
 `API_AUTH_SECRET`: `sub` is the user's id (`users.id`). The worker signs its own calls with the
 same secret and `sub = "worker"`; so does the web when it records a user at sign-in.
 
-A course belongs to the teacher in `courses.owner_id`. Services may touch every course.
+A course belongs to the teacher in `courses.owner_id`. Services may touch every course, and
+every signed-in teacher may touch a course listed in `SHARED_COURSES`.
 """
 
 import base64
@@ -154,6 +155,11 @@ def course_owner(course: str) -> UUID | None:
     return row["owner_id"] if row else None
 
 
+def shared_course(course: str) -> bool:
+    """Open to every signed-in teacher (`SHARED_COURSES`), such as the sandbox."""
+    return course in get_settings().shared_courses
+
+
 def run_course(run_id: UUID) -> str | None:
     """The course key of a lecture-notes run."""
     with db.transaction() as conn:
@@ -167,7 +173,7 @@ def run_course(run_id: UUID) -> str | None:
 
 def authorize_course(principal: Principal, course: str) -> None:
     """404 unless the course is the teacher's: someone else's course is not shown to exist."""
-    if principal.kind == "service":
+    if principal.kind == "service" or shared_course(course):
         return
     with storage_unavailable():
         owner = course_owner(course)
