@@ -201,7 +201,7 @@ export function LecturePage({ course, sessionId }: LecturePageProps) {
     <FileViewerProvider>
       <div className="flex flex-col gap-8">
         <Link
-          href="/"
+          href={`/courses/${encodeURIComponent(course)}`}
           className="inline-flex items-center gap-1.5 self-start text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
         >
           <ArrowLeftIcon className="size-4" aria-hidden="true" />

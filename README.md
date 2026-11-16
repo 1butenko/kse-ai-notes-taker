@@ -82,6 +82,22 @@ To run without Docker you also need:
 
 Both services mount their source code, so code changes reload automatically. Changes to `.env` only reach a container when it is recreated (`docker compose restart` keeps the old values): `docker compose up -d --force-recreate api worker`. `OPENROUTER_*` is read by the worker. After adding npm packages, rebuild the web container with `docker compose up -d --build -V web`.
 
+### Sign-in
+
+Teachers sign in with their KSE Google account; each sees and creates only their own courses.
+
+- **Web** ([Auth.js](https://authjs.dev), `web/src/auth.ts`): Google sign-in that accepts only accounts whose verified ID token carries an `hd` (Workspace domain) claim listed in `AUTH_ALLOWED_DOMAINS`. No Workspace admin rights are needed. The browser calls the API only through the web's `/api/*` route handler, which forwards each call with a 60-second token signed with `API_AUTH_SECRET`.
+- **API** (`api/app/auth.py`): every route except `/health` and published lecture-notes pages needs that token. A course belongs to the teacher who created it (`courses.owner_id`); other teachers get a 404, and setting up a Moodle course someone else already has gives a 409. The worker signs its own calls with the same secret.
+
+Setup:
+
+1. Google Cloud Console → **APIs & Services**: set the OAuth consent screen to **External** with the scopes `openid email profile`, and publish it (basic scopes need no verification). Create an **OAuth client ID** (Web application) with the redirect URI `http://localhost:3000/api/auth/callback/google` (plus your deployed web URL's `/api/auth/callback/google`).
+2. In `.env`, set `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET` and `API_AUTH_SECRET` (each secret: `openssl rand -base64 32`), and `AUTH_ALLOWED_DOMAINS` if KSE accounts use more than `kse.org.ua`.
+3. Create the `users` table and the courses' owner column: `make db-init`. Then recreate the containers (`docker compose up -d --force-recreate api worker web`).
+4. Courses created before sign-in have no owner. Once their teacher has signed in, give them one: `cd api && uv run python -m app.manage claim-course <course_key> <email>`. Setting up an unowned course again from the dashboard also claims it.
+
+If KSE's Workspace admins block unconfigured third-party apps, sign-in shows "Access blocked": ask them to trust the OAuth client ID.
+
 ### Running without Docker
 
 Run the API from `api/`; it picks up the root `.env` automatically.
@@ -270,15 +286,18 @@ make logs   # follow container logs
 make down   # stop everything
 ```
 
-## Demo deployment (free)
+## AWS deployment
 
-The web app runs on Vercel (project `kse-notes`, root directory `web`); the API and the worker run together in one free [Render](https://render.com) web service, built from the `demo` stage of `api/Dockerfile` (`api/demo/start.sh` starts both, on `$PORT`). Vercel alone can't host the backend: notes runs take minutes in the background, need Quarto and keep files on disk.
+The web app runs on Vercel (project `kse-notes`, root directory `web`). The API and the worker run on one EC2 instance in `eu-central-1` with `compose.prod.yaml`, next to the Aurora cluster and the S3 bucket. Vercel alone can't host the backend: notes runs take minutes in the background, need Quarto and keep files on disk.
 
-1. In Render, **New → Blueprint**, pick this repository: `render.yaml` creates the `kse-notes-api` service (free plan, from the `notes-generation-engine` branch; change `branch` after merging). Enter the `MOODLE_TOKEN` and `OPENROUTER_API_KEY` secrets when asked.
-2. The service answers at `https://kse-notes-api.onrender.com` (Render adds a suffix if the name is taken). The Vercel project's `NEXT_PUBLIC_API_URL` and `API_URL` must be that URL; `NEXT_PUBLIC_API_URL` is read at build time, so redeploy the web app after changing it.
-3. CORS allows the project's Vercel domains through `CORS_ORIGIN_REGEX`; add other origins to `CORS_ORIGINS`.
+- **Instance**: `t4g.medium` (Amazon Linux 2023), repository cloned to `/opt/kse-notes`, Elastic IP. The instance role `kse-notes-ec2` grants `rds-db:connect` (Aurora IAM auth), the S3 bucket, and SSM Session Manager; boto3 gets its credentials from the instance metadata (hop limit 2, so containers reach it). There is no SSH; use Session Manager.
+- **HTTPS**: a CloudFront distribution forwards to port 80 on the instance, with caching disabled. The security group admits port 80 only from CloudFront's origin-facing prefix list.
+- **Secrets**: `/opt/kse-notes/.env` on the instance (mode 600), with the variables from `.env.example`, plus `ENVIRONMENT=production`, `PUBLIC_API_URL=https://<distribution>.cloudfront.net` and `CORS_ORIGIN_REGEX` for the Vercel domains.
+- **Deploy**: `sudo /opt/kse-notes/scripts/aws/deploy.sh [ref]` (default `main`). It checks out the ref and rebuilds the containers. Uploads live in the `uploads` Docker volume and survive deploys and reboots.
+- **Schema**: after a schema change, run `make db-init` once (or `docker compose -f compose.prod.yaml exec api python -m app.manage init-db` on the instance).
+- **Vercel**: set `API_URL` and `NEXT_PUBLIC_API_URL` to the CloudFront URL (`NEXT_PUBLIC_API_URL` is read at build time, so redeploy after changing it), `API_AUTH_SECRET` (the same value as on the instance), `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_ALLOWED_DOMAINS` and `AUTH_TRUST_HOST=true`. Add `https://<vercel-domain>/api/auth/callback/google` to the OAuth client's redirect URIs.
 
-The free instance has 512 MB of RAM, so the blueprint typesets one PDF at a time (`QUARTO_CONCURRENCY=1`) and writes two topics at a time (`NOTES_CONCURRENCY=2`). It sleeps after 15 minutes without requests (the first request wakes it in about a minute) and its disk is reset on every deploy or restart, so uploads and runs are lost; download what you want to keep.
+Uploads pass through the web's `/api` route handler, so Vercel's 4.5 MB request-body limit for functions applies to them in production.
 
 With a Hugging Face PRO account, `scripts/deploy-space.sh <hf-user>/<space> [<course>/<run> ...]` deploys the same image as a Docker Space (16 GB RAM) and can copy finished runs from the local uploads volume onto it, without book text. `SPACE_DRY_RUN=1` builds the image locally instead.
 

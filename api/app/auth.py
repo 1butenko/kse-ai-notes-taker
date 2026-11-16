@@ -1,0 +1,207 @@
+"""Who is calling, and whether they may touch a course.
+
+Teachers sign in with Google in the web app (Auth.js, KSE accounts only). The web's
+`/api/*` route handler forwards their calls here with a short-lived HS256 token signed with
+`API_AUTH_SECRET`: `sub` is the user's id (`users.id`). The worker signs its own calls with the
+same secret and `sub = "worker"`; so does the web when it records a user at sign-in.
+
+A course belongs to the teacher in `courses.owner_id`. Services may touch every course.
+"""
+
+import base64
+import hashlib
+import hmac
+import json
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Annotated, Literal
+from uuid import UUID
+
+import psycopg
+from fastapi import Depends, Header, HTTPException, Query, status
+from pydantic import BaseModel
+
+from app import db
+from app.config import Settings, get_settings
+
+ISSUER = "kse-web"
+AUDIENCE = "kse-api"
+SERVICES = {"worker", "web"}
+# Clock difference allowed between the web, the worker and the API.
+LEEWAY_SECONDS = 30
+TOKEN_SECONDS = 60
+
+
+class Principal(BaseModel):
+    kind: Literal["user", "service"]
+    id: str
+
+    @property
+    def user_id(self) -> UUID:
+        if self.kind != "user":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only a signed-in teacher can do this")
+        return UUID(self.id)
+
+
+class InvalidToken(ValueError):
+    pass
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def sign_token(secret: str, subject: str, seconds: int = TOKEN_SECONDS) -> str:
+    """An HS256 JWT for `subject`, as the web and the worker make them."""
+    now = int(time.time())
+    header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    claims = {"iss": ISSUER, "aud": AUDIENCE, "sub": subject, "iat": now, "exp": now + seconds}
+    payload = _b64(json.dumps(claims).encode())
+    signature = hmac.new(secret.encode(), f"{header}.{payload}".encode(), hashlib.sha256)
+    return f"{header}.{payload}.{_b64(signature.digest())}"
+
+
+def verify_token(secret: str, token: str) -> str:
+    """The token's subject. Raises InvalidToken unless it is an unexpired HS256 token signed
+    with `secret` for this API."""
+    try:
+        header_b64, payload_b64, signature_b64 = token.split(".")
+        header = json.loads(_unb64(header_b64))
+        expected = hmac.new(
+            secret.encode(), f"{header_b64}.{payload_b64}".encode(), hashlib.sha256
+        ).digest()
+        signature = _unb64(signature_b64)
+    except (ValueError, TypeError) as error:
+        raise InvalidToken("Malformed token") from error
+    if not isinstance(header, dict) or header.get("alg") != "HS256":
+        raise InvalidToken("Unsupported token algorithm")
+    if not hmac.compare_digest(expected, signature):
+        raise InvalidToken("Bad token signature")
+    try:
+        claims = json.loads(_unb64(payload_b64))
+    except ValueError as error:
+        raise InvalidToken("Malformed token") from error
+    if not isinstance(claims, dict):
+        raise InvalidToken("Malformed token")
+    if claims.get("iss") != ISSUER or claims.get("aud") != AUDIENCE:
+        raise InvalidToken("Token is not for this API")
+    exp = claims.get("exp")
+    if not isinstance(exp, int | float) or exp + LEEWAY_SECONDS < time.time():
+        raise InvalidToken("Token expired")
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject:
+        raise InvalidToken("Token has no subject")
+    return subject
+
+
+def unauthorized(detail: str) -> HTTPException:
+    return HTTPException(
+        status.HTTP_401_UNAUTHORIZED, detail, headers={"WWW-Authenticate": "Bearer"}
+    )
+
+
+def current_principal(
+    settings: Annotated[Settings, Depends(get_settings)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> Principal:
+    if not settings.api_auth_secret:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "API_AUTH_SECRET is not set; see .env.example"
+        )
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise unauthorized("Sign in first")
+    try:
+        subject = verify_token(settings.api_auth_secret, token.strip())
+    except InvalidToken as error:
+        raise unauthorized(str(error)) from error
+    if subject in SERVICES:
+        return Principal(kind="service", id=subject)
+    try:
+        UUID(subject)
+    except ValueError as error:
+        raise unauthorized("Unknown token subject") from error
+    return Principal(kind="user", id=subject)
+
+
+CurrentPrincipal = Annotated[Principal, Depends(current_principal)]
+
+
+@contextmanager
+def storage_unavailable() -> Iterator[None]:
+    """The ownership check needs Aurora: say so instead of a 500 when it is unreachable."""
+    try:
+        yield
+    except db.DatabaseNotConfigured as error:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(error)) from error
+    except psycopg.OperationalError as error:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "The database is unreachable"
+        ) from error
+
+
+# A course's owner, by course key. `None`: the course has no row or no owner yet.
+def course_owner(course: str) -> UUID | None:
+    with db.transaction() as conn:
+        row = conn.execute(
+            "SELECT owner_id FROM courses WHERE course_key = %s", (course,)
+        ).fetchone()
+    return row["owner_id"] if row else None
+
+
+def run_course(run_id: UUID) -> str | None:
+    """The course key of a lecture-notes run."""
+    with db.transaction() as conn:
+        row = conn.execute(
+            "SELECT c.course_key FROM lecture_note_runs r JOIN courses c ON c.id = r.course_id"
+            " WHERE r.id = %s",
+            (run_id,),
+        ).fetchone()
+    return row["course_key"] if row else None
+
+
+def authorize_course(principal: Principal, course: str) -> None:
+    """404 unless the course is the teacher's: someone else's course is not shown to exist."""
+    if principal.kind == "service":
+        return
+    with storage_unavailable():
+        owner = course_owner(course)
+    if owner is None or owner != principal.user_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
+
+
+def authorize_path(principal: Principal, path: str) -> None:
+    """A stored file's path starts with its course key (`<course>/<category>/<name>`)."""
+    authorize_course(principal, path.replace("\\", "/").lstrip("/").split("/")[0])
+
+
+def owned_course(course: str, principal: CurrentPrincipal) -> str:
+    """Dependency for routes with a `{course}` path parameter."""
+    authorize_course(principal, course)
+    return course
+
+
+def owned_path(path: Annotated[str, Query()], principal: CurrentPrincipal) -> str:
+    """Dependency for routes with a `?path=` of a stored file."""
+    authorize_path(principal, path)
+    return path
+
+
+def owned_run(run_id: UUID, principal: CurrentPrincipal) -> UUID:
+    """Dependency for routes with a `{run_id}` of a lecture-notes run."""
+    if principal.kind == "service":
+        return run_id
+    with storage_unavailable():
+        course = run_course(run_id)
+    if course is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    authorize_course(principal, course)
+    return run_id
+
+
+OwnedCourse = Annotated[str, Depends(owned_course)]

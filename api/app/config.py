@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     moodle_token: str
     public_api_url: PublicAPIURL = "http://localhost:8000"
     worker_url: str = "http://localhost:8001"
+    # Signs the tokens the web (for signed-in teachers) and the worker send (app/auth.py).
+    api_auth_secret: str = ""
 
     # AI Note Taker storage (app/routers/agent.py): Aurora PostgreSQL rows, S3 files.
     aws_region: str = "eu-central-1"

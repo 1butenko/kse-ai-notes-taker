@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app import db, storage
+from app.auth import owned_course, owned_run
 from app.config import Settings, get_settings
 from app.course import load_info
 from app.note_taker.lecture_notes import runs
@@ -29,6 +30,8 @@ from app.worker_client import WorkerClient, get_worker_client
 from app.worker_contract import LectureNotesRequest
 
 router = APIRouter(prefix="/lecture-notes", tags=["lecture-notes"])
+# Served without sign-in: see app/main.py.
+site_router = APIRouter(prefix="/lecture-notes", tags=["lecture-notes"])
 
 CDN = "https://cdn.jsdelivr.net/npm/"
 
@@ -102,6 +105,7 @@ def begin(course: str, title: str, session_id: str, label: str, fingerprint: str
     "/{course}/{session_id}/runs",
     response_model=LectureNotesRun,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(owned_course)],
 )
 async def start_lecture_notes(
     course: str,
@@ -133,7 +137,11 @@ async def start_lecture_notes(
     return with_changes(run, fingerprint)
 
 
-@router.get("/{course}/{session_id}/runs", response_model=list[LectureNotesRun])
+@router.get(
+    "/{course}/{session_id}/runs",
+    response_model=list[LectureNotesRun],
+    dependencies=[Depends(owned_course)],
+)
 def list_lecture_notes(
     course: str, session_id: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> list[dict[str, Any]]:
@@ -184,7 +192,11 @@ def latest_runs(course: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]
     return latest, published
 
 
-@router.get("/{course}/runs", response_model=list[LectureNotesStatus])
+@router.get(
+    "/{course}/runs",
+    response_model=list[LectureNotesStatus],
+    dependencies=[Depends(owned_course)],
+)
 def course_lecture_notes(
     course: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> list[dict[str, Any]]:
@@ -207,7 +219,7 @@ def course_lecture_notes(
     ]
 
 
-@router.get("/runs/{run_id}", response_model=LectureNotesRun)
+@router.get("/runs/{run_id}", response_model=LectureNotesRun, dependencies=[Depends(owned_run)])
 def get_lecture_notes(run_id: UUID) -> dict[str, Any]:
     with storage_errors():
         row = get_run(run_id)
@@ -216,7 +228,11 @@ def get_lecture_notes(run_id: UUID) -> dict[str, Any]:
     return with_changes(row, None)
 
 
-@router.post("/runs/{run_id}/cancel", response_model=LectureNotesRun)
+@router.post(
+    "/runs/{run_id}/cancel",
+    response_model=LectureNotesRun,
+    dependencies=[Depends(owned_run)],
+)
 async def cancel_lecture_notes(
     run_id: UUID, worker: Annotated[WorkerClient, Depends(get_worker_client)]
 ) -> dict[str, Any]:
@@ -250,7 +266,7 @@ def site_policy(base: str) -> str:
     )
 
 
-@router.get("/runs/{run_id}/site/{path:path}")
+@site_router.get("/runs/{run_id}/site/{path:path}")
 def lecture_notes_site(
     run_id: UUID, path: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> StreamingResponse:

@@ -185,14 +185,20 @@ def course_detail(
     }
 
 
-def ensure_course(conn: Any, course_key: str, title: str, moodle_id: int | None) -> dict[str, Any]:
-    """The course's row, created on first use (with its S3 manifest), its title kept current."""
+def ensure_course(
+    conn: Any, course_key: str, title: str, moodle_id: int | None, owner_id: UUID | None = None
+) -> dict[str, Any]:
+    """The course's row, created on first use (with its S3 manifest), its title kept current.
+    `owner_id` becomes the owner of a course that has none; an owned course keeps its owner,
+    which the row returned says."""
     course = conn.execute(
-        "INSERT INTO courses (title, moodle_course_id, course_key) VALUES (%s, %s, %s)"
+        "INSERT INTO courses (title, moodle_course_id, course_key, owner_id)"
+        " VALUES (%s, %s, %s, %s)"
         " ON CONFLICT (course_key) DO UPDATE SET title = EXCLUDED.title,"
-        " moodle_course_id = COALESCE(EXCLUDED.moodle_course_id, courses.moodle_course_id)"
-        " RETURNING id, title, created_at, (xmax = 0) AS inserted",
-        (title, moodle_id, course_key),
+        " moodle_course_id = COALESCE(EXCLUDED.moodle_course_id, courses.moodle_course_id),"
+        " owner_id = COALESCE(courses.owner_id, EXCLUDED.owner_id)"
+        " RETURNING id, title, created_at, owner_id, (xmax = 0) AS inserted",
+        (title, moodle_id, course_key, owner_id),
     ).fetchone()
     assert course is not None
     if course["inserted"]:

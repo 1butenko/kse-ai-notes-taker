@@ -7,6 +7,7 @@ import httpx2
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
+from app.auth import CurrentPrincipal, authorize_course, owned_course
 from app.config import Settings, get_settings
 from app.links import (
     PageTooLarge,
@@ -49,8 +50,12 @@ def safe_name(name: str) -> str:
     return cleaned
 
 
+def course_key(course_id: int | None) -> str:
+    return str(course_id) if course_id else "local"
+
+
 def target_dir(settings: Settings, course_id: int | None, category: Category) -> Path:
-    directory = settings.uploads_dir / (str(course_id) if course_id else "local") / category
+    directory = settings.uploads_dir / course_key(course_id) / category
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
@@ -120,8 +125,10 @@ async def upload_files(
     category: Annotated[Category, Form()],
     files: Annotated[list[UploadFile], File()],
     settings: Annotated[Settings, Depends(get_settings)],
+    principal: CurrentPrincipal,
     course_id: Annotated[int | None, Form()] = None,
 ) -> list[SavedFile]:
+    authorize_course(principal, course_key(course_id))
     directory = target_dir(settings, course_id, category)
     with Staging(settings, directory) as staging:
         for upload in files:
@@ -135,7 +142,9 @@ async def upload_moodle_files(
     body: MoodleUploadRequest,
     moodle: Annotated[MoodleClient, Depends(get_moodle_client)],
     settings: Annotated[Settings, Depends(get_settings)],
+    principal: CurrentPrincipal,
 ) -> list[SavedFile]:
+    authorize_course(principal, course_key(body.course_id))
     moodle_prefix = f"{settings.moodle_url.rstrip('/')}/"
     for ref in body.files:
         if not ref.fileurl.startswith(moodle_prefix):
@@ -183,10 +192,12 @@ async def upload_moodle_links(
     moodle: Annotated[MoodleClient, Depends(get_moodle_client)],
     web: Annotated[httpx2.AsyncClient, Depends(get_web_client)],
     settings: Annotated[Settings, Depends(get_settings)],
+    principal: CurrentPrincipal,
 ) -> list[SavedFile]:
     """Save the course's web pages as reading materials: what its `url` modules point to (PDFs
     as they are, HTML pages as Markdown) and its own `page` and `book` modules (as Markdown).
     Only modules of the course itself are fetched."""
+    authorize_course(principal, course_key(body.course_id))
     with moodle_errors():
         sections = await moodle.get_course_contents(settings.moodle_token, body.course_id)
     modules = {m.id: m for s in sections for m in s.modules}
@@ -246,7 +257,7 @@ class CourseFiles(BaseModel):
     reading: list[SavedFile]
 
 
-@router.get("/{course}")
+@router.get("/{course}", dependencies=[Depends(owned_course)])
 def list_files(course: str, settings: Annotated[Settings, Depends(get_settings)]) -> CourseFiles:
     if course != "local" and not course.isdigit():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {course!r}")

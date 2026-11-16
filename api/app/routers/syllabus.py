@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
+from app.auth import CurrentPrincipal, authorize_path, owned_path
 from app.config import Settings, get_settings
 from app.course import clear_readings_approval
 from app.plan import drop_primary, load_plan, save_plan, sync
@@ -61,8 +62,10 @@ async def transcribe(
     body: TranscribeRequest,
     settings: Annotated[Settings, Depends(get_settings)],
     worker: Annotated[WorkerClient, Depends(get_worker_client)],
+    principal: CurrentPrincipal,
     force: Annotated[bool, Query()] = False,
 ) -> Transcript:
+    authorize_path(principal, body.path)
     file = syllabus_file(settings, body.path)
     digest = sha256(file)
 
@@ -92,7 +95,7 @@ async def transcribe(
     return transcript
 
 
-@router.get("/transcript")
+@router.get("/transcript", dependencies=[Depends(owned_path)])
 def get_transcript(
     path: Annotated[str, Query()],
     settings: Annotated[Settings, Depends(get_settings)],
@@ -103,7 +106,7 @@ def get_transcript(
     return transcript
 
 
-@router.put("/transcript")
+@router.put("/transcript", dependencies=[Depends(owned_path)])
 def put_transcript(
     path: Annotated[str, Query()],
     body: Transcript,
@@ -136,7 +139,7 @@ def put_transcript(
     return transcript
 
 
-@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(owned_path)])
 def delete_syllabus(
     path: Annotated[str, Query()],
     settings: Annotated[Settings, Depends(get_settings)],
