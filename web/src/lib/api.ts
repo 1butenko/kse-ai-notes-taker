@@ -1,5 +1,7 @@
-export const API_URL = process.env.API_URL ?? "http://localhost:8000";
+/** The API as the signed-in teacher: the web's own route handler (src/app/api/[...path]). */
+const API_BASE = "/api";
 
+/** The API itself, for what needs no sign-in: published lecture-notes pages. */
 export const PUBLIC_API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? `http://localhost:${process.env.API_PORT}`;
 
@@ -59,7 +61,14 @@ export type SavedFile = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${PUBLIC_API_URL}${path}`, init);
+  const res = await fetch(`${API_BASE}${path}`, init);
+  if (res.status === 401 && typeof window !== "undefined") {
+    // The session ended: sign in again, then come back here.
+    const back = window.location.pathname + window.location.search;
+    // A full page load, not the router: the server must read the new session cookie.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.href = `/sign-in?callbackUrl=${encodeURIComponent(back)}`;
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const detail = typeof body?.detail === "string" ? body.detail : `Request failed (${res.status})`;
@@ -313,7 +322,7 @@ export function isPdfPath(path: string): boolean {
 }
 
 export function fileUrl(path: string, page?: number): string {
-  const url = `${PUBLIC_API_URL}/files?path=${encodeURIComponent(path)}`;
+  const url = `${API_BASE}/files?path=${encodeURIComponent(path)}`;
   return page ? `${url}#page=${page}` : url;
 }
 
@@ -499,5 +508,25 @@ export function startAgentSync(course: string, focus?: string): Promise<AgentRun
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ focus: focus?.trim() || null }),
+  });
+}
+
+export type Me = {
+  id: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  avatar_url: string | null;
+};
+
+export function getMe(): Promise<Me> {
+  return request("/me");
+}
+
+export function updateMe(names: { first_name: string; last_name: string }): Promise<Me> {
+  return request("/me", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(names),
   });
 }

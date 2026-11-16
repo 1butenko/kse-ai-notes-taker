@@ -1,7 +1,9 @@
 import { AppHeader } from "@/components/dashboard/app-header";
 import { MoodleCourseProvider } from "@/components/dashboard/moodle-course-context";
+import { verifySession } from "@/lib/dal";
 
-export default function DashboardLayout({ children }: LayoutProps<"/">) {
+export default async function DashboardLayout({ children }: LayoutProps<"/">) {
+  await verifySession();
   return (
     <MoodleCourseProvider>
       <AppHeader />
