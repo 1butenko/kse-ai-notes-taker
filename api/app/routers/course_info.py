@@ -2,12 +2,16 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, StringConstraints
 
+from app import db, users
+from app.auth import CurrentPrincipal, owned_course, storage_unavailable
 from app.config import Settings, get_settings
 from app.course import CourseInfo, load_info, save_info
+from app.routers.agent import ensure_course
 from app.routers.plans import COURSE, course_dir
 
 router = APIRouter(prefix="/course-info", tags=["course-info"])
@@ -18,15 +22,36 @@ class CourseInfoRequest(BaseModel):
 
 
 @router.get("")
-def list_course_info(settings: Annotated[Settings, Depends(get_settings)]) -> list[CourseInfo]:
-    root = settings.uploads_dir
-    if not root.is_dir():
-        return []
-    found = [load_info(d) for d in root.iterdir() if d.is_dir() and COURSE.match(d.name)]
+def list_course_info(
+    settings: Annotated[Settings, Depends(get_settings)], principal: CurrentPrincipal
+) -> list[CourseInfo]:
+    """The signed-in teacher's courses, newest first."""
+    with storage_unavailable():
+        keys = users.owned_course_keys(principal.user_id)
+    found = [load_info(course_dir(settings, key)) for key in keys if COURSE.match(key)]
     return sorted((i for i in found if i), key=lambda i: i.created_at, reverse=True)
 
 
-@router.get("/{course}")
+def claim(course: str, name: str, user_id: UUID) -> None:
+    """Link the course to its row, owned by this teacher. 409 when another teacher has it."""
+    moodle_id = int(course) if course.isdigit() else None
+    with db.transaction() as conn:
+        row = ensure_course(conn, course, name, moodle_id, user_id)
+        if row["owner_id"] != user_id:
+            # Raised inside the transaction, so the title change rolls back too.
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This Moodle course is already set up by another teacher",
+            )
+
+
+def release(course: str) -> None:
+    """Start over: the course no longer belongs to anyone, so anyone may set it up again."""
+    with db.transaction() as conn:
+        conn.execute("UPDATE courses SET owner_id = NULL WHERE course_key = %s", (course,))
+
+
+@router.get("/{course}", dependencies=[Depends(owned_course)])
 def get_course_info(
     course: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> CourseInfo:
@@ -38,9 +63,15 @@ def get_course_info(
 
 @router.put("/{course}")
 def put_course_info(
-    course: str, body: CourseInfoRequest, settings: Annotated[Settings, Depends(get_settings)]
+    course: str,
+    body: CourseInfoRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+    principal: CurrentPrincipal,
 ) -> CourseInfo:
+    """Create the course for the signed-in teacher, or rename theirs."""
     directory = course_dir(settings, course)
+    with storage_unavailable():
+        claim(course, body.name, principal.user_id)
     previous = load_info(directory)
     info = CourseInfo(
         course=course,
@@ -62,7 +93,7 @@ def approval(settings: Settings, course: str, approved_at: str | None) -> Course
     return info
 
 
-@router.post("/{course}/readings-approval")
+@router.post("/{course}/readings-approval", dependencies=[Depends(owned_course)])
 def approve_readings(
     course: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> CourseInfo:
@@ -70,7 +101,7 @@ def approve_readings(
     return approval(settings, course, datetime.now(UTC).isoformat(timespec="seconds"))
 
 
-@router.delete("/{course}/readings-approval")
+@router.delete("/{course}/readings-approval", dependencies=[Depends(owned_course)])
 def revoke_readings_approval(
     course: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> CourseInfo:
@@ -82,10 +113,15 @@ def trash_dir(settings: Settings) -> Path:
     return settings.uploads_dir / ".trash"
 
 
-@router.delete("/{course}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{course}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(owned_course)]
+)
 def delete_course(course: str, settings: Annotated[Settings, Depends(get_settings)]) -> None:
-    """Start over: the course folder and its uploads move to the trash. Visual notes live in S3
-    and Aurora and are not touched; a run going on keeps the readings it already read."""
+    """Start over: the course folder and its uploads move to the trash, and the course is no
+    longer the teacher's. Visual notes live in S3 and Aurora and are not touched; a run going on
+    keeps the readings it already read."""
+    with storage_unavailable():
+        release(course)
     directory = course_dir(settings, course)
     if not directory.is_dir():
         return

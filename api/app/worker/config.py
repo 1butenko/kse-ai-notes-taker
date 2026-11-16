@@ -22,6 +22,8 @@ class WorkerSettings(BaseSettings):
     note_taker_model: str = "openai/gpt-5.5"
     # The app's API, which the AI Note Taker uses to fill the course (files, lectures, readings).
     api_url: str = "http://localhost:8000"
+    # Signs the worker's calls to the API (app/auth.py); the API's own API_AUTH_SECRET.
+    api_auth_secret: str = ""
     quarto_bin: str = "quarto"
     quarto_concurrency: int = 4
     # The lecture-notes agent (app/note_taker/lecture_notes). Empty models use note_taker_model.

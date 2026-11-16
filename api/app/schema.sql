@@ -99,3 +99,20 @@ CREATE TABLE IF NOT EXISTS lecture_note_runs (
 
 CREATE INDEX IF NOT EXISTS lecture_note_runs_session_idx
     ON lecture_note_runs (course_id, session_id, started_at DESC);
+
+-- Teachers, signed in with their KSE Google account (the web's Auth.js; app/routers/auth.py).
+CREATE TABLE IF NOT EXISTS users (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    google_sub    text NOT NULL UNIQUE,
+    email         text NOT NULL UNIQUE,
+    first_name    text NOT NULL DEFAULT '',
+    last_name     text NOT NULL DEFAULT '',
+    avatar_url    text,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    last_login_at timestamptz
+);
+
+-- The teacher a course belongs to (app/auth.py). Courses made before sign-in have none until
+-- claimed (`uv run python -m app.manage claim-course <course_key> <email>`).
+ALTER TABLE courses ADD COLUMN IF NOT EXISTS owner_id uuid REFERENCES users (id);
+CREATE INDEX IF NOT EXISTS courses_owner_idx ON courses (owner_id);

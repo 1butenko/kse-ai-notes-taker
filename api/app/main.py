@@ -1,12 +1,14 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth import current_principal, owned_course
 from app.config import get_settings
 from app.routers import (
     agent,
+    auth,
     course_info,
     courses,
     files,
@@ -60,14 +62,22 @@ async def published_book_cors(request, call_next):
     return response
 
 
-app.include_router(courses.router)
-app.include_router(course_info.router)
-app.include_router(uploads.router)
-app.include_router(syllabus.router)
-app.include_router(plans.router)
-app.include_router(files.router)
-app.include_router(agent.router)
-app.include_router(lecture_notes.router)
+# Every route needs a signed-in teacher or a service (app/auth.py); course routes also check
+# that the course is the teacher's, per route or, where every route has `{course}`, per router.
+signed_in = [Depends(current_principal)]
+own_course = [*signed_in, Depends(owned_course)]
+
+app.include_router(auth.router, dependencies=signed_in)
+app.include_router(courses.router, dependencies=signed_in)
+app.include_router(course_info.router, dependencies=signed_in)
+app.include_router(uploads.router, dependencies=signed_in)
+app.include_router(syllabus.router, dependencies=signed_in)
+app.include_router(plans.router, dependencies=own_course)
+app.include_router(files.router, dependencies=signed_in)
+app.include_router(agent.router, dependencies=own_course)
+app.include_router(lecture_notes.router, dependencies=signed_in)
+# Published lecture-notes pages are public (an unguessable run id), for the sandboxed iframe.
+app.include_router(lecture_notes.site_router)
 
 
 @app.get("/health")

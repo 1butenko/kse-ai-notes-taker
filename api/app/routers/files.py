@@ -5,6 +5,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, Response
 
+from app.auth import owned_path
 from app.books import subset_pdf
 from app.config import Settings, get_settings
 from app.plan import excerpt_proposal, load_plan
@@ -40,7 +41,7 @@ def excerpt_response(root: Path, path: str) -> Response:
     )
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(owned_path)])
 def get_file(
     path: Annotated[str, Query()],
     settings: Annotated[Settings, Depends(get_settings)],

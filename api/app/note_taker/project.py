@@ -3,10 +3,12 @@ API's own endpoints: the agent saves files, reads the syllabus and maps readings
 lecturer's screens do, with the same checks.
 """
 
+from collections.abc import Generator
 from typing import Any, Literal
 
 import httpx
 
+from app.auth import sign_token
 from app.worker.config import get_worker_settings
 
 Category = Literal["syllabus", "reading"]
@@ -16,6 +18,18 @@ SYLLABUS_SUFFIXES = (".pdf", ".docx")
 
 class ProjectError(Exception):
     pass
+
+
+class WorkerAuth(httpx.Auth):
+    """Signs each call as the worker (app/auth.py): a fresh short-lived token per request, as
+    the agent's runs outlast any one token."""
+
+    def __init__(self, secret: str) -> None:
+        self.secret = secret
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        request.headers["Authorization"] = f"Bearer {sign_token(self.secret, 'worker')}"
+        yield request
 
 
 class Project:
@@ -29,7 +43,11 @@ class Project:
     def connect(cls, course: str) -> "Project":
         settings = get_worker_settings()
         # Reading a syllabus or mapping books takes minutes: bound connecting only.
-        http = httpx.Client(base_url=settings.api_url, timeout=httpx.Timeout(900, connect=10))
+        http = httpx.Client(
+            base_url=settings.api_url,
+            timeout=httpx.Timeout(900, connect=10),
+            auth=WorkerAuth(settings.api_auth_secret),
+        )
         return cls(course, http)
 
     def call(self, method: str, path: str, **kwargs: Any) -> Any:

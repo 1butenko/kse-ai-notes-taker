@@ -6,15 +6,17 @@ os.environ.setdefault("MOODLE_TOKEN", "test-token")
 from collections.abc import AsyncIterator, Callable, Iterator  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
 from pathlib import Path  # noqa: E402
+from uuid import UUID  # noqa: E402
 
 import httpx2  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import db, prompts  # noqa: E402
+from app import auth, db, prompts, users  # noqa: E402
 from app.config import Settings, get_settings  # noqa: E402
 from app.main import app  # noqa: E402
 from app.moodle import MoodleClient, get_moodle_client  # noqa: E402
+from app.routers import course_info  # noqa: E402
 from app.worker.config import WorkerSettings, get_worker_settings  # noqa: E402
 from app.worker.main import app as worker_app  # noqa: E402
 from app.worker.openrouter import (  # noqa: E402
@@ -52,6 +54,30 @@ def no_database(monkeypatch: pytest.MonkeyPatch) -> None:
         raise db.DatabaseNotConfigured("Tests do not use the database")
 
     monkeypatch.setattr(db, "connect", refuse)
+
+
+TEST_USER = UUID("00000000-0000-4000-8000-000000000001")
+
+
+@pytest.fixture(autouse=True)
+def signed_in(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Calls come from a signed-in teacher who owns every course; tests/test_auth.py checks
+    the real tokens and ownership. The course rows' seams stand in for Aurora."""
+    app.dependency_overrides[auth.current_principal] = lambda: auth.Principal(
+        kind="user", id=str(TEST_USER)
+    )
+    monkeypatch.setattr(auth, "course_owner", lambda course: TEST_USER)
+    monkeypatch.setattr(auth, "run_course", lambda run_id: "local")
+    monkeypatch.setattr(course_info, "claim", lambda course, name, user_id: None)
+    monkeypatch.setattr(course_info, "release", lambda course: None)
+
+    def every_course(user_id: UUID) -> list[str]:
+        root = app.dependency_overrides.get(get_settings, get_settings)().uploads_dir
+        return [d.name for d in root.iterdir() if d.is_dir()] if root.is_dir() else []
+
+    monkeypatch.setattr(users, "owned_course_keys", every_course)
+    yield
+    app.dependency_overrides.pop(auth.current_principal, None)
 
 
 @pytest.fixture(autouse=True)
