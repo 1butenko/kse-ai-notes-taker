@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, StringConstraints
 
 from app import db, users
-from app.auth import CurrentPrincipal, owned_course, storage_unavailable
+from app.auth import (
+    CurrentPrincipal,
+    course_owner,
+    owned_course,
+    shared_course,
+    storage_unavailable,
+)
 from app.config import Settings, get_settings
 from app.course import CourseInfo, load_info, save_info
 from app.routers.agent import ensure_course
@@ -25,19 +31,20 @@ class CourseInfoRequest(BaseModel):
 def list_course_info(
     settings: Annotated[Settings, Depends(get_settings)], principal: CurrentPrincipal
 ) -> list[CourseInfo]:
-    """The signed-in teacher's courses, newest first."""
+    """The signed-in teacher's courses and the shared ones, newest first."""
     with storage_unavailable():
-        keys = users.owned_course_keys(principal.user_id)
+        keys = set(users.owned_course_keys(principal.user_id)) | set(settings.shared_courses)
     found = [load_info(course_dir(settings, key)) for key in keys if COURSE.match(key)]
     return sorted((i for i in found if i), key=lambda i: i.created_at, reverse=True)
 
 
 def claim(course: str, name: str, user_id: UUID) -> None:
-    """Link the course to its row, owned by this teacher. 409 when another teacher has it."""
+    """Link the course to its row, owned by this teacher. 409 when another teacher has it,
+    unless the course is shared."""
     moodle_id = int(course) if course.isdigit() else None
     with db.transaction() as conn:
         row = ensure_course(conn, course, name, moodle_id, user_id)
-        if row["owner_id"] != user_id:
+        if row["owner_id"] != user_id and not shared_course(course):
             # Raised inside the transaction, so the title change rolls back too.
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -116,11 +123,21 @@ def trash_dir(settings: Settings) -> Path:
 @router.delete(
     "/{course}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(owned_course)]
 )
-def delete_course(course: str, settings: Annotated[Settings, Depends(get_settings)]) -> None:
+def delete_course(
+    course: str, settings: Annotated[Settings, Depends(get_settings)], principal: CurrentPrincipal
+) -> None:
     """Start over: the course folder and its uploads move to the trash, and the course is no
     longer the teacher's. Visual notes live in S3 and Aurora and are not touched; a run going on
-    keeps the readings it already read."""
+    keeps the readings it already read. A shared course is only its owner's to start over."""
     with storage_unavailable():
+        if (
+            principal.kind == "user"
+            and shared_course(course)
+            and course_owner(course) != principal.user_id
+        ):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "Only the course's owner can start a shared course over"
+            )
         release(course)
     directory = course_dir(settings, course)
     if not directory.is_dir():
