@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -69,7 +69,7 @@ jobs:
           fi
 
       # claude-code-action does not accept push events, so run the CLI directly.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -105,7 +105,7 @@ jobs:
           git stash pop >/dev/null 2>&1 || true
 
       - name: Open or update the docs PR
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: ${{ steps.range.outputs.docs_branch }}
           base: ${{ github.ref_name }}
