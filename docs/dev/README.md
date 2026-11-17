@@ -18,6 +18,7 @@ Read this page, then the area doc for what you are changing.
 
 <!-- Newest first, at most 20. One line each: - YYYY-MM-DD [title](changes/file.md): summary -->
 
+- 2026-11-17 [Add Dependabot version updates](changes/2026-11-17-cea3829.md): `.github/dependabot.yml` for uv, npm, Docker and Actions.
 - 2026-11-17 [Add security policy](changes/2026-11-17-6dfe72a.md): adds `SECURITY.md`; docs only.
 - 2026-11-16 [Remove remaining Render references](changes/2026-11-16-a197736.md): comment and doc wording only; backend is on AWS EC2.
 - 2026-11-16 [Merge of autonomous-course-create into main](changes/2026-11-16-c5e408d.md): merge only; the `deploy.sh` SSM change is in the entry below.
