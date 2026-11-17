@@ -20,6 +20,10 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    ignore:
+      # Types must match the Node runtime in web/Dockerfile (node:24), not the latest Node.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
     groups:
       web-minor-and-patch:
         update-types: [minor, patch]
