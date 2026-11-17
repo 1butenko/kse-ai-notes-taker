@@ -18,6 +18,12 @@ Read this page, then the area doc for what you are changing.
 
 <!-- Newest first, at most 20. One line each: - YYYY-MM-DD [title](changes/file.md): summary -->
 
+- 2026-11-17 [Bump pypdf to 7.1.0](changes/2026-11-17-5bc633c.md): major bump of `pypdf` (6.19.0 to 7.1.0) in `api/uv.lock`; no code changes.
+- 2026-11-17 [Bump API dependencies](changes/2026-11-17-a7c1e6a.md): Dependabot group update in `api/uv.lock` (fastapi, langchain, deepagents, ruff and others); no code changes.
+- 2026-11-17 [Fix web security advisories in lockfile](changes/2026-11-17-3095b49.md): `npm audit fix` on `web/package-lock.json` only; no code changes.
+- 2026-11-17 [Skip Claude review on Dependabot PRs](changes/2026-11-17-2586b7a.md): `claude-review` skips `dependabot[bot]`; `@types/node` kept on Node 24 majors.
+- 2026-11-17 [Bump GitHub Actions versions](changes/2026-11-17-1b95a5a.md): checkout and setup-node v7, create-pull-request v8; workflows only.
+- 2026-11-17 [Bump API Docker base image to Python 3.15](changes/2026-11-17-1f07f5f.md): `api/Dockerfile` now uses `python:3.15-slim`.
 - 2026-11-17 [Add Dependabot version updates](changes/2026-11-17-cea3829.md): `.github/dependabot.yml` for uv, npm, Docker and Actions.
 - 2026-11-17 [Add security policy](changes/2026-11-17-6dfe72a.md): adds `SECURITY.md`; docs only.
 - 2026-11-16 [Remove remaining Render references](changes/2026-11-16-a197736.md): comment and doc wording only; backend is on AWS EC2.
