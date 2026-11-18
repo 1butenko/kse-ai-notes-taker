@@ -4,6 +4,12 @@
 !.env.example
 .idea/
 .vscode/
-.claude
+# Claude Code: share project skills (and later settings.json, agents, commands);
+# keep personal and machine-specific files local.
+.claude/settings.local.json*
+.claude/launch.json
+.claude/worktrees/
+# Migration-only skill, turned off; install locally if needed.
+.claude/skills/migrate-radix-to-base/
 # Real syllabi for live extraction tests (contain personal data)
 test_sullabys/
