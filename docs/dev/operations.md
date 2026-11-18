@@ -29,6 +29,16 @@ On the AWS instance, `.env` comes from the SSM SecureString parameter `/kse-note
 
 [claude-code-review.yml](../../.github/workflows/claude-code-review.yml) runs the `claude-review` job on pull requests. It is skipped for PRs opened by `dependabot[bot]`, because those runs have no repository secrets and the job would always fail.
 
-## CI: Dev docs workflow
+## CI: Docs workflow
 
-[dev-docs.yml](../../.github/workflows/dev-docs.yml) runs on pushes to `main` and `feature/**`. It installs Node 22 and the Claude Code CLI (`npm install -g @anthropic-ai/claude-code`) and runs `claude -p` with the prompt in [dev-docs.md](../../.github/prompts/dev-docs.md), model `claude-sonnet-5-5`, max 60 turns. Allowed tools: read/search, edit and write under `docs/dev/**`, and `git log`/`diff`/`show`. It authenticates with `ANTHROPIC_API_KEY` or, if that is empty, `CLAUDE_CODE_OAUTH_TOKEN`. It does not use `claude-code-action`, which rejects push events.
+[docs.yml](../../.github/workflows/docs.yml) runs Claude Code (`claude -p`, model `claude-sonnet-5-5`, max 100 turns) with the prompt in [docs.md](../../.github/prompts/docs.md). It installs Node 22 and `@anthropic-ai/claude-code`, and authenticates with `ANTHROPIC_API_KEY` or, if that is empty, `CLAUDE_CODE_OAUTH_TOKEN`.
+
+| Trigger | Mode | What happens |
+|---|---|---|
+| Pull request opened, updated, reopened or marked ready | `pr` | Updates the docs the PR's code changes affect, writes `docs/dev/changes/<date>-pr<number>.md`, commits to the PR branch |
+| Monday 06:00 UTC, or manual run | `audit` | Checks every maintained doc against the branch's code, fills stub docs, opens or updates the PR `docs/audit-<branch>` |
+
+- Skipped for draft PRs, Dependabot PRs and PRs from forks (no secrets), and for PRs that only change docs.
+- Claude may only edit the maintained docs (`DOC_PATHS` in the workflow); a step reverts anything else before the commit.
+- The docs commit is pushed with `GITHUB_TOKEN`, so it does not trigger other workflows. If status checks become required on PRs, push with a GitHub App token instead, or the checks will not run on the docs commit.
+- One run per PR at a time; a new push cancels the running one.
