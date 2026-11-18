@@ -83,7 +83,7 @@ On the AWS instance, `.env` comes from the SSM SecureString parameter `/kse-note
 
 ## CI: Claude code review
 
-[claude.yml](../../.github/workflows/claude.yml) runs Claude Code on issue and PR comments, reviews, and new or assigned issues. [claude-code-review.yml](../../.github/workflows/claude-code-review.yml) runs the `claude-review` job on pull requests. It is skipped for PRs opened by `dependabot[bot]`, because those runs have no repository secrets and the job would always fail.
+[claude.yml](../../.github/workflows/claude.yml) runs Claude Code on issue and PR comments, reviews, and new or assigned issues. [claude-code-review.yml](../../.github/workflows/claude-code-review.yml) runs the `claude-review` job on pull requests. It is skipped for PRs opened by `dependabot[bot]`, because those runs have no repository secrets and the job would always fail. It is also skipped for commits pushed by `github-actions[bot]` (the Docs workflow's docs commits), because the action refuses bot actors.
 
 ## CI: Docs workflow
 
@@ -96,5 +96,5 @@ On the AWS instance, `.env` comes from the SSM SecureString parameter `/kse-note
 
 - Skipped for draft PRs, Dependabot PRs and PRs from forks (no secrets), and for PRs that only change docs.
 - Claude may only edit the maintained docs (`DOC_PATHS` in the workflow); a step reverts anything else before the commit.
-- The docs commit is pushed with `GITHUB_TOKEN`, so it does not trigger other workflows. If status checks become required on PRs, push with a GitHub App token instead, or the checks will not run on the docs commit.
+- The docs commit (author `github-actions[bot]`) triggers the PR workflows again. `docs.yml` and `claude-code-review.yml` skip runs whose actor is `github-actions[bot]`, so it does not loop; other checks, such as CI, run on it as usual.
 - One run per PR at a time; a new push cancels the running one.

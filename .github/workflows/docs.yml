@@ -33,9 +33,11 @@ env:
 
 jobs:
   docs:
-    # PRs: only same-repo branches (forks have no secrets), not Dependabot, not drafts.
+    # PRs: only same-repo branches (forks have no secrets), not Dependabot, not drafts,
+    # and not the docs commit this workflow pushes itself (it does trigger PR workflows).
     if: >-
       github.event_name != 'pull_request' || (
+        github.actor != 'github-actions[bot]' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.user.login != 'dependabot[bot]' &&
         !github.event.pull_request.draft
@@ -140,7 +142,7 @@ jobs:
             exit 0
           fi
           git commit -m "docs: update for #$PR_NUMBER at $SHORT"
-          # A push made with GITHUB_TOKEN does not trigger workflows, so this cannot loop.
+          # This push triggers PR workflows again; the job `if` skips runs by github-actions[bot].
           git push origin "HEAD:$HEAD_REF"
           { echo '### Docs updated'; echo '```'; git show --stat --format='%h %s' HEAD; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
