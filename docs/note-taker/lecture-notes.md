@@ -116,17 +116,18 @@ How the visuals are drawn:
 
 ## Tracing
 
-Every run is one Langfuse trace when `LANGFUSE_*` keys are set and `LANGFUSE_TRACING` is not `false`.
+Every run is one Langfuse trace when `LANGFUSE_*` keys are set and `LANGFUSE_TRACING` is not `false`. User, session and cost are recorded as for every trace; see [Tracing](overview.md#tracing).
 
 **What the trace holds.**
 - **Root observation:** an `agent` named `lecture-notes`.
+- **User:** the teacher who started the run.
 - **Session:** `course-<key>`.
 - **Metadata:** course, lecture and run.
 - **Tag:** `lecture-notes`.
 - **Skills:** `skills_available` lists the skills with their versions.
 
 **Generations.**
-- Every model and tool call sits below the root, through Langfuse's LangChain handler. deepagents passes callbacks into subagents, so the reviewer is traced too.
+- Every model and tool call sits below the root, through Langfuse's LangChain handler (with OpenRouter's cost added, `app.tracing.callback_handler`). deepagents passes callbacks into subagents, so the reviewer is traced too.
 - The writer's and the reviewer's generations link to the Langfuse prompt versions they used (`LinkPrompt` middleware). Fallback prompts are never linked.
 
 **On the run's row.** It records the prompt and skill versions (`prompt_versions`, where `null` means the repo fallback) and the `langfuse_trace_id`.

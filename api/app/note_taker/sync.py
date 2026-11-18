@@ -120,8 +120,19 @@ class MainAgentProgress(BaseCallbackHandler):
             self.progress.note(f"Handing the work to the {subagent} agent")
 
 
-def execute_run(run_id: UUID, course_id: UUID, moodle_course_id: int, focus: str | None) -> None:
-    """Run the orchestrator to the end. Never raises: a failure is stored on the run."""
+def execute_run(
+    run_id: UUID,
+    course_id: UUID,
+    moodle_course_id: int,
+    focus: str | None,
+    *,
+    user_id: str | None = None,
+    model: Any = None,
+) -> None:
+    """Run the orchestrator to the end. Never raises: a failure is stored on the run.
+
+    Traced in Langfuse as one `prepare-course` trace (the orchestrator and its Moodle subagent),
+    for `user_id`, in the course's session. `model` defaults to OpenRouter; tests pass a fake."""
     progress = Progress(
         save=lambda todos, actions, step: save_progress(run_id, todos, actions, step)
     )
@@ -129,24 +140,40 @@ def execute_run(run_id: UUID, course_id: UUID, moodle_course_id: int, focus: str
         # Imported here so importing the API does not build a chat model.
         from langchain_core.messages import HumanMessage
 
+        from app import tracing
         from app.note_taker.agent import build_note_taker
         from app.note_taker.project import Project
 
+        # The app's course key is its Moodle course id.
+        course = str(moodle_course_id)
         agent = build_note_taker(
             str(course_id),
             moodle_course_id,
-            # The app's course key is its Moodle course id.
-            project=Project.connect(str(moodle_course_id)),
+            model=model,
+            project=Project.connect(course),
             progress=progress,
         )
-        result = agent.invoke(
-            {
-                "messages": [
-                    HumanMessage(content=request_message(course_id, moodle_course_id, focus))
-                ]
-            },
-            config={"callbacks": [MainAgentProgress(progress)]},
-        )
-        finish_run(run_id, report=result["messages"][-1].text)
+        message = request_message(course_id, moodle_course_id, focus)
+        try:
+            with tracing.traced(
+                "prepare-course",
+                user_id=user_id,
+                session_id=tracing.course_session(course),
+                input=message,
+                metadata={"course": course, "run": str(run_id)},
+                tags=["note-taker"],
+                as_type="agent",
+            ) as root:
+                callbacks = [tracing.callback_handler()] if root is not None else []
+                result = agent.invoke(
+                    {"messages": [HumanMessage(content=message)]},
+                    config={"callbacks": [*callbacks, MainAgentProgress(progress)]},
+                )
+                report = result["messages"][-1].text
+                if root is not None:
+                    root.update(output=report)
+        finally:
+            tracing.flush()
+        finish_run(run_id, report=report)
     except Exception as error:
         finish_run(run_id, error=f"{type(error).__name__}: {error}")

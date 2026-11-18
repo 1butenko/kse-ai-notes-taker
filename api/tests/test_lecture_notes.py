@@ -620,7 +620,9 @@ def test_every_lecture_notes_prompt_has_a_fallback() -> None:
 def test_no_tracing_without_langfuse() -> None:
     from app.note_taker.lecture_notes.tracing import link_prompt, traced_run
 
-    with traced_run("x", session_id="s", input="i", metadata={}, tags=[], skills=[]) as trace:
+    with traced_run(
+        "x", user_id="u", session_id="s", input="i", metadata={}, tags=[], skills=[]
+    ) as trace:
         assert trace.callbacks == [] and trace.trace_id is None
     assert link_prompt(object()) == []
 

@@ -64,8 +64,9 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_base_url: str = "https://cloud.langfuse.com"
-    # Trace agent runs that opt in (the lecture-notes agent). Traces hold the readings the
-    # agent read, so turn this off when they must not leave the app.
+    # Trace every model call, with its user, session and cost (app/tracing.py). Attached PDFs are
+    # never sent, but text prompts are (readings the agent read, page transcripts): turn this
+    # off when nothing may leave the app.
     langfuse_tracing: bool = True
 
 

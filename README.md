@@ -248,7 +248,7 @@ Each lecture's notes are written by the **lecture-notes agent**, a LangChain dee
   - A reviewer subagent checks the page against the readings.
   - The page is published to S3. The lecture page shows the agent's progress, and **Stop** cancels the run.
 - **Reading.** The lecture list shows each lecture's status: *No notes*, *Writing*, *Notes ready*, *Readings changed* or *Failed*. It links to `/lectures/<course>/<session>/visual/<run>`, which shows the page in a sandboxed iframe, along with earlier versions and a `.qmd` download. Pages are served by `GET /lecture-notes/runs/{run}/site/{path}` with a strict sandbox CSP.
-- **Tracking.** Prompts and skills are managed in Langfuse (`make prompts-push` / `prompts-pull`), and each run is one Langfuse trace (`LANGFUSE_TRACING`). Each run records the prompt and skill versions it used.
+- **Tracking.** Prompts and skills are managed in Langfuse (`make prompts-push` / `prompts-pull`), and each run is one Langfuse trace (`LANGFUSE_TRACING`) with the teacher, the course session and its cost ([Tracing](docs/note-taker/overview.md#tracing)). Each run records the prompt and skill versions it used.
 - **Storage.** Runs are in Aurora (`lecture_note_runs`, created by `make db-init`) and pages are in S3 under `courses/<id>/lecture-notes/<session>/<run>/`. The worker image includes Quarto.
 
 | Endpoint | Purpose |

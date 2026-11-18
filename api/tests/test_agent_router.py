@@ -18,6 +18,7 @@ from app.note_taker import sync
 from app.routers import agent
 from app.worker.config import WorkerSettings, get_worker_settings
 from app.worker.main import app as worker_app
+from tests.conftest import TEST_USER
 
 NOW = datetime(2026, 11, 6, 12, tzinfo=UTC)
 
@@ -64,7 +65,9 @@ def test_sync_records_a_run_and_the_worker_executes_it(
         return {"id": course_id, "title": title, "created_at": NOW, "inserted": True}, run
 
     monkeypatch.setattr(agent, "begin_run", begin_run)
-    monkeypatch.setattr(sync, "execute_run", lambda *args: executed.append(args))
+    monkeypatch.setattr(
+        sync, "execute_run", lambda *args, **kwargs: executed.append((*args, kwargs))
+    )
 
     response = TestClient(app).post(f"/agent/courses/{course}/sync", json={"focus": "eigenvalues"})
 
@@ -76,7 +79,8 @@ def test_sync_records_a_run_and_the_worker_executes_it(
         "moodle_id": 4510,
         "focus": "eigenvalues",
     }
-    assert executed == [(run["id"], course_id, 4510, "eigenvalues")]
+    # The run is traced for the teacher who started it.
+    assert executed == [(run["id"], course_id, 4510, "eigenvalues", {"user_id": str(TEST_USER)})]
 
 
 def test_worker_without_openrouter_fails_the_run(

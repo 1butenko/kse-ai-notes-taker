@@ -112,8 +112,10 @@ def execute_run(
     runner: Any = None,
     skills: list | None = None,
     publisher: Callable[[Path, str], list[str]] = publish,
+    user_id: str | None = None,
 ) -> None:
     """Write, render and publish one lecture's notes. Never raises: the outcome is on the row.
+    `user_id` is who started it, for the Langfuse trace.
 
     `model`, `runner`, `skills` and `publisher` default to OpenRouter, Quarto, the Langfuse skills
     and S3; tests pass fakes."""
@@ -127,6 +129,7 @@ def execute_run(
     from app.note_taker.lecture_notes.tracing import traced_run
     from app.note_taker.llm import build_chat_model
     from app.note_taker.sync import MainAgentProgress
+    from app.tracing import course_session
     from app.worker.config import get_worker_settings
 
     settings = get_worker_settings()
@@ -168,7 +171,8 @@ def execute_run(
         }
         with traced_run(
             "lecture-notes",
-            session_id=f"course-{course}",
+            user_id=user_id,
+            session_id=course_session(course),
             input=built.request,
             metadata={"course": course, "session": session_id, "run": str(run_id)},
             tags=["lecture-notes"],

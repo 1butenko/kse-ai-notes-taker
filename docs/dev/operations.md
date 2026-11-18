@@ -43,7 +43,7 @@ Defined in [.env.example](../../.env.example); the real values live in `.env`.
 | Models | `OPENROUTER_API_KEY` (optional; without it syllabus transcription is off), `NOTE_TAKER_MODEL` |
 | Sign-in | `API_AUTH_SECRET` (same value for web, api and worker), `SHARED_COURSES` (JSON list of course keys open to all teachers), `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_ALLOWED_DOMAINS` |
 | AWS | `AWS_REGION`, `S3_BUCKET`, `DB_HOST`, `DB_NAME` (Aurora uses IAM auth) |
-| Langfuse | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING` (traces include reading text) |
+| Langfuse | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING` (traces every model call with user, session and cost; attached PDFs are never sent, text prompts are); `ENVIRONMENT` is the Langfuse environment (`production` in `compose.prod.yaml`) |
 | Lecture notes | `LECTURE_NOTES_MODEL`, `LECTURE_NOTES_REVIEWER_MODEL`, `LECTURE_NOTES_MAX_CHARS`, `LECTURE_NOTES_MAX_RENDERS`, `LECTURE_NOTES_CONCURRENCY` |
 
 Compose sets `ENVIRONMENT=local`, `CORS_ORIGINS`, `UPLOADS_DIR`, `WORKER_URL` and `API_URL` itself. The web container gets the sign-in variables plus `AUTH_URL` and `AUTH_TRUST_HOST` from compose.

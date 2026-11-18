@@ -8,7 +8,14 @@ from app.plan import BookMatch, Plan, Proposal
 from app.syllabus import SyllabusExtraction, Transcript
 
 
-class TranscribeRequest(BaseModel):
+class Traced(BaseModel):
+    """A request that calls a model. `user_id` is who asked, for Langfuse (`app.tracing`): the
+    signed-in teacher's `users.id`, or a service name; None is recorded as the worker."""
+
+    user_id: str | None = None
+
+
+class TranscribeRequest(Traced):
     path: str
     force: bool = False
 
@@ -18,7 +25,7 @@ class TranscribeResponse(BaseModel):
     model: str
 
 
-class MapRequest(BaseModel):
+class MapRequest(Traced):
     course: str
     plan: Plan
     transcript: Transcript
@@ -30,7 +37,7 @@ class MapResponse(BaseModel):
     proposals: list[Proposal]
 
 
-class BooksRequest(BaseModel):
+class BooksRequest(Traced):
     course: str
 
 
@@ -40,7 +47,7 @@ class BooksResponse(BaseModel):
     started: bool
 
 
-class NoteTakerRequest(BaseModel):
+class NoteTakerRequest(Traced):
     """One AI Note Taker run, already recorded in `sync_runs` by the API."""
 
     run_id: UUID
@@ -53,7 +60,7 @@ class NoteTakerResponse(BaseModel):
     started: bool
 
 
-class LectureNotesRequest(BaseModel):
+class LectureNotesRequest(Traced):
     """One lecture-notes run, already recorded in `lecture_note_runs` by the API."""
 
     run_id: UUID
