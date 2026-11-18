@@ -18,7 +18,7 @@ Read this page, then the area doc for what you are changing.
 
 <!-- Newest first, at most 20. One line each: - YYYY-MM-DD [#PR title](changes/file.md): summary -->
 
-- 2026-11-18 [#51 Docs bot: maintain all project docs on every PR](changes/2026-11-18-pr51.md): the Docs workflow replaces Dev docs; it commits doc updates to the PR branch and audits weekly; `operations.md` written.
+- 2026-11-18 [#51 Docs bot: maintain all project docs on every PR](changes/2026-11-18-pr51.md): the Docs workflow replaces Dev docs; it commits doc updates to the PR branch and audits weekly; runs on its own docs commit are skipped; `operations.md` written.
 - 2026-11-17 [Bump pypdf to 7.1.0](changes/2026-11-17-5bc633c.md): major bump of `pypdf` (6.19.0 to 7.1.0) in `api/uv.lock`; no code changes.
 - 2026-11-17 [Bump API dependencies](changes/2026-11-17-a7c1e6a.md): Dependabot group update in `api/uv.lock` (fastapi, langchain, deepagents, ruff and others); no code changes.
 - 2026-11-17 [Fix web security advisories in lockfile](changes/2026-11-17-3095b49.md): `npm audit fix` on `web/package-lock.json` only; no code changes.
