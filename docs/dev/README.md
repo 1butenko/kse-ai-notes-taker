@@ -18,6 +18,7 @@ Read this page, then the area doc for what you are changing.
 
 <!-- Newest first, at most 20. One line each: - YYYY-MM-DD [#PR title](changes/file.md): summary -->
 
+- 2026-11-18 [#54 Langfuse: cost, per-user and per-session tracking](changes/2026-11-18-pr54.md): every model call is traced with the teacher as user, the course as session, and usage and OpenRouter cost; PDFs are never sent; `worker.md` written.
 - 2026-11-18 [#51 Docs bot: maintain all project docs on every PR](changes/2026-11-18-pr51.md): the Docs workflow replaces Dev docs; it commits doc updates to the PR branch and audits weekly; runs on its own docs commit are skipped; `operations.md` written.
 - 2026-11-18 [#50 Check in the project Claude Code skills](changes/2026-11-18-1a9c191.md): `.claude/skills` (`shadcn`, `kse-notes-taker`) is now tracked; `.gitignore` ignores only personal `.claude` files.
 - 2026-11-17 [Bump pypdf to 7.1.0](changes/2026-11-17-5bc633c.md): major bump of `pypdf` (6.19.0 to 7.1.0) in `api/uv.lock`; no code changes.
