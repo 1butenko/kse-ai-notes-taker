@@ -16,7 +16,9 @@ Monorepo: `api/` (FastAPI, Python 3.12, uv; `api/app/worker` is the model-callin
 
 ## Development docs
 
-Before changing code, read `docs/dev/README.md` (area docs and recent changes), then the area doc for what you touch and the recent entries in `docs/dev/changes/`. They are written by the Dev docs GitHub workflow on every push; don't edit them by hand in feature work, the workflow updates them.
+Before changing code, read `docs/dev/README.md` (area docs and recent changes), then the area doc for what you touch and the recent entries in `docs/dev/changes/`. Trust them before reading the whole codebase.
+
+The Docs GitHub workflow keeps them current: on every pull request Claude updates the docs the change affects (`docs/dev/`, `docs/note-taker/`, `README.md`, the `CLAUDE.md` files and the `kse-notes-taker` skill), writes the change entry, and commits to the PR branch. You may update docs yourself in the same PR; the workflow builds on your edits. Instructions: `.github/prompts/docs.md`.
 
 ## Working here
 

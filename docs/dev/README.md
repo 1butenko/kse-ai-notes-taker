@@ -1,6 +1,6 @@
 # Development docs
 
-How the code works now, and what changed recently. Claude keeps these up to date: every push to `main` or `feature/**` runs the [Dev docs workflow](../../.github/workflows/dev-docs.yml), which writes a change entry, updates the area docs it affects, and opens a PR (`dev-docs/<branch>`) into that branch. Its instructions are in [.github/prompts/dev-docs.md](../../.github/prompts/dev-docs.md).
+How the code works now, and what changed recently. Claude keeps these up to date with the [Docs workflow](../../.github/workflows/docs.yml): on every pull request it updates the docs the change affects, writes a change entry (`changes/<date>-pr<number>.md`) and commits to the PR branch, so docs merge together with the code. Every Monday it also audits all docs against `main` and opens a PR with the fixes. Its instructions are in [.github/prompts/docs.md](../../.github/prompts/docs.md).
 
 Read this page, then the area doc for what you are changing.
 
@@ -16,8 +16,9 @@ Read this page, then the area doc for what you are changing.
 
 ## Recent changes
 
-<!-- Newest first, at most 20. One line each: - YYYY-MM-DD [title](changes/file.md): summary -->
+<!-- Newest first, at most 20. One line each: - YYYY-MM-DD [#PR title](changes/file.md): summary -->
 
+- 2026-11-18 [#51 Docs bot: maintain all project docs on every PR](changes/2026-11-18-pr51.md): the Docs workflow replaces Dev docs; it commits doc updates to the PR branch and audits weekly; runs on its own docs commit are skipped; `operations.md` written.
 - 2026-11-17 [Bump pypdf to 7.1.0](changes/2026-11-17-5bc633c.md): major bump of `pypdf` (6.19.0 to 7.1.0) in `api/uv.lock`; no code changes.
 - 2026-11-17 [Bump API dependencies](changes/2026-11-17-a7c1e6a.md): Dependabot group update in `api/uv.lock` (fastapi, langchain, deepagents, ruff and others); no code changes.
 - 2026-11-17 [Fix web security advisories in lockfile](changes/2026-11-17-3095b49.md): `npm audit fix` on `web/package-lock.json` only; no code changes.
