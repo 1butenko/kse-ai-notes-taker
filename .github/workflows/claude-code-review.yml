@@ -13,7 +13,11 @@ on:
 jobs:
   claude-review:
     # Dependabot PRs run without repository secrets, so the review would always fail.
-    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    # Docs commits pushed by the Docs workflow (github-actions[bot]) are not reviewed:
+    # the action refuses bot actors and the commit only touches docs.
+    if: >-
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      github.actor != 'github-actions[bot]'
     # Optional: Filter by PR author
     # if: |
     #   github.event.pull_request.user.login == 'external-contributor' ||
