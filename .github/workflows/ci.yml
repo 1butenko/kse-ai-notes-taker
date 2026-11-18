@@ -69,8 +69,9 @@ jobs:
       - name: ESLint
         run: npm run lint
 
+      # typegen writes the route types (PageProps, LayoutProps, RouteContext) into .next/types.
       - name: Type check
-        run: npx tsc --noEmit
+        run: npx next typegen && npx tsc --noEmit
 
       - name: Build
         run: npm run build
