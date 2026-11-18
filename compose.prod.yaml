@@ -12,6 +12,7 @@ services:
       - "80:8000"
     env_file: .env
     environment:
+      ENVIRONMENT: production
       UPLOADS_DIR: /data/uploads
       WORKER_URL: http://worker:8000
     volumes:
@@ -38,6 +39,7 @@ services:
       target: worker-prod
     env_file: .env
     environment:
+      ENVIRONMENT: production
       UPLOADS_DIR: /data/uploads
       API_URL: http://api:8000
     volumes:

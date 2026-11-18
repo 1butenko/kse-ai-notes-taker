@@ -4,7 +4,7 @@ One trace per run: a root `agent` observation, with every model call and tool ca
 Langfuse's LangChain callback handler (deepagents passes the run's callbacks into subagents, so
 the reviewer is traced too). The trace carries the course, lecture and run, the skills the agent
 had (with their Langfuse versions), and each generation links to the Langfuse prompt version that
-produced it (`LinkPrompt`).
+produced it (`LinkPrompt`). User, session and cost are recorded as for every trace (`app.tracing`).
 
 Without Langfuse keys, or with `LANGFUSE_TRACING=false`, nothing is traced.
 """
@@ -16,8 +16,8 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 
-from app import prompts
-from app.config import get_settings
+from app import tracing
+from app.tracing import tracing_on
 
 
 class LinkPrompt(AgentMiddleware):
@@ -45,10 +45,6 @@ def link_prompt(prompt: Any | None) -> list[AgentMiddleware]:
     return [LinkPrompt(prompt)] if prompt is not None and tracing_on() else []
 
 
-def tracing_on() -> bool:
-    return prompts.langfuse_client() is not None and get_settings().langfuse_tracing
-
-
 @dataclass
 class Trace:
     callbacks: list[Any] = field(default_factory=list)
@@ -64,35 +60,29 @@ class Trace:
 def traced_run(
     name: str,
     *,
+    user_id: str | None,
     session_id: str,
     input: str,
     metadata: dict[str, str],
     tags: list[str],
     skills: list[dict],
 ) -> Iterator[Trace]:
-    client = prompts.langfuse_client()
-    if client is None or not get_settings().langfuse_tracing:
-        yield Trace()
-        return
-
-    from langfuse import propagate_attributes
-    from langfuse.langchain import CallbackHandler
-
     try:
-        with (
-            client.start_as_current_observation(name=name, as_type="agent", input=input) as root,
-            propagate_attributes(
-                session_id=session_id,
-                trace_name=name,
-                tags=tags,
-                metadata=metadata,
-                skills_available=skills,
-            ),
-        ):
-            handler = CallbackHandler(public_key=get_settings().langfuse_public_key)
-            yield Trace(callbacks=[handler], trace_id=root.trace_id, root=root)
+        with tracing.traced(
+            name,
+            user_id=user_id,
+            session_id=session_id,
+            input=input,
+            metadata=metadata,
+            tags=tags,
+            as_type="agent",
+            skills_available=skills,
+        ) as root:
+            if root is None:
+                yield Trace()
+            else:
+                yield Trace(
+                    callbacks=[tracing.callback_handler()], trace_id=root.trace_id, root=root
+                )
     finally:
-        try:
-            client.flush()
-        except Exception as error:
-            print(f"Could not flush the Langfuse trace: {error!r}")
+        tracing.flush()

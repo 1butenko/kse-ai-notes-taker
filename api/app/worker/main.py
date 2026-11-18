@@ -10,6 +10,7 @@ from uuid import UUID
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 
 from app.syllabus import SyllabusExtraction
+from app.tracing import course_session, traced
 from app.worker import vision
 from app.worker.config import WorkerSettings, get_worker_settings
 from app.worker.llm import ask
@@ -108,10 +109,21 @@ async def transcribe(
     except EmptyDocument as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
 
-    extraction = await ask(
-        client, messages, SyllabusExtraction, "transcript", plugins, step="extract-reading-plan"
-    )
-    drop_bad_refs(extraction)
+    course = body.path.replace("\\", "/").lstrip("/").split("/")[0]
+    with traced(
+        "transcribe-syllabus",
+        user_id=body.user_id,
+        session_id=course_session(course),
+        input={"path": body.path},
+        metadata={"course": course},
+        tags=["syllabus"],
+    ) as root:
+        extraction = await ask(
+            client, messages, SyllabusExtraction, "transcript", plugins, step="extract-reading-plan"
+        )
+        drop_bad_refs(extraction)
+        if root is not None:
+            root.update(output={"sessions": len(extraction.sessions)})
 
     return TranscribeResponse(extraction=extraction, model=client.model)
 
@@ -128,9 +140,19 @@ async def map_materials(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Mapping is not configured")
 
     directory = settings.uploads_dir / body.course
-    matches, proposals = await run_mapping(
-        client, settings.uploads_dir, directory, body.plan, body.transcript, body.books
-    )
+    with traced(
+        "map-materials",
+        user_id=body.user_id,
+        session_id=course_session(body.course),
+        input={"books": body.books},
+        metadata={"course": body.course},
+        tags=["mapping"],
+    ) as root:
+        matches, proposals = await run_mapping(
+            client, settings.uploads_dir, directory, body.plan, body.transcript, body.books
+        )
+        if root is not None:
+            root.update(output={"matches": len(matches), "proposals": len(proposals)})
     return MapResponse(matches=matches, proposals=proposals)
 
 
@@ -148,7 +170,19 @@ async def transcribe_books(
     spec = vision.vision_spec(settings)
     if opener is None or spec is None:
         return BooksResponse(started=False)
-    background.add_task(vision.keep_transcribing, opener, spec, settings.uploads_dir, body.course)
+
+    async def transcribe() -> None:
+        # Traced here, not around add_task: the job runs after the response is sent.
+        with traced(
+            "transcribe-pages",
+            user_id=body.user_id,
+            session_id=course_session(body.course),
+            metadata={"course": body.course},
+            tags=["vision"],
+        ):
+            await vision.keep_transcribing(opener, spec, settings.uploads_dir, body.course)
+
+    background.add_task(transcribe)
     return BooksResponse(started=True)
 
 
@@ -169,7 +203,12 @@ async def run_note_taker(
 
     # A sync function: Starlette runs it in a thread, off the event loop.
     background.add_task(
-        sync.execute_run, body.run_id, body.course_id, body.moodle_course_id, body.focus
+        sync.execute_run,
+        body.run_id,
+        body.course_id,
+        body.moodle_course_id,
+        body.focus,
+        user_id=body.user_id,
     )
     return NoteTakerResponse(started=True)
 
@@ -203,7 +242,9 @@ async def run_lecture_notes(
 
     def execute() -> None:
         try:
-            runs.execute_run(body.run_id, body.course_id, body.course, body.session_id)
+            runs.execute_run(
+                body.run_id, body.course_id, body.course, body.session_id, user_id=body.user_id
+            )
         finally:
             LECTURE_NOTES.discard(body.run_id)
 

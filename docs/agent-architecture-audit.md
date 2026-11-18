@@ -158,7 +158,7 @@ A run's progress is visible in `run.json` (`topics_done/topics_total`, `log`). *
 |---|---|---|---|
 | 1 | High | **No retries or backoff on OpenRouter.** One timeout, 429 or provider error fails the call; a failed topic is stored as `failed` and the run only warns. A whole planning call failing fails the run. | `worker/openrouter.py`, `worker/llm.py` |
 | 2 | High | **State is files only, behind one worker lock.** No horizontal scaling, and no multi-user isolation beyond directory names. Course ids are `local` or digits. | `worker/main.py` lifespan, `routers/*` |
-| 3 | High | **No cost or usage tracking.** Token usage is returned (`Completion.usage`) but dropped. With Langfuse removed there is no tracing, cost limits or per-run cost. | `worker/openrouter.py`, `4ae732c` |
+| 3 | Medium | **Cost and usage are traced, not limited.** Every model call is a Langfuse generation with usage and OpenRouter's cost, per user and per course session (`app/tracing.py`). There are still no cost limits or budget per run. | `tracing.py`, `worker/llm.py` |
 | 4 | Medium | **Retrieval is lexical only (BM25).** A syllabus in Ukrainian with English books depends on the planner writing `key_terms` in both languages; no embeddings, so paraphrases are missed. | `worker/sources.py::Retriever` |
 | 5 | Medium | **Topic verification can't catch what the evidence omits.** The verifier sees only the chosen evidence (≤16 chunks), so a wrong-but-cited claim can pass if the selector missed a contradicting passage. | `worker/topics.py` |
 | 6 | Medium | **Harmonization can leave a topic "unresolved" or stale on a verifier outage.** It adds a generic major issue instead of failing. The topic's text may already be edited. | `worker/composition.py::recheck_topic` |

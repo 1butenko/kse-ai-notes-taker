@@ -23,6 +23,7 @@ from app.routers import lecture_notes
 from app.worker import main as worker_main
 from app.worker.config import WorkerSettings, get_worker_settings
 from app.worker.main import app as worker_app
+from tests.conftest import TEST_USER
 from tests.courses import course as make_course
 
 NOW = datetime(2026, 11, 9, 12, tzinfo=UTC)
@@ -78,7 +79,9 @@ def test_start_records_a_run_and_the_worker_executes_it(
         return {"id": course_id}, run
 
     monkeypatch.setattr(lecture_notes, "begin", begin)
-    monkeypatch.setattr(runs, "execute_run", lambda *args: executed.append(args))
+    monkeypatch.setattr(
+        runs, "execute_run", lambda *args, **kwargs: executed.append((*args, kwargs))
+    )
 
     response = TestClient(app).post(f"/lecture-notes/{course}/s1/runs")
 
@@ -90,7 +93,7 @@ def test_start_records_a_run_and_the_worker_executes_it(
         "session": "s1",
         "label": "Week 1: Linear systems",
     }
-    assert executed == [(run["id"], course_id, "1", "s1")]
+    assert executed == [(run["id"], course_id, "1", "s1", {"user_id": str(TEST_USER)})]
     assert worker_main.LECTURE_NOTES == set()
 
 

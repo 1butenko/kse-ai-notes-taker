@@ -50,7 +50,9 @@ def langfuse_client() -> Langfuse | None:
         public_key=settings.langfuse_public_key,
         secret_key=settings.langfuse_secret_key,
         base_url=settings.langfuse_base_url,
-        # Agent runs that opt in are traced (app.note_taker.lecture_notes.tracing).
+        # Keeps local and test traces out of production's dashboards.
+        environment=settings.environment,
+        # Model calls are traced (app.tracing).
         tracing_enabled=settings.langfuse_tracing,
     )
 

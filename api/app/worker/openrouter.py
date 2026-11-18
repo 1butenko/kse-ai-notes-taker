@@ -48,6 +48,8 @@ class OpenRouterClient:
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
             "provider": {"require_parameters": True},
+            # Report the call's cost in `usage`, for Langfuse (`app.tracing`).
+            "usage": {"include": True},
             **(parameters or PARAMETERS),
         }
         if plugins:

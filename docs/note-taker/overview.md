@@ -109,7 +109,36 @@ Edit them in the Langfuse UI, then run `make prompts-pull` and commit the files.
 | `MOODLE_URL`, `MOODLE_TOKEN` | Moodle site and web-service token |
 | `NOTE_TAKER_APPROVAL` | Ask a human before the `moodle` subagent downloads |
 | `S3_BUCKET`, `DB_*` | Storage, see [storage.md](../storage.md) |
-| `LANGFUSE_*` | Prompt and skill management; `LANGFUSE_TRACING` traces lecture-notes runs |
+| `LANGFUSE_*` | Prompt and skill management; `LANGFUSE_TRACING` traces every model call (see [Tracing](#tracing)) |
+| `ENVIRONMENT` | Langfuse environment of the traces: `local`, or `production` on the EC2 host |
+
+## Tracing
+
+Every model call is traced in Langfuse when `LANGFUSE_*` keys are set and `LANGFUSE_TRACING` is not `false`. Code: [`api/app/tracing.py`](../../api/app/tracing.py).
+
+**One trace per worker job.** Each has a stable, verb-first name; dashboards and evaluators filter by them, so keep them.
+
+| Trace | Started by | Generations |
+|-------|-----------|-------------|
+| `transcribe-syllabus` | `POST /syllabus/transcribe` | `extract-reading-plan` |
+| `map-materials` | `POST /plans/{course}/map` | `match-books`, `read-book-toc`, `locate-reading-pages`, `read-page-offset` |
+| `transcribe-pages` | approving an excerpt (background) | `transcribe-page` per garbled PDF page |
+| `prepare-course` | `POST /agent/courses/{course}/sync` | the orchestrator and the `moodle` subagent (LangChain) |
+| `lecture-notes` | `POST /lecture-notes/{course}/{session}/runs` | the writer and the reviewer (LangChain), see [lecture-notes.md](lecture-notes.md#tracing) |
+
+**User.** `user_id` is the signed-in teacher's `users.id`. The API's `get_worker_client` stamps it on every worker request that calls a model (`worker_contract.Traced`), and the worker propagates it to every observation. A call made by a service (`worker`, `web`) carries that name instead. Langfuse's **Users** view shows each teacher's traces, tokens and cost.
+
+**Session.** `session_id` is the course, `course-<key>`, so the **Sessions** view shows everything done for one course together: syllabus, mapping, page transcription, preparing the course and every lecture's notes.
+
+**Cost.** Each generation records the model OpenRouter served, token usage (`input`, `input_cached_tokens`, `output`, `output_reasoning_tokens`) and the cost OpenRouter reports in USD. Langfuse uses that ingested cost over its own prices, so OpenRouter model names need no model definition in Langfuse.
+- Direct OpenRouter calls (`ask()` in `api/app/worker/llm.py`) ask for the cost with `usage: {include: true}` and record it with `record_completion`.
+- LangChain agents use `callback_handler()`: Langfuse's LangChain handler (tokens, model) plus the cost `ChatOpenRouter` puts in `response_metadata`, which Langfuse's handler alone drops.
+
+**Environment.** Traces carry `ENVIRONMENT`, so local runs stay out of production dashboards.
+
+**Privacy.** Attached files (syllabus PDFs, book pages) are never sent to Langfuse: a generation's input keeps only the file name (`without_files`). They are stripped before Langfuse sees the input, because its SDK uploads base64 files as media before any `mask` function runs. Text prompts and answers are traced, so the reading text the lecture-notes agent reads and page transcripts still appear. Set `LANGFUSE_TRACING=false` where nothing may leave the app; prompts and skills still load from Langfuse.
+
+**Tests.** `api/tests/test_tracing.py` sends spans through a real Langfuse client to an in-memory exporter and checks user, session, usage and cost for both kinds of calls, and that no attached PDF is exported.
 
 ## Tests
 

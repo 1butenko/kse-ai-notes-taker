@@ -5,6 +5,7 @@ import httpx2
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ValidationError
 
+from app import tracing
 from app.worker.models import ModelSpec
 from app.worker.openrouter import PARAMETERS, OpenRouterClient, OpenRouterError
 
@@ -51,25 +52,44 @@ async def ask[T: BaseModel](
     step: str,
     spec: ModelSpec | None = None,
 ) -> T:
-    """Ask for a `model`-shaped answer, mapping failures to 502/504."""
+    """Ask for a `model`-shaped answer, mapping failures to 502/504. Traced as a generation
+    named `step`, with its usage and cost (`app.tracing`)."""
     model_name = spec.model if spec else client.model
     parameters = spec.parameters() if spec else PARAMETERS
-    try:
-        completion = await client.complete_json(
-            messages, name, strict_schema(model), plugins, model_name, parameters
-        )
-    except httpx2.TimeoutException as error:
-        print(f"OpenRouter timed out ({name}): {error!r}")
-        raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "The model timed out") from error
-    except (OpenRouterError, httpx2.HTTPError) as error:
-        print(f"OpenRouter request failed ({name}): {error!r}")
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The model request failed") from error
+    with tracing.generation(
+        step,
+        model=model_name,
+        input=messages,
+        parameters=parameters,
+        metadata={"response_schema": name, "plugins": plugins},
+    ) as generation:
+        try:
+            completion = await client.complete_json(
+                messages, name, strict_schema(model), plugins, model_name, parameters
+            )
+        except httpx2.TimeoutException as error:
+            print(f"OpenRouter timed out ({name}): {error!r}")
+            failed(generation, f"Timed out: {error!r}")
+            raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "The model timed out") from error
+        except (OpenRouterError, httpx2.HTTPError) as error:
+            print(f"OpenRouter request failed ({name}): {error!r}")
+            failed(generation, f"Request failed: {error!r}")
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The model request failed") from error
 
-    try:
-        return model.model_validate_json(completion.content)
-    except ValidationError as error:
-        print(f"Model returned an invalid {name}: {error}")
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            f"The model returned an invalid {name.replace('_', ' ')}",
-        ) from error
+        tracing.record_completion(
+            generation, completion.model, completion.content, completion.usage, completion.reasoning
+        )
+        try:
+            return model.model_validate_json(completion.content)
+        except ValidationError as error:
+            print(f"Model returned an invalid {name}: {error}")
+            failed(generation, f"Invalid {name}: {error}")
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"The model returned an invalid {name.replace('_', ' ')}",
+            ) from error
+
+
+def failed(generation: Any, message: str) -> None:
+    if generation is not None:
+        generation.update(level="ERROR", status_message=message)

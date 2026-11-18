@@ -33,9 +33,9 @@ Handler = Callable[[httpx2.Request], httpx2.Response]
 def in_process_worker() -> Iterator[None]:
     """The API reaches the worker over ASGI, inside the test process."""
 
-    async def override() -> AsyncIterator[WorkerClient]:
+    async def override(principal: auth.CurrentPrincipal) -> AsyncIterator[WorkerClient]:
         async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=worker_app)) as http:
-            yield WorkerClient("http://worker.test", http)
+            yield WorkerClient("http://worker.test", http, principal.id)
 
     app.dependency_overrides[get_worker_client] = override
     # No model unless a test installs one: the real key in .env must never be used.
