@@ -13,8 +13,9 @@ How to run the project locally, what the environment variables do, how the Docke
 | [api/Dockerfile](../../api/Dockerfile) | Targets `dev`, `prod`, `worker-dev`, `worker-prod`, `demo` (see below) |
 | [web/Dockerfile](../../web/Dockerfile) | Targets `dev`, `build`, `prod` (Next.js standalone) |
 | [scripts/aws/deploy.sh](../../scripts/aws/deploy.sh) | Deploy on the EC2 host |
+| [scripts/aws/github-deploy-role.sh](../../scripts/aws/github-deploy-role.sh) | One-time setup of the IAM role the Deploy workflow assumes |
 | [scripts/deploy-space.sh](../../scripts/deploy-space.sh) | Upload API and worker to a Hugging Face Docker Space (demo) |
-| [.github/workflows/](../../.github/workflows/) | `claude-code-review.yml`, `claude.yml`, `docs.yml` |
+| [.github/workflows/](../../.github/workflows/) | `ci.yml`, `deploy.yml`, `claude-code-review.yml`, `claude.yml`, `docs.yml` |
 
 ## Running locally
 
@@ -50,7 +51,17 @@ Compose sets `ENVIRONMENT=local`, `CORS_ORIGINS`, `UPLOADS_DIR`, `WORKER_URL` an
 
 ## Deployment
 
-The backend is deployed with `sudo /opt/kse-notes/scripts/aws/deploy.sh [ref]` on the EC2 host (default ref `main`), for example through SSM Session Manager. It fetches, checks out the ref, refreshes `.env` (see below), then runs `docker compose -f compose.prod.yaml up -d --build --remove-orphans` and prunes images. Production containers restart `unless-stopped`, log to json-file (20 MB x 5) and use the instance role for AWS credentials instead of `~/.aws`. CloudFront forwards HTTPS to port 80 of the `api` container.
+Every push to `main` whose CI passes is deployed by [deploy.yml](../../.github/workflows/deploy.yml) (GitHub environment `production`):
+
+1. It resolves the commit, then assumes the IAM role in the `production` environment variable `AWS_DEPLOY_ROLE_ARN` through GitHub OIDC (no AWS keys in GitHub). The role trusts only `repo:1butenko/kse-ai-notes-taker:environment:production` and may only run `AWS-RunShellScript` on the instance and read the result. [github-deploy-role.sh](../../scripts/aws/github-deploy-role.sh) creates it.
+2. Over `aws ssm send-command` it checks out the commit in `/opt/kse-notes` and runs `deploy.sh <sha>`, waits (up to 30 minutes), prints the output and fails if the command fails.
+3. It polls `https://<cloudfront>/health` until `commit` equals the deployed SHA.
+
+Deploys run one at a time (concurrency group `deploy-production`); a newer one waits instead of cancelling. **Roll back**: Actions → Deploy → Run workflow with an older commit, tag or branch as `ref`. The `production` environment only allows the `main` branch; add required reviewers there to gate deploys.
+
+`deploy.sh` exports `GIT_SHA` (the checked-out commit); `compose.prod.yaml` passes it to the `api`, and `/health` returns it as `commit` (empty locally).
+
+By hand, run `sudo /opt/kse-notes/scripts/aws/deploy.sh [ref]` on the EC2 host (default ref `main`), for example through SSM Session Manager. It fetches, checks out the ref, refreshes `.env` (see below), then runs `docker compose -f compose.prod.yaml up -d --build --remove-orphans` and prunes images. Production containers restart `unless-stopped`, log to json-file (20 MB x 5) and use the instance role for AWS credentials instead of `~/.aws`. CloudFront forwards HTTPS to port 80 of the `api` container.
 
 ## Deployment: secrets
 

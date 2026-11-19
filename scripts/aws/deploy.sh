@@ -13,7 +13,9 @@ if git show-ref --verify --quiet "refs/remotes/origin/$REF"; then
 else
   git checkout --detach "$REF"
 fi
-echo "Deploying $(git rev-parse --short HEAD) ($REF)"
+GIT_SHA="$(git rev-parse HEAD)"
+export GIT_SHA  # compose.prod.yaml passes it to the api; /health reports it.
+echo "Deploying $GIT_SHA ($REF)"
 
 # Secrets live in SSM Parameter Store (SecureString /kse-notes/env); refresh .env from it.
 umask 077

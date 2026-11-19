@@ -82,4 +82,4 @@ app.include_router(lecture_notes.site_router)
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "environment": settings.environment}
+    return {"status": "ok", "environment": settings.environment, "commit": settings.git_sha}
