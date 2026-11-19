@@ -69,7 +69,7 @@ On the AWS instance, `.env` comes from the SSM SecureString parameter `/kse-note
 
 ## Docker: API image
 
-[Dockerfile](../../api/Dockerfile) builds from `python:3.15-slim` (bumped from 3.12 by Dependabot) and copies `uv` from `ghcr.io/astral-sh/uv:0.9`. `api/pyproject.toml` still allows `>=3.12`.
+[Dockerfile](../../api/Dockerfile) builds from `python:3.12-slim` (matches `api/.python-version`) and copies `uv` from `ghcr.io/astral-sh/uv:0.9`. Do not raise it to 3.15 yet: `zstandard` has no 3.15 wheel and the slim image has no gcc, so the build fails. `api/pyproject.toml` allows `>=3.12`.
 
 | Target | Used by |
 |---|---|
@@ -89,6 +89,8 @@ On the AWS instance, `.env` comes from the SSM SecureString parameter `/kse-note
 | `npm` | `/web` | weekly, Monday | minor and patch in one PR (`web-minor-and-patch`) | `deps(web)` |
 | `docker` | `/api`, `/web` | monthly | none | `deps(docker)` |
 | `github-actions` | `/` | monthly | all actions in one PR (`actions`) | `deps(actions)` |
+
+The `docker` entry ignores minor and major updates of the `python` image, so it stays on 3.12 (see Docker: API image); patch-level updates still come.
 
 `uv` and `npm` allow at most 5 open PRs each. Major updates for them arrive as separate PRs, except `@types/node`: its major updates are ignored so the types stay on Node 24 (the `node:24` runtime in `web/Dockerfile`). After merging a web dependency change, rebuild the web container (`docker compose up -d --build -V web`).
 
