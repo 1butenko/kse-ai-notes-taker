@@ -12,7 +12,7 @@ import httpx2  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import auth, db, prompts, users  # noqa: E402
+from app import auth, db, prompts, team, users  # noqa: E402
 from app.config import Settings, get_settings  # noqa: E402
 from app.main import app  # noqa: E402
 from app.moodle import MoodleClient, get_moodle_client  # noqa: E402
@@ -46,9 +46,12 @@ def in_process_worker() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def no_database(monkeypatch: pytest.MonkeyPatch) -> None:
+def no_database(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Never reach the real Aurora, even when DB_HOST is set (as in the Docker containers): the
-    worker's startup would mark live runs failed. Tests replace the routers' seams instead."""
+    worker's startup would mark live runs failed. Tests replace the routers' seams instead;
+    tests marked `database` use TEST_DATABASE_URL (tests/test_team_db.py)."""
+    if request.node.get_closest_marker("database"):
+        return
 
     def refuse():
         raise db.DatabaseNotConfigured("Tests do not use the database")
@@ -57,25 +60,30 @@ def no_database(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 TEST_USER = UUID("00000000-0000-4000-8000-000000000001")
+TEST_EMAIL = "teacher@kse.org.ua"
 
 
 @pytest.fixture(autouse=True)
-def signed_in(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Calls come from a signed-in teacher who owns every course; tests/test_auth.py checks
-    the real tokens and ownership. The course rows' seams stand in for Aurora."""
+def signed_in(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Calls come from a signed-in teacher who lectures every course; tests/test_auth.py and
+    tests/test_team.py check the real tokens and roles. The database seams stand in for Aurora."""
+    if request.node.get_closest_marker("database"):
+        yield
+        return
     app.dependency_overrides[auth.current_principal] = lambda: auth.Principal(
         kind="user", id=str(TEST_USER)
     )
-    monkeypatch.setattr(auth, "course_owner", lambda course: TEST_USER)
+    monkeypatch.setattr(auth, "course_access", lambda course, user_id: (TEST_EMAIL, "lecturer"))
     monkeypatch.setattr(auth, "run_course", lambda run_id: "local")
-    monkeypatch.setattr(course_info, "claim", lambda course, name, user_id: None)
-    monkeypatch.setattr(course_info, "release", lambda course: None)
+    monkeypatch.setattr(course_info, "claim", lambda course, name, user_id, settings: None)
+    monkeypatch.setattr(course_info, "release", lambda course, user_id: None)
+    monkeypatch.setattr(users, "get_user", lambda user_id: {"id": user_id, "email": TEST_EMAIL})
 
-    def every_course(user_id: UUID) -> list[str]:
+    def every_course(email: str) -> dict[str, str]:
         root = app.dependency_overrides.get(get_settings, get_settings)().uploads_dir
-        return [d.name for d in root.iterdir() if d.is_dir()] if root.is_dir() else []
+        return {d.name: "lecturer" for d in root.iterdir() if d.is_dir()} if root.is_dir() else {}
 
-    monkeypatch.setattr(users, "owned_course_keys", every_course)
+    monkeypatch.setattr(team, "member_courses", every_course)
     yield
     app.dependency_overrides.pop(auth.current_principal, None)
 

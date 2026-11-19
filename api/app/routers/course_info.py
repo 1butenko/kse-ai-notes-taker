@@ -7,12 +7,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, StringConstraints
 
-from app import db, users
+from app import db, team, users
 from app.auth import (
     CurrentPrincipal,
-    course_owner,
+    Role,
+    actor,
+    lectured_course,
     owned_course,
-    shared_course,
     storage_unavailable,
 )
 from app.config import Settings, get_settings
@@ -27,35 +28,73 @@ class CourseInfoRequest(BaseModel):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 
 
+class CourseListItem(CourseInfo):
+    """A course in the list, with the caller's role on it (for its badge)."""
+
+    role: Role
+
+
+def visible_courses(settings: Settings, user_id: UUID) -> dict[str, Role]:
+    """Course key -> role: the user's courses, or every course for an admin."""
+    user = users.get_user(user_id)
+    email = user["email"] if user else None
+    mine: dict[str, Role] = dict(team.member_courses(email)) if email else {}
+    if not settings.is_admin(email):
+        return mine
+    root = settings.uploads_dir
+    every = [d.name for d in root.iterdir() if d.is_dir()] if root.is_dir() else []
+    return {key: mine.get(key, "admin") for key in every}
+
+
 @router.get("")
 def list_course_info(
     settings: Annotated[Settings, Depends(get_settings)], principal: CurrentPrincipal
-) -> list[CourseInfo]:
-    """The signed-in teacher's courses and the shared ones, newest first."""
+) -> list[CourseListItem]:
+    """The signed-in teacher's courses (every course for an admin), newest first."""
     with storage_unavailable():
-        keys = set(users.owned_course_keys(principal.user_id)) | set(settings.shared_courses)
-    found = [load_info(course_dir(settings, key)) for key in keys if COURSE.match(key)]
-    return sorted((i for i in found if i), key=lambda i: i.created_at, reverse=True)
+        roles = visible_courses(settings, principal.user_id)
+    found = [
+        (load_info(course_dir(settings, key)), role)
+        for key, role in roles.items()
+        if COURSE.match(key)
+    ]
+    items = [CourseListItem(**info.model_dump(), role=role) for info, role in found if info]
+    return sorted(items, key=lambda i: i.created_at, reverse=True)
 
 
-def claim(course: str, name: str, user_id: UUID) -> None:
-    """Link the course to its row, owned by this teacher. 409 when another teacher has it,
-    unless the course is shared."""
+def claim(course: str, name: str, user_id: UUID, settings: Settings) -> None:
+    """Link the course to its row. Whoever sets up a course with no lecturer becomes its
+    lecturer; members and admins may rename it. Anyone else gets 409, naming the lecturer."""
     moodle_id = int(course) if course.isdigit() else None
     with db.transaction() as conn:
         row = ensure_course(conn, course, name, moodle_id, user_id)
-        if row["owner_id"] != user_id and not shared_course(course):
-            # Raised inside the transaction, so the title change rolls back too.
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "This Moodle course is already set up by another teacher",
-            )
+        user = conn.execute("SELECT email FROM users WHERE id = %s", (user_id,)).fetchone()
+        if user is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sign in again")
+        if team.role_of(conn, row["id"], user["email"]) is not None:
+            return
+        current = team.lecturer(conn, row["id"])
+        if current is None:
+            team.add_member(conn, row["id"], user["email"], "lecturer", user_id)
+            return
+        if settings.is_admin(user["email"]):
+            return
+        # Raised inside the transaction, so the title change rolls back too.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"This course is already set up by {team.display_name(current)}."
+            " Ask them to add you to it.",
+        )
 
 
-def release(course: str) -> None:
-    """Start over: the course no longer belongs to anyone, so anyone may set it up again."""
+def release(course: str, user_id: UUID | None) -> None:
+    """Start over: the course no longer has members, so anyone may set it up again."""
     with db.transaction() as conn:
-        conn.execute("UPDATE courses SET owner_id = NULL WHERE course_key = %s", (course,))
+        course_uuid = team.course_id(conn, course)
+        if course_uuid is None:
+            return
+        team.add_event(conn, course_uuid, user_id, "course_started_over")
+        team.clear_members(conn, course_uuid)
 
 
 @router.get("/{course}", dependencies=[Depends(owned_course)])
@@ -78,7 +117,7 @@ def put_course_info(
     """Create the course for the signed-in teacher, or rename theirs."""
     directory = course_dir(settings, course)
     with storage_unavailable():
-        claim(course, body.name, principal.user_id)
+        claim(course, body.name, principal.user_id, settings)
     previous = load_info(directory)
     info = CourseInfo(
         course=course,
@@ -102,17 +141,21 @@ def approval(settings: Settings, course: str, approved_at: str | None) -> Course
 
 @router.post("/{course}/readings-approval", dependencies=[Depends(owned_course)])
 def approve_readings(
-    course: str, settings: Annotated[Settings, Depends(get_settings)]
+    course: str, settings: Annotated[Settings, Depends(get_settings)], principal: CurrentPrincipal
 ) -> CourseInfo:
-    """The lecturer approved the readings per lecture."""
-    return approval(settings, course, datetime.now(UTC).isoformat(timespec="seconds"))
+    """The lecturer or a TA approved the readings per lecture."""
+    info = approval(settings, course, datetime.now(UTC).isoformat(timespec="seconds"))
+    team.record(course, actor(principal), "readings_approved")
+    return info
 
 
 @router.delete("/{course}/readings-approval", dependencies=[Depends(owned_course)])
 def revoke_readings_approval(
-    course: str, settings: Annotated[Settings, Depends(get_settings)]
+    course: str, settings: Annotated[Settings, Depends(get_settings)], principal: CurrentPrincipal
 ) -> CourseInfo:
-    return approval(settings, course, None)
+    info = approval(settings, course, None)
+    team.record(course, actor(principal), "readings_approval_revoked")
+    return info
 
 
 def trash_dir(settings: Settings) -> Path:
@@ -121,24 +164,16 @@ def trash_dir(settings: Settings) -> Path:
 
 
 @router.delete(
-    "/{course}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(owned_course)]
+    "/{course}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(lectured_course)]
 )
 def delete_course(
     course: str, settings: Annotated[Settings, Depends(get_settings)], principal: CurrentPrincipal
 ) -> None:
-    """Start over: the course folder and its uploads move to the trash, and the course is no
-    longer the teacher's. Visual notes live in S3 and Aurora and are not touched; a run going on
-    keeps the readings it already read. A shared course is only its owner's to start over."""
+    """Start over (the lecturer or an admin): the course folder and its uploads move to the
+    trash, and the course has no members any more. Visual notes live in S3 and Aurora and are
+    not touched; a run going on keeps the readings it already read."""
     with storage_unavailable():
-        if (
-            principal.kind == "user"
-            and shared_course(course)
-            and course_owner(course) != principal.user_id
-        ):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN, "Only the course's owner can start a shared course over"
-            )
-        release(course)
+        release(course, actor(principal))
     directory = course_dir(settings, course)
     if not directory.is_dir():
         return

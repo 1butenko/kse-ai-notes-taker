@@ -112,7 +112,60 @@ CREATE TABLE IF NOT EXISTS users (
     last_login_at timestamptz
 );
 
--- The teacher a course belongs to (app/auth.py). Courses made before sign-in have none until
--- claimed (`uv run python -m app.manage claim-course <course_key> <email>`).
+-- The teacher who first set the course up. Superseded by course_members (who may work on a
+-- course); still written, so older code keeps working after a rollback.
 ALTER TABLE courses ADD COLUMN IF NOT EXISTS owner_id uuid REFERENCES users (id);
 CREATE INDEX IF NOT EXISTS courses_owner_idx ON courses (owner_id);
+
+-- Who may work on a course (app/auth.py, app/team.py): one lecturer and any number of TAs.
+-- By email, so a TA can be added before their first sign-in; emails are stored lowercase.
+CREATE TABLE IF NOT EXISTS course_members (
+    course_id uuid NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    email     text NOT NULL CHECK (email = lower(email)),
+    role      text NOT NULL CHECK (role IN ('lecturer', 'ta')),
+    added_by  uuid REFERENCES users (id),
+    added_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (course_id, email)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS course_members_one_lecturer
+    ON course_members (course_id) WHERE role = 'lecturer';
+CREATE INDEX IF NOT EXISTS course_members_email_idx ON course_members (email);
+
+-- Each course's owner becomes its lecturer, once: a course that has members is left alone.
+INSERT INTO course_members (course_id, email, role)
+SELECT c.id, u.email, 'lecturer'
+FROM courses c JOIN users u ON u.id = c.owner_id
+WHERE NOT EXISTS (SELECT 1 FROM course_members m WHERE m.course_id = c.id);
+
+-- What happened on a course and who did it (the Team tab's activity). `actor_id` is NULL for
+-- the worker and for what happened before the log existed.
+CREATE TABLE IF NOT EXISTS course_events (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    course_id  uuid NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    actor_id   uuid REFERENCES users (id),
+    kind       text NOT NULL,
+    details    jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS course_events_course_idx ON course_events (course_id, created_at DESC);
+
+-- Runs from before the log, by an unknown user. Once: a run already in the log is skipped.
+INSERT INTO course_events (course_id, kind, details, created_at)
+SELECT r.course_id, 'moodle_synced', jsonb_build_object('run_id', r.id::text), r.started_at
+FROM sync_runs r
+WHERE NOT EXISTS (
+    SELECT 1 FROM course_events e
+    WHERE e.course_id = r.course_id AND e.details ->> 'run_id' = r.id::text
+);
+
+INSERT INTO course_events (course_id, kind, details, created_at)
+SELECT r.course_id, 'notes_generated',
+       jsonb_build_object('run_id', r.id::text, 'session_id', r.session_id, 'label', r.session_label),
+       r.started_at
+FROM lecture_note_runs r
+WHERE NOT EXISTS (
+    SELECT 1 FROM course_events e
+    WHERE e.course_id = r.course_id AND e.details ->> 'run_id' = r.id::text
+);

@@ -5,7 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from app.auth import CurrentPrincipal, authorize_path, owned_path
+from app import team
+from app.auth import CurrentPrincipal, actor, authorize_path, owned_path
 from app.config import Settings, get_settings
 from app.course import clear_readings_approval
 from app.plan import drop_primary, load_plan, save_plan, sync
@@ -65,7 +66,7 @@ async def transcribe(
     principal: CurrentPrincipal,
     force: Annotated[bool, Query()] = False,
 ) -> Transcript:
-    authorize_path(principal, body.path)
+    authorize_path(principal, body.path, settings)
     file = syllabus_file(settings, body.path)
     digest = sha256(file)
 
@@ -143,6 +144,7 @@ def put_transcript(
 def delete_syllabus(
     path: Annotated[str, Query()],
     settings: Annotated[Settings, Depends(get_settings)],
+    principal: CurrentPrincipal,
 ) -> None:
     file = stored_syllabus(settings, path)
     relative = file.relative_to(settings.uploads_dir.resolve()).as_posix()
@@ -157,3 +159,5 @@ def delete_syllabus(
     transcript_file(file).unlink(missing_ok=True)
     file.unlink()
     print(f"Deleted syllabus: {relative}")
+    details = {"category": "syllabus", "files": [file.name]}
+    team.record(relative.split("/")[0], actor(principal), "material_deleted", details)

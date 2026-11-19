@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from app import auth, users
+from app import auth, team, users
 from app.config import Settings, get_settings
 from app.main import app
 from app.routers import course_info
@@ -18,8 +18,6 @@ from app.routers import course_info
 SECRET = "test-secret"
 OWNER = UUID("00000000-0000-4000-8000-000000000001")
 OTHER = UUID("00000000-0000-4000-8000-000000000002")
-# The real claim: conftest replaces it with a stub in every test.
-REAL_CLAIM = course_info.claim
 
 
 @pytest.fixture
@@ -98,50 +96,57 @@ def test_teacher_sees_only_their_courses(
             json.dumps({"course": key, "name": name, "created_at": "2026-11-01T00:00:00+00:00"})
         )
     monkeypatch.setattr(
-        users, "owned_course_keys", lambda user_id: ["101"] if user_id == OWNER else ["202"]
+        users, "get_user", lambda user_id: {"email": "me@kse.org.ua" if user_id == OWNER else "x"}
+    )
+    monkeypatch.setattr(
+        team, "member_courses", lambda email: {"101": "ta"} if email == "me@kse.org.ua" else {}
     )
 
     response = real_auth.get("/course-info", headers=bearer(str(OWNER)))
 
     assert response.status_code == 200
-    assert [c["name"] for c in response.json()] == ["Mine"]
+    assert [(c["name"], c["role"]) for c in response.json()] == [("Mine", "ta")]
 
 
 def test_someone_elses_course_is_not_found(
     real_auth: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(auth, "course_owner", lambda course: OTHER)
+    monkeypatch.setattr(auth, "course_access", lambda course, user_id: ("me@kse.org.ua", None))
 
     assert real_auth.get("/plans/101", headers=bearer(str(OWNER))).status_code == 404
     assert real_auth.get("/course-info/101", headers=bearer(str(OWNER))).status_code == 404
+    assert real_auth.get("/team/101", headers=bearer(str(OWNER))).status_code == 404
     response = real_auth.get(
         "/files", params={"path": "101/reading/a.pdf"}, headers=bearer(str(OWNER))
     )
     assert response.status_code == 404
 
 
-def test_course_without_owner_is_not_found() -> None:
+def test_unknown_user_has_no_course() -> None:
     principal = auth.Principal(kind="user", id=str(OWNER))
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(auth, "course_owner", lambda course: None)
+        patch.setattr(auth, "course_access", lambda course, user_id: (None, None))
         with pytest.raises(HTTPException) as error:
-            auth.authorize_course(principal, "101")
+            auth.authorize_course(principal, "101", Settings(uploads_dir=Path(".")))
     assert error.value.status_code == 404
 
 
 def test_worker_may_touch_every_course(monkeypatch: pytest.MonkeyPatch) -> None:
-    def no_lookup(course: str) -> UUID:
-        raise AssertionError("services skip the ownership lookup")
+    def no_lookup(course: str, user_id: UUID) -> tuple:
+        raise AssertionError("services skip the membership lookup")
 
-    monkeypatch.setattr(auth, "course_owner", no_lookup)
-    auth.authorize_course(auth.Principal(kind="service", id="worker"), "101")
+    monkeypatch.setattr(auth, "course_access", no_lookup)
+    role = auth.authorize_course(
+        auth.Principal(kind="service", id="worker"), "101", Settings(uploads_dir=Path("."))
+    )
+    assert role == "admin"
 
 
 def test_run_of_someone_elses_course_is_not_found(
     real_auth: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(auth, "run_course", lambda run_id: "101")
-    monkeypatch.setattr(auth, "course_owner", lambda course: OTHER)
+    monkeypatch.setattr(auth, "course_access", lambda course, user_id: ("me@kse.org.ua", None))
 
     response = real_auth.get(f"/lecture-notes/runs/{uuid4()}", headers=bearer(str(OWNER)))
 
@@ -151,14 +156,15 @@ def test_run_of_someone_elses_course_is_not_found(
 def test_course_set_up_by_another_teacher_conflicts(
     real_auth: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def taken(course: str, name: str, user_id: UUID) -> None:
-        raise HTTPException(409, "This Moodle course is already set up by another teacher")
+    def taken(course: str, name: str, user_id: UUID, settings: Settings) -> None:
+        raise HTTPException(409, "This course is already set up by Ada Lovelace.")
 
     monkeypatch.setattr(course_info, "claim", taken)
 
     response = real_auth.put("/course-info/101", json={"name": "Micro"}, headers=bearer(str(OWNER)))
 
     assert response.status_code == 409
+    assert "Ada Lovelace" in response.json()["detail"]
     assert not (tmp_path / "101").exists()
 
 
@@ -237,60 +243,3 @@ def test_worker_signs_its_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     token = seen["auth"].removeprefix("Bearer ")
     assert auth.verify_token(SECRET, token) == "worker"
     assert time.time() < json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))["exp"]
-
-
-@pytest.fixture
-def shared_101(
-    real_auth: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> TestClient:
-    """Course 101 is OTHER's and listed in SHARED_COURSES."""
-    settings = Settings(uploads_dir=tmp_path, api_auth_secret=SECRET, shared_courses=["101"])
-    app.dependency_overrides[get_settings] = lambda: settings
-    monkeypatch.setattr(auth, "get_settings", lambda: settings)
-    monkeypatch.setattr(auth, "course_owner", lambda course: OTHER)
-    monkeypatch.setattr(users, "owned_course_keys", lambda user_id: [])
-    (tmp_path / "101").mkdir()
-    (tmp_path / "101" / "course.json").write_text(
-        json.dumps({"course": "101", "name": "Sandbox", "created_at": "2026-11-01T00:00:00+00:00"})
-    )
-    return real_auth
-
-
-def test_shared_course_is_open_to_every_teacher(shared_101: TestClient) -> None:
-    headers = bearer(str(OWNER))
-
-    assert [c["name"] for c in shared_101.get("/course-info", headers=headers).json()] == [
-        "Sandbox"
-    ]
-    assert shared_101.get("/course-info/101", headers=headers).status_code == 200
-    assert shared_101.get("/course-info/202", headers=headers).status_code == 404
-
-
-def test_shared_course_can_be_set_up_by_another_teacher(
-    shared_101: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(course_info, "ensure_course", lambda *args: {"owner_id": OTHER})
-
-    class Conn:
-        def __enter__(self) -> object:
-            return object()
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-    monkeypatch.setattr(course_info.db, "transaction", Conn)
-    REAL_CLAIM("101", "Sandbox", OWNER)  # no 409
-    with pytest.raises(HTTPException) as error:
-        REAL_CLAIM("202", "Theirs", OWNER)
-    assert error.value.status_code == 409
-
-
-def test_only_the_owner_starts_a_shared_course_over(
-    shared_101: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(course_info, "course_owner", lambda course: OTHER)
-
-    response = shared_101.delete("/course-info/101", headers=bearer(str(OWNER)))
-
-    assert response.status_code == 403
-    assert (tmp_path / "101").is_dir()

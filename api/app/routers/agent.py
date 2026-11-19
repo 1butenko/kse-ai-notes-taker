@@ -19,7 +19,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, StringConstraints
 
-from app import db, storage
+from app import db, storage, team
+from app.auth import CurrentPrincipal, actor
 from app.config import Settings, get_settings
 from app.course import load_info
 from app.note_taker import sync
@@ -233,6 +234,7 @@ async def post_sync(
     body: SyncRequest,
     settings: Annotated[Settings, Depends(get_settings)],
     worker: Annotated[WorkerClient, Depends(get_worker_client)],
+    principal: CurrentPrincipal,
 ) -> dict[str, Any]:
     """Have the AI Note Taker fetch the course's materials from Moodle; poll the GET."""
     moodle_id = moodle_course_id(course)
@@ -253,4 +255,6 @@ async def post_sync(
         # The run never started: record why, so the panel shows it instead of spinning.
         await asyncio.to_thread(sync.finish_run, run["id"], error=f"Worker: {error.detail}")
         raise
+    details = {"run_id": str(run["id"]), "focus": focus}
+    await asyncio.to_thread(team.record, course, actor(principal), "moodle_synced", details)
     return run
