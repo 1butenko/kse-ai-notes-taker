@@ -34,6 +34,11 @@ updates:
     directories: [/api, /web]
     schedule:
       interval: monthly
+    ignore:
+      # The Python image must match api/.python-version (3.12) and uv.lock's wheels;
+      # 3.15 has no wheels for some deps (zstandard) and the slim image has no gcc.
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]
     commit-message:
       prefix: "deps(docker)"
 

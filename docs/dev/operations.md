@@ -53,7 +53,7 @@ Compose sets `ENVIRONMENT=local`, `CORS_ORIGINS`, `UPLOADS_DIR`, `WORKER_URL` an
 
 Every push to `main` whose CI passes is deployed by [deploy.yml](../../.github/workflows/deploy.yml) (GitHub environment `production`):
 
-1. It resolves the commit, then assumes the IAM role in the `production` environment variable `AWS_DEPLOY_ROLE_ARN` through GitHub OIDC (no AWS keys in GitHub). The role trusts only `repo:1butenko/kse-ai-notes-taker:environment:production` and may only run `AWS-RunShellScript` on the instance and read the result. [github-deploy-role.sh](../../scripts/aws/github-deploy-role.sh) creates it.
+1. It resolves the commit, then assumes the IAM role in the `production` environment variable `AWS_DEPLOY_ROLE_ARN` through GitHub OIDC (no AWS keys in GitHub). The role trusts only this repo's `production` environment (the OIDC subject `repo:1butenko@193812716/kse-ai-notes-taker@1385542116:environment:Production`: the repo uses GitHub's immutable subjects, and the environment is spelled `Production`; the script reads the prefix from GitHub) and may only run `AWS-RunShellScript` on the instance and read the result. [github-deploy-role.sh](../../scripts/aws/github-deploy-role.sh) creates it.
 2. Over `aws ssm send-command` it checks out the commit in `/opt/kse-notes` and runs `deploy.sh <sha>`, waits (up to 30 minutes), prints the output and fails if the command fails.
 3. It polls `https://<cloudfront>/health` until `commit` equals the deployed SHA.
 

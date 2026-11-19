@@ -12,6 +12,10 @@ REGION="${AWS_REGION:-eu-central-1}"
 INSTANCE_ID="${INSTANCE_ID:-i-05052dea20cea067b}"
 ROLE="${ROLE:-kse-notes-github-deploy}"
 export MSYS_NO_PATHCONV=1 # Git Bash: keep ARNs and paths as they are
+# The OIDC `sub` claim prefix: `repo:<owner>/<repo>`, or with GitHub's immutable subjects
+# `repo:<owner>@<id>/<repo>@<id>`. Read from GitHub (needs `gh`); override with SUB_PREFIX.
+SUB_PREFIX="${SUB_PREFIX:-$(gh api "repos/$REPO/actions/oidc/customization/sub" --jq '.sub_claim_prefix // empty' 2>/dev/null || true)}"
+SUB_PREFIX="${SUB_PREFIX:-repo:$REPO}"
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 PROVIDER="arn:aws:iam::$ACCOUNT:oidc-provider/token.actions.githubusercontent.com"
@@ -33,7 +37,10 @@ TRUST=$(cat <<EOF
     "Condition": {
       "StringEquals": {
         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-        "token.actions.githubusercontent.com:sub": "repo:$REPO:environment:production"
+        "token.actions.githubusercontent.com:sub": [
+          "$SUB_PREFIX:environment:production",
+          "$SUB_PREFIX:environment:Production"
+        ]
       }
     }
   }]
