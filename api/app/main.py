@@ -15,6 +15,7 @@ from app.routers import (
     lecture_notes,
     plans,
     syllabus,
+    team,
     uploads,
 )
 
@@ -63,7 +64,8 @@ async def published_book_cors(request, call_next):
 
 
 # Every route needs a signed-in teacher or a service (app/auth.py); course routes also check
-# that the course is the teacher's, per route or, where every route has `{course}`, per router.
+# that the caller may work on the course, per route or, where every route has `{course}`, per
+# router.
 signed_in = [Depends(current_principal)]
 own_course = [*signed_in, Depends(owned_course)]
 
@@ -76,6 +78,7 @@ app.include_router(plans.router, dependencies=own_course)
 app.include_router(files.router, dependencies=signed_in)
 app.include_router(agent.router, dependencies=own_course)
 app.include_router(lecture_notes.router, dependencies=signed_in)
+app.include_router(team.router, dependencies=signed_in)
 # Published lecture-notes pages are public (an unguessable run id), for the sandboxed iframe.
 app.include_router(lecture_notes.site_router)
 

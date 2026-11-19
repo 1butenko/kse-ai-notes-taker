@@ -1,4 +1,4 @@
-"""Teachers (`users` rows) and the courses they own."""
+"""Signed-in users (`users` rows); the courses they work on are in app/team.py."""
 
 from typing import Any
 from uuid import UUID
@@ -44,23 +44,3 @@ def update_names(user_id: UUID, first_name: str, last_name: str) -> dict[str, An
             f" RETURNING {USER_COLUMNS}",
             (first_name, last_name, user_id),
         ).fetchone()
-
-
-def owned_course_keys(user_id: UUID) -> list[str]:
-    with db.transaction() as conn:
-        rows = conn.execute(
-            "SELECT course_key FROM courses WHERE owner_id = %s AND course_key IS NOT NULL",
-            (user_id,),
-        ).fetchall()
-    return [row["course_key"] for row in rows]
-
-
-def claim_course(course_key: str, email: str) -> bool:
-    """Give an existing course (made before sign-in) to the teacher with this email."""
-    with db.transaction() as conn:
-        row = conn.execute(
-            "UPDATE courses SET owner_id = u.id FROM users u"
-            " WHERE courses.course_key = %s AND u.email = %s RETURNING courses.id",
-            (course_key, email.lower()),
-        ).fetchone()
-    return row is not None

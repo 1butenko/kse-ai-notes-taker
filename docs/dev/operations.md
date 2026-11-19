@@ -42,7 +42,7 @@ Defined in [.env.example](../../.env.example); the real values live in `.env`.
 | API | `API_PORT`, `PUBLIC_API_URL` (absolute base for links in downloaded notes, including any path prefix) |
 | Moodle | `MOODLE_URL`, `MOODLE_TOKEN` |
 | Models | `OPENROUTER_API_KEY` (optional; without it syllabus transcription is off), `NOTE_TAKER_MODEL` |
-| Sign-in | `API_AUTH_SECRET` (same value for web, api and worker), `SHARED_COURSES` (JSON list of course keys open to all teachers), `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_ALLOWED_DOMAINS` |
+| Sign-in | `API_AUTH_SECRET` (same value for web, api and worker), `PLATFORM_ADMINS` (JSON list of admin emails), `OPEN_COURSE_ACCESS` (test servers only: everyone is an admin), `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_ALLOWED_DOMAINS` |
 | AWS | `AWS_REGION`, `S3_BUCKET`, `DB_HOST`, `DB_NAME` (Aurora uses IAM auth) |
 | Langfuse | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_TRACING` (traces every model call with user, session and cost; attached PDFs are never sent, text prompts are); `ENVIRONMENT` is the Langfuse environment (`production` in `compose.prod.yaml`) |
 | Lecture notes | `LECTURE_NOTES_MODEL`, `LECTURE_NOTES_REVIEWER_MODEL`, `LECTURE_NOTES_MAX_CHARS`, `LECTURE_NOTES_MAX_RENDERS`, `LECTURE_NOTES_CONCURRENCY` |

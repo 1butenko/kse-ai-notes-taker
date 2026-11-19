@@ -5,8 +5,14 @@ Teachers sign in with Google in the web app (Auth.js, KSE accounts only). The we
 `API_AUTH_SECRET`: `sub` is the user's id (`users.id`). The worker signs its own calls with the
 same secret and `sub = "worker"`; so does the web when it records a user at sign-in.
 
-A course belongs to the teacher in `courses.owner_id`. Services may touch every course, and
-every signed-in teacher may touch a course listed in `SHARED_COURSES`.
+Who may work on a course (`course_role`):
+- its members (`course_members`, app/team.py): one lecturer and any number of TAs;
+- admins (`PLATFORM_ADMINS`), with a lecturer's rights on every course;
+- everyone signed in, as an admin, when `OPEN_COURSE_ACCESS` is on (test environments);
+- services (the worker, the web), on every course.
+
+TAs do everything on a course except manage its members and start it over (`require="lecturer"`).
+A course the caller may not see is answered with 404, so its existence is not revealed.
 """
 
 import base64
@@ -23,7 +29,7 @@ import psycopg
 from fastapi import Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel
 
-from app import db
+from app import db, team
 from app.config import Settings, get_settings
 
 ISSUER = "kse-web"
@@ -146,18 +152,13 @@ def storage_unavailable() -> Iterator[None]:
         ) from error
 
 
-# A course's owner, by course key. `None`: the course has no row or no owner yet.
-def course_owner(course: str) -> UUID | None:
-    with db.transaction() as conn:
-        row = conn.execute(
-            "SELECT owner_id FROM courses WHERE course_key = %s", (course,)
-        ).fetchone()
-    return row["owner_id"] if row else None
+# The caller's role on a course: a member's role, "admin", or None (no access).
+Role = Literal["lecturer", "ta", "admin"]
 
 
-def shared_course(course: str) -> bool:
-    """Open to every signed-in teacher (`SHARED_COURSES`), such as the sandbox."""
-    return course in get_settings().shared_courses
+def course_access(course: str, user_id: UUID) -> tuple[str | None, team.MemberRole | None]:
+    """The user's email and their membership role; the database seam tests replace."""
+    return team.course_access(course, user_id)
 
 
 def run_course(run_id: UUID) -> str | None:
@@ -171,34 +172,69 @@ def run_course(run_id: UUID) -> str | None:
     return row["course_key"] if row else None
 
 
-def authorize_course(principal: Principal, course: str) -> None:
-    """404 unless the course is the teacher's: someone else's course is not shown to exist."""
-    if principal.kind == "service" or shared_course(course):
-        return
+def course_role(principal: Principal, course: str, settings: Settings) -> Role | None:
+    if principal.kind == "service" or settings.open_course_access:
+        return "admin"
     with storage_unavailable():
-        owner = course_owner(course)
-    if owner is None or owner != principal.user_id:
+        email, role = course_access(course, principal.user_id)
+    if role == "lecturer":
+        return role
+    if settings.is_admin(email):
+        return "admin"
+    return role
+
+
+def authorize_course(
+    principal: Principal,
+    course: str,
+    settings: Settings,
+    require: Literal["ta", "lecturer"] = "ta",
+) -> Role:
+    """The caller's role. 404 without access; 403 for a TA where a lecturer is required."""
+    role = course_role(principal, course, settings)
+    if role is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found")
+    if require == "lecturer" and role == "ta":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Only the course's lecturer or an admin can do this"
+        )
+    return role
 
 
-def authorize_path(principal: Principal, path: str) -> None:
+def path_course(path: str) -> str:
     """A stored file's path starts with its course key (`<course>/<category>/<name>`)."""
-    authorize_course(principal, path.replace("\\", "/").lstrip("/").split("/")[0])
+    return path.replace("\\", "/").lstrip("/").split("/")[0]
 
 
-def owned_course(course: str, principal: CurrentPrincipal) -> str:
-    """Dependency for routes with a `{course}` path parameter."""
-    authorize_course(principal, course)
+def authorize_path(principal: Principal, path: str, settings: Settings) -> None:
+    authorize_course(principal, path_course(path), settings)
+
+
+AppSettings = Annotated[Settings, Depends(get_settings)]
+
+
+def owned_course(course: str, principal: CurrentPrincipal, settings: AppSettings) -> str:
+    """Dependency for routes with a `{course}` path parameter: any member, an admin or a
+    service may work on it."""
+    authorize_course(principal, course, settings)
     return course
 
 
-def owned_path(path: Annotated[str, Query()], principal: CurrentPrincipal) -> str:
+def lectured_course(course: str, principal: CurrentPrincipal, settings: AppSettings) -> str:
+    """Dependency for what only the lecturer or an admin may do."""
+    authorize_course(principal, course, settings, require="lecturer")
+    return course
+
+
+def owned_path(
+    path: Annotated[str, Query()], principal: CurrentPrincipal, settings: AppSettings
+) -> str:
     """Dependency for routes with a `?path=` of a stored file."""
-    authorize_path(principal, path)
+    authorize_path(principal, path, settings)
     return path
 
 
-def owned_run(run_id: UUID, principal: CurrentPrincipal) -> UUID:
+def owned_run(run_id: UUID, principal: CurrentPrincipal, settings: AppSettings) -> UUID:
     """Dependency for routes with a `{run_id}` of a lecture-notes run."""
     if principal.kind == "service":
         return run_id
@@ -206,8 +242,13 @@ def owned_run(run_id: UUID, principal: CurrentPrincipal) -> UUID:
         course = run_course(run_id)
     if course is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
-    authorize_course(principal, course)
+    authorize_course(principal, course, settings)
     return run_id
+
+
+def actor(principal: Principal) -> UUID | None:
+    """Who the activity log names: the user, or None for a service."""
+    return UUID(principal.id) if principal.kind == "user" else None
 
 
 OwnedCourse = Annotated[str, Depends(owned_course)]

@@ -49,9 +49,18 @@ class Settings(BaseSettings):
     worker_url: str = "http://localhost:8001"
     # Signs the tokens the web (for signed-in teachers) and the worker send (app/auth.py).
     api_auth_secret: str = ""
-    # Course keys every signed-in teacher may use (a sandbox), as JSON: SHARED_COURSES=["4510"].
-    # Their owner keeps them; only the owner may Start over. Until course invitations exist.
-    shared_courses: list[str] = []
+    # Who may work on a course (app/auth.py). Admins have a lecturer's rights on every course,
+    # as JSON: PLATFORM_ADMINS=["a@kse.org.ua"].
+    platform_admins: list[str] = []
+    # Test environments only: every signed-in user is an admin of every course.
+    open_course_access: bool = False
+    # Course members are added by email; only these domains (the web's AUTH_ALLOWED_DOMAINS).
+    member_email_domains: list[str] = ["kse.org.ua"]
+
+    def is_admin(self, email: str | None) -> bool:
+        if self.open_course_access:
+            return True
+        return bool(email) and email.lower() in {a.strip().lower() for a in self.platform_admins}
 
     # AI Note Taker storage (app/routers/agent.py): Aurora PostgreSQL rows, S3 files.
     aws_region: str = "eu-central-1"

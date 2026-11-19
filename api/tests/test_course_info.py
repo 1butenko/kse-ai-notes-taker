@@ -56,7 +56,11 @@ def test_get_one_and_list_newest_first(tmp_uploads) -> None:
         ("2", "Middle"),
         ("1", "Old"),
     ]
-    assert client.get("/course-info/2").json() == listed[1]
+    # The list adds the caller's role on each course.
+    assert {c["role"] for c in listed} == {"lecturer"}
+    assert client.get("/course-info/2").json() == {
+        k: v for k, v in listed[1].items() if k != "role"
+    }
     assert client.get("/course-info/3").status_code == 404
     assert client.get("/course-info/4").status_code == 404
 
