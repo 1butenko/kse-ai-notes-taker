@@ -16,6 +16,7 @@ import { AgentReport, useAgentCourse } from "@/components/course/agent-materials
 import { LectureList } from "@/components/course/lecture-list";
 import { MaterialsPanel } from "@/components/course/materials-panel";
 import { SetupReview } from "@/components/course/setup-review";
+import { RoleBadge, TeamPanel, useTeam } from "@/components/course/team-panel";
 import { SyllabusUpload } from "@/components/dashboard/syllabus-upload";
 import { useCourseLectureNotes } from "@/components/lecture-notes/use-course-lecture-notes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -39,6 +40,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDeveloperMode } from "@/hooks/use-developer-mode";
 import {
   ApiError,
@@ -117,6 +119,10 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
   const [replacing, setReplacing] = useState<"closed" | "open" | "saving">("closed");
   const [deleting, setDeleting] = useState<"closed" | "open" | "deleting">("closed");
   const notes = useCourseLectureNotes(course);
+  const team = useTeam(course);
+  const myRole = team.state.kind === "ready" ? team.state.team.my_role : undefined;
+  // Only the lecturer and admins start a course over (TAs get a 403).
+  const canStartOver = myRole !== undefined && myRole !== "ta";
   const agent = useAgentCourse(course, courseId !== undefined);
   // A course the AI Note Taker sets up: it reads the syllabus and prepares the lectures.
   const agentRun = agent.data?.latest_run ?? undefined;
@@ -285,7 +291,10 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
     <div className="flex flex-col gap-8">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="text-3xl">{name}</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-3xl">{name}</h1>
+            {myRole && <RoleBadge role={myRole} />}
+          </div>
           <p className="text-muted-foreground">
             {agentSetup
               ? "Setting up with the AI Note Taker"
@@ -326,153 +335,170 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
                 <UploadIcon />
                 Replace the syllabus file
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onClick={() => setDeleting("open")}>
-                <Trash2Icon />
-                Start over
-              </DropdownMenuItem>
+              {canStartOver && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onClick={() => setDeleting("open")}>
+                    <Trash2Icon />
+                    Start over
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </header>
 
-      {loadError && (
-        <Alert variant="destructive">
-          <CircleAlertIcon />
-          <AlertTitle>Couldn&apos;t load the course</AlertTitle>
-          <AlertDescription className="flex flex-col items-start gap-2">
-            {loadError}
-            <Button size="sm" variant="outline" onClick={load}>
-              Try again
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      <Tabs defaultValue="course" className="gap-6">
+        <TabsList>
+          <TabsTrigger value="course">Course</TabsTrigger>
+          <TabsTrigger value="team">Team</TabsTrigger>
+        </TabsList>
+        {/* Kept mounted: the setup review and uploads keep their state across tabs. */}
+        <TabsContent value="course" keepMounted className="flex flex-col gap-8 text-base">
 
-      {phase === "loading" && !loadError && (
-        // Shown only when loading takes a moment, so a fresh course goes straight to the
-        // agent's console without a flash of placeholders.
-        <div className="flex flex-col gap-3 animate-in fade-in duration-500 delay-300 fill-mode-backwards">
-          {Array.from({ length: 6 }, (_, index) => (
-            <Skeleton key={index} className="h-14 w-full" />
-          ))}
-        </div>
-      )}
-
-      {agentSetup && agentRun && (
-        <AgentConsole
-          run={agentRun}
-          onRetry={retryAgent}
-          retrying={retrying}
-          incomplete={phase === "syllabus" || phase === "reading"}
-        />
-      )}
-
-      {!agentSetup && phase === "syllabus" && (
-        <section className="flex max-w-xl flex-col gap-4">
-          <p className="text-muted-foreground">
-            This course has no syllabus yet. Add it, and it is read into lectures.
-          </p>
-          <SyllabusUpload
-            files={newSyllabus}
-            onFilesChange={setNewSyllabus}
-            moodleFiles={[]}
-            onRemoveMoodleFile={() => {}}
-            savedFiles={[]}
-          />
-          <div>
-            <Button disabled={newSyllabus.length === 0 || replacing === "saving"} onClick={saveFirstSyllabus}>
-              {replacing === "saving" ? "Saving…" : "Save and read it"}
-            </Button>
-          </div>
-        </section>
-      )}
-
-      {!agentSetup &&
-        (phase === "reading" || (phase === "review" && (reading || readError))) &&
-        (readError ? (
-          <Alert variant="destructive">
-            <CircleAlertIcon />
-            <AlertTitle>Couldn&apos;t read the syllabus</AlertTitle>
-            <AlertDescription className="flex flex-col items-start gap-2">
-              {readError}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  phase === "reading"
-                    ? setReadError(null)
-                    : syllabusPath && read(syllabusPath, true)
-                }
-              >
-                Try again
-              </Button>
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <SetupProgress
-            title="Reading the syllabus…"
-            detail="Finding its lectures, topics and readings. This usually takes up to a minute."
-          />
-        ))}
-
-      {!agentSetup &&
-        phase === "review" &&
-        !reading &&
-        !readError &&
-        plan?.transcript &&
-        syllabusPath && (
-        <SetupReview
-          // A fresh transcript starts a fresh review.
-          key={plan.transcript.created_at}
-          course={course}
-          transcript={plan.transcript}
-          syllabusPath={syllabusPath}
-          onPlan={setPlan}
-          onApproved={() => {
-            setForceReview(false);
-            setApprovedHere(true);
-            forgetReadingsApproval();
-          }}
-        />
-      )}
-
-      {phase === "ready" && plan && files && (
-        <>
-          {!hasMaterials && (
-            <Alert>
-              <InfoIcon />
-              <AlertTitle>No lecture has readings yet</AlertTitle>
-              <AlertDescription>
-                Add the books the syllabus cites, or drop a file on a lecture&apos;s page, to
-                write its notes.
+          {loadError && (
+            <Alert variant="destructive">
+              <CircleAlertIcon />
+              <AlertTitle>Couldn&apos;t load the course</AlertTitle>
+              <AlertDescription className="flex flex-col items-start gap-2">
+                {loadError}
+                <Button size="sm" variant="outline" onClick={load}>
+                  Try again
+                </Button>
               </AlertDescription>
             </Alert>
           )}
-          <div className="grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
-            <section aria-labelledby="notes-title" className="flex min-w-0 flex-col gap-3">
-              <div className="flex flex-col gap-1">
-                <h2 id="notes-title" className="text-xl">
-                  Notes
-                </h2>
-              </div>
-              <LectureList plan={plan} notes={notes} />
-            </section>
-            <MaterialsPanel
-              plan={plan}
-              courseId={courseId}
-              syllabusFiles={files.syllabus}
-              readingFiles={files.reading}
-              onPlan={setPlan}
-              onUploaded={reloadFiles}
-            />
-          </div>
-        </>
-      )}
 
-      {developerMode && phase !== "loading" && !agentSetup && (
-        <AgentReport agent={agent} />
-      )}
+          {phase === "loading" && !loadError && (
+            // Shown only when loading takes a moment, so a fresh course goes straight to the
+            // agent's console without a flash of placeholders.
+            <div className="flex flex-col gap-3 animate-in fade-in duration-500 delay-300 fill-mode-backwards">
+              {Array.from({ length: 6 }, (_, index) => (
+                <Skeleton key={index} className="h-14 w-full" />
+              ))}
+            </div>
+          )}
+
+          {agentSetup && agentRun && (
+            <AgentConsole
+              run={agentRun}
+              onRetry={retryAgent}
+              retrying={retrying}
+              incomplete={phase === "syllabus" || phase === "reading"}
+            />
+          )}
+
+          {!agentSetup && phase === "syllabus" && (
+            <section className="flex max-w-xl flex-col gap-4">
+              <p className="text-muted-foreground">
+                This course has no syllabus yet. Add it, and it is read into lectures.
+              </p>
+              <SyllabusUpload
+                files={newSyllabus}
+                onFilesChange={setNewSyllabus}
+                moodleFiles={[]}
+                onRemoveMoodleFile={() => {}}
+                savedFiles={[]}
+              />
+              <div>
+                <Button disabled={newSyllabus.length === 0 || replacing === "saving"} onClick={saveFirstSyllabus}>
+                  {replacing === "saving" ? "Saving…" : "Save and read it"}
+                </Button>
+              </div>
+            </section>
+          )}
+
+          {!agentSetup &&
+            (phase === "reading" || (phase === "review" && (reading || readError))) &&
+            (readError ? (
+              <Alert variant="destructive">
+                <CircleAlertIcon />
+                <AlertTitle>Couldn&apos;t read the syllabus</AlertTitle>
+                <AlertDescription className="flex flex-col items-start gap-2">
+                  {readError}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      phase === "reading"
+                        ? setReadError(null)
+                        : syllabusPath && read(syllabusPath, true)
+                    }
+                  >
+                    Try again
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <SetupProgress
+                title="Reading the syllabus…"
+                detail="Finding its lectures, topics and readings. This usually takes up to a minute."
+              />
+            ))}
+
+          {!agentSetup &&
+            phase === "review" &&
+            !reading &&
+            !readError &&
+            plan?.transcript &&
+            syllabusPath && (
+            <SetupReview
+              // A fresh transcript starts a fresh review.
+              key={plan.transcript.created_at}
+              course={course}
+              transcript={plan.transcript}
+              syllabusPath={syllabusPath}
+              onPlan={setPlan}
+              onApproved={() => {
+                setForceReview(false);
+                setApprovedHere(true);
+                forgetReadingsApproval();
+              }}
+            />
+          )}
+
+          {phase === "ready" && plan && files && (
+            <>
+              {!hasMaterials && (
+                <Alert>
+                  <InfoIcon />
+                  <AlertTitle>No lecture has readings yet</AlertTitle>
+                  <AlertDescription>
+                    Add the books the syllabus cites, or drop a file on a lecture&apos;s page, to
+                    write its notes.
+                  </AlertDescription>
+                </Alert>
+              )}
+              <div className="grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
+                <section aria-labelledby="notes-title" className="flex min-w-0 flex-col gap-3">
+                  <div className="flex flex-col gap-1">
+                    <h2 id="notes-title" className="text-xl">
+                      Notes
+                    </h2>
+                  </div>
+                  <LectureList plan={plan} notes={notes} />
+                </section>
+                <MaterialsPanel
+                  plan={plan}
+                  courseId={courseId}
+                  syllabusFiles={files.syllabus}
+                  readingFiles={files.reading}
+                  onPlan={setPlan}
+                  onUploaded={reloadFiles}
+                />
+              </div>
+            </>
+          )}
+
+          {developerMode && phase !== "loading" && !agentSetup && (
+            <AgentReport agent={agent} />
+          )}
+        </TabsContent>
+        <TabsContent value="team" className="text-base">
+          <TeamPanel course={course} state={team.state} onTeam={team.set} onRetry={team.reload} />
+        </TabsContent>
+      </Tabs>
 
       <Dialog
         open={replacing !== "closed" && phase !== "syllabus"}
@@ -514,8 +540,9 @@ export function CoursePage({ course, name, onDeleted }: CoursePageProps) {
           <DialogHeader>
             <DialogTitle>Start over?</DialogTitle>
             <DialogDescription>
-              {name} leaves the app with its syllabus, readings and lectures. The files move to
-              the server&apos;s trash folder, where an administrator can restore them.
+              {name} leaves the app with its syllabus, readings and lectures, and everyone on its
+              team loses access. The files move to the server&apos;s trash folder, where an
+              administrator can restore them.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

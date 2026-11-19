@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { BookOpenIcon, ChevronRightIcon, CircleAlertIcon, PlusIcon } from "lucide-react";
 
 import { CreateCourseDialog } from "@/components/course/create-course-dialog";
+import { RoleBadge } from "@/components/course/team-panel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,12 +26,12 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ApiError, type CourseInfo, listCourseInfo } from "@/lib/api";
+import { ApiError, type CourseListItem, listCourseInfo } from "@/lib/api";
 
 type State =
   | { kind: "loading" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; courses: CourseInfo[] };
+  | { kind: "ready"; courses: CourseListItem[] };
 
 async function fetchCourses(): Promise<State> {
   try {
@@ -134,6 +135,7 @@ export function CourseList() {
                 </ItemDescription>
               </ItemContent>
               <ItemActions>
+                <RoleBadge role={course.role} />
                 <ChevronRightIcon className="text-muted-foreground" />
               </ItemActions>
             </Item>
