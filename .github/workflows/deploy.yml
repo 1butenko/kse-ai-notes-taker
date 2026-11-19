@@ -1,0 +1,114 @@
+# Deploys the backend (api + worker) to the AWS EC2 host.
+#
+# - After CI passes on a push to main: deploys that commit.
+# - Manual run (workflow_dispatch): deploys any branch, tag or commit, e.g. an older
+#   commit to roll back.
+#
+# GitHub assumes an AWS role through OIDC (no stored AWS keys). The role may only run
+# AWS-RunShellScript on the instance, which runs scripts/aws/deploy.sh <sha>. The job
+# then waits for the command, prints its output, and checks that /health reports the
+# deployed commit. See docs/dev/operations.md.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to deploy
+        required: true
+        default: main
+
+# One deploy at a time; a newer one waits instead of cancelling a running one.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: eu-central-1
+  INSTANCE_ID: i-05052dea20cea067b
+  APP_DIR: /opt/kse-notes
+  HEALTH_URL: https://d3e4a8vcmefkx9.cloudfront.net/health
+
+jobs:
+  deploy:
+    name: Deploy to EC2
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ env.HEALTH_URL }}
+    steps:
+      - name: Resolve the commit
+        id: sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.event.inputs.ref || github.event.workflow_run.head_sha }}
+        run: |
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$REF" --jq .sha)
+          echo "Deploying $sha ($REF)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Fetch and check out the commit first, so deploy.sh runs as that commit's version
+      # (it is not rewritten while it runs).
+      - name: Run deploy.sh on the instance
+        id: send
+        env:
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          script="set -eu; cd $APP_DIR; git fetch --prune origin; git checkout --detach $SHA; sh scripts/aws/deploy.sh $SHA"
+          params=$(jq -nc --arg s "$script" '{commands: [$s], executionTimeout: ["1800"]}')
+          id=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "GitHub deploy ${SHA::7}" \
+            --parameters "$params" \
+            --query Command.CommandId --output text)
+          echo "SSM command $id"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the deploy
+        env:
+          COMMAND_ID: ${{ steps.send.outputs.id }}
+        run: |
+          for _ in $(seq 1 180); do
+            status=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in
+              Pending|InProgress|Delayed) sleep 10 ;;
+              *) break ;;
+            esac
+          done
+          out=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID")
+          echo "::group::stdout"; jq -r .StandardOutputContent <<<"$out"; echo "::endgroup::"
+          echo "::group::stderr"; jq -r .StandardErrorContent <<<"$out"; echo "::endgroup::"
+          echo "Status: $status"
+          [ "$status" = Success ] || { echo "::error::deploy.sh finished with $status"; exit 1; }
+
+      - name: Check /health reports the commit
+        env:
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          for _ in $(seq 1 30); do
+            body=$(curl -fsS "$HEALTH_URL?sha=$SHA" || true)
+            echo "$body"
+            [ "$(jq -r '.commit // empty' <<<"$body" 2>/dev/null)" = "$SHA" ] && exit 0
+            sleep 10
+          done
+          echo "::error::$HEALTH_URL does not report $SHA"
+          exit 1

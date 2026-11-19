@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     app_name: str = "kse-ai-notes-taker"
     environment: str = "local"
+    # Commit the running code was built from; deploy.sh sets it, /health reports it.
+    git_sha: str = ""
     cors_origins: list[str] = ["http://localhost:3000"]
     cors_origin_regex: str | None = None
     uploads_dir: Path = Path("uploads")

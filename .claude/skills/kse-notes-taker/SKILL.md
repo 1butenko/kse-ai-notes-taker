@@ -29,6 +29,7 @@ Dashboard for KSE lecturers: import a course from Moodle, upload syllabus and re
 - Add npm packages, then rebuild web: `docker compose up -d --build -V web`
 - `.env` changes need recreate: `docker compose up -d --force-recreate api worker`
 - DB tables: `make db-init` (needs AWS credentials, `aws login`)
+- Deploy: merging to `main` deploys the backend to EC2 after CI passes (`.github/workflows/deploy.yml`); roll back by running that workflow with an older `ref`. See `docs/dev/operations.md`.
 
 ## Conventions
 
