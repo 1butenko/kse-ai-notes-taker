@@ -138,10 +138,22 @@ Every run is one Langfuse trace when `LANGFUSE_*` keys are set and `LANGFUSE_TRA
 
 **Privacy.** Traces contain the reading text the agent read. Set `LANGFUSE_TRACING=false` where that must not leave the app; prompts and skills still load from Langfuse.
 
+## Editing by hand
+
+A teacher can edit a lecture's published notes in the web editor (`/lectures/<course>/<session>/edit`, Plate). The editor turns the Quarto body into blocks and back (`web/src/lib/qmd/`); see [web.md](../dev/web.md).
+
+1. `GET /lecture-notes/runs/{run}/source` gives the body, the SVG asset names and the readings' citation keys (`rerender.read_published`, `front_references`).
+2. `POST /lecture-notes/runs/{run}/edits` checks the body with the same validator as the agent's notes (`validate_body`) and refuses with 422 and line numbers. It also refuses (409) when the lecture's readings changed since that version, because the citations would point at other readings.
+3. The API inserts a run with `kind = 'edit'`, `edited_from` and `edited_by` (`runs.start_edit`). Unlike an agent run, it is never refused because another run is going.
+4. The worker's `runs.execute_edit` renders the body with `rerender.render_and_publish`, with no model call. The figures are the old version's plus the editor's new or changed ones, minus those the body no longer shows (`edit_assets`). The agent's sign-off is kept. The run ends `succeeded` with the report "Edited by hand.", or `failed` with the error.
+
+The lecture's current notes are its newest succeeded run. Earlier runs stay in the database and S3, but the web shows no version picker.
+
 ## Storage and API
 
 **PostgreSQL `lecture_note_runs`.** One row per run:
 - the course and lecture;
+- the kind: `agent` or `edit`, and for an edit the run it started from and the teacher who saved it;
 - the status: `running`, `succeeded`, `failed` or `cancelled`;
 - the step, todos and actions, report and error;
 - the published files, the readings fingerprint, the model, prompt versions, trace id and render count.
@@ -156,6 +168,8 @@ Run `make db-init` to create it.
 | `GET /lecture-notes/{course}/{session}/runs` | The lecture's runs, newest first, with `readings_changed` |
 | `GET /lecture-notes/runs/{run}` | One run, to poll |
 | `POST /lecture-notes/runs/{run}/cancel` | Stop it, before the next model call or render |
+| `GET /lecture-notes/runs/{run}/source` | The published body, asset names and readings, for the editor. 409 unless the run is published |
+| `POST /lecture-notes/runs/{run}/edits` | Save an edit as a new `edit` run (202). 409 when not published or the readings changed; 422 with the checker's problems |
 | `GET /lecture-notes/runs/{run}/site/{path}` | A file of the lecture's newest published run, whichever of its runs `{run}` names (so a shared link shows later edits); only paths that run published |
 
 **How the page is served.** It is model-written, so HTML is served with `Content-Security-Policy: sandbox allow-scripts …` and an opaque origin. Its own files and `https://cdn.jsdelivr.net/npm/` are the only sources it may load. `'unsafe-eval'` is allowed because OJS compiles cells in the browser. Only Quarto's hashed libraries (`index_files/`) are cached as immutable; the page, its CSS, fonts and assets are `no-cache`, because a re-render replaces them under the same names.
