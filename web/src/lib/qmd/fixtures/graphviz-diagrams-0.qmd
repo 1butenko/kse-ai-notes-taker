@@ -1,0 +1,18 @@
+```{dot}
+//| label: fig-concepts
+//| fig-cap: "How the main ideas connect"
+digraph G {
+  rankdir=LR;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fillcolor="#eef4fb", color="#4a78b5",
+        fontname="Helvetica", fontsize=12];
+  edge [color="#666666", fontname="Helvetica", fontsize=10];
+
+  matrix  [label="Матриця A"];
+  eigen   [label="Власні значення λ"];
+  vectors [label="Власні вектори v"];
+
+  matrix -> eigen   [label="det(A − λI) = 0"];
+  eigen  -> vectors [label="(A − λI)v = 0"];
+}
+```

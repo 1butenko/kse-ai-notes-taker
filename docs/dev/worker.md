@@ -26,6 +26,7 @@ The worker is a second FastAPI service (`api/app/worker`) and the only place tha
 | `POST /books/transcribe` (202) | Background vision transcription of garbled pages | `transcribe-pages` → `transcribe-page` |
 | `POST /note-taker/runs` (202) | Background `sync.execute_run` (orchestrator + Moodle subagent); result goes to `sync_runs` | `prepare-course` |
 | `POST /lecture-notes/runs` (202) | Background `runs.execute_run`; 429 above `lecture_notes_concurrency`; result goes to `lecture_note_runs` | `lecture-notes` (writer + reviewer) |
+| `POST /lecture-notes/edits` (202) | Background `runs.execute_edit`: renders a teacher's edit of a succeeded run (`LectureNotesEditRequest`: `run_id`, `parent_id`, `course`, `body`, `assets`) and publishes it, without the model; the outcome goes to the run's row | none |
 | `POST /lecture-notes/cancel` | Sets the run's cancel event | none |
 | `GET /health` | `{status, environment}` | none |
 

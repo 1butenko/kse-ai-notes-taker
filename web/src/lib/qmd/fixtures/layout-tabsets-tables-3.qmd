@@ -1,0 +1,5 @@
+::: {layout-ncol=2}
+![Before](assets/before.svg){#fig-before}
+
+![After](assets/after.svg){#fig-after}
+:::

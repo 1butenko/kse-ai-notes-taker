@@ -13,6 +13,7 @@ from app.worker_contract import (
     BooksResponse,
     LectureNotesCancel,
     LectureNotesCancelResponse,
+    LectureNotesEditRequest,
     LectureNotesRequest,
     LectureNotesResponse,
     MapRequest,
@@ -48,6 +49,9 @@ class WorkerClient:
 
     async def run_lecture_notes(self, request: LectureNotesRequest) -> LectureNotesResponse:
         return await self.call("/lecture-notes/runs", request, LectureNotesResponse)
+
+    async def edit_lecture_notes(self, request: LectureNotesEditRequest) -> LectureNotesResponse:
+        return await self.call("/lecture-notes/edits", request, LectureNotesResponse)
 
     async def cancel_lecture_notes(self, run_id: UUID) -> LectureNotesCancelResponse:
         return await self.call(

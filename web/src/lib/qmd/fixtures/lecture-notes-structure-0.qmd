@@ -1,0 +1,10 @@
+::: {.callout-note .learning-goals title="What you will learn"}
+By the end of this note you should be able to:
+
+- **Choose a baseline**\
+  Pick the mean, naïve, seasonal naïve or drift forecast for a series and say why.
+- **Check the residuals**\
+  Read a residual plot, histogram and ACF, and run a portmanteau test.
+- **Measure accuracy**\
+  Compute MAE, RMSE and MAPE on a test set and compare methods with them.
+:::

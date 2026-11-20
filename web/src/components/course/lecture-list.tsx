@@ -48,7 +48,7 @@ export function LectureList({ plan, notes }: LectureListProps) {
         const published = status?.published ?? null;
         const title = session.topic || session.label;
         const href = published
-          ? visualNotesPath(plan.course, entry.id, published.id)
+          ? visualNotesPath(plan.course, entry.id)
           : lecturePath(plan.course, entry.id);
         return (
           <li key={entry.id} className="flex items-stretch border-b">

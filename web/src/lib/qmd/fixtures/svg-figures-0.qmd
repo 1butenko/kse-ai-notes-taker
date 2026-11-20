@@ -1,0 +1,1 @@
+![Projection of $b$ onto the line through $a$](assets/projection.svg){#fig-projection width=70%}

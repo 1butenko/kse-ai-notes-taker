@@ -1,0 +1,3 @@
+::: {.callout-note collapse="true" title="Full derivation"}
+The step-by-step working goes here.
+:::

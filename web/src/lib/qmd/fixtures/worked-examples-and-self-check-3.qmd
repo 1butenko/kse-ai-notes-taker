@@ -1,0 +1,9 @@
+::: {.callout-note title="Check yourself"}
+1. Why can't an eigenvector be zero?
+2. What are the eigenvalues of a triangular matrix?
+:::
+
+::: {.callout-note collapse="true" title="Answers"}
+1. ...
+2. The entries on its diagonal.
+:::

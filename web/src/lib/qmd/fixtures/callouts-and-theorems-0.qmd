@@ -1,0 +1,3 @@
+::: {.callout-warning title="Common mistake"}
+$\det(A + B) \ne \det A + \det B$ in general. Check with $A = B = I_2$.
+:::

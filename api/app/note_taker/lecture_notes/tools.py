@@ -1,8 +1,9 @@
 """`render_notes`: the writer's one custom tool. Validates and renders the note it wrote.
 
-It reads `/notes/index.qmd` and `/notes/assets/*.svg` from the agent's virtual filesystem, checks
-them against the allowlist (`validate.py`), adds our front matter and renders with Quarto. The
-answer is either OK with a summary, or the problems to fix, so the agent can repair its note.
+It reads `/notes/index.qmd`, `/notes/assets/*.svg` and the optional `/notes/sign-off.txt` from
+the agent's virtual filesystem, checks them against the allowlist (`validate.py`), adds our
+front matter, header and footer and renders with Quarto. The answer is either OK with a summary,
+or the problems to fix, so the agent can repair its note.
 The last build that rendered is kept in the run's work directory; the run publishes it.
 
 The lecture and the output directory are bound by closure; the tool takes no arguments.
@@ -18,13 +19,21 @@ from pathlib import Path
 from deepagents.backends import StateBackend
 from langchain_core.tools import BaseTool, tool
 
-from app.note_taker.lecture_notes.build import BuildResult, Runner, front_matter, stage_and_render
+from app.note_taker.lecture_notes.build import (
+    SIGN_OFF_MAX,
+    BuildResult,
+    Runner,
+    front_matter,
+    page_chrome,
+    stage_and_render,
+)
 from app.note_taker.lecture_notes.readings import LectureBundle
 from app.note_taker.lecture_notes.validate import validate_body
 from app.note_taker.progress import Progress
 
 NOTE = "/notes/index.qmd"
 ASSETS = "/notes/assets/"
+SIGN_OFF = "/notes/sign-off.txt"
 MAX_REPORT = 3000
 
 
@@ -42,8 +51,9 @@ class RenderState:
     warnings: list[str] = field(default_factory=list)
 
 
-def digest(body: str, assets: dict[str, bytes]) -> str:
+def digest(body: str, assets: dict[str, bytes], sign_off: str | None = None) -> str:
     h = hashlib.sha256(body.encode())
+    h.update(b"\0sign-off\0" + (sign_off or "").encode())
     for name in sorted(assets):
         h.update(name.encode() + b"\0" + assets[name])
     return h.hexdigest()
@@ -60,6 +70,35 @@ def read_note(backend: StateBackend) -> tuple[str | None, dict[str, bytes]]:
         if response.content is not None:
             assets["assets/" + response.path[len(ASSETS) :]] = response.content
     return body, assets
+
+
+def read_sign_off(backend: StateBackend) -> str | None:
+    """The agent's footer line, if it wrote one."""
+    [response] = backend.download_files([SIGN_OFF])
+    if response.content is None:
+        return None
+    return response.content.decode("utf-8", errors="replace")
+
+
+def sign_off_from_files(files: dict[str, dict]) -> str | None:
+    data = files.get(SIGN_OFF)
+    return file_bytes(data).decode("utf-8", errors="replace") if data else None
+
+
+def check_sign_off(text: str | None) -> tuple[str | None, list[str]]:
+    """The sign-off as shown (stripped; None when empty) and its problems. It is escaped when
+    the page is built; these rules keep it one short line of plain words."""
+    if text is None or not text.strip():
+        return None, []
+    line = text.strip()
+    problems = []
+    if "\n" in line or "\r" in line:
+        problems.append("it must be one line")
+    if len(line) > SIGN_OFF_MAX:
+        problems.append(f"it is {len(line)} characters; at most {SIGN_OFF_MAX}")
+    if re.search(r"[<>{}\[\]`$\\*_#|]|https?://|[\x00-\x09\x0b-\x1f\x7f]", line):
+        problems.append("plain text only: no markup, math, links or code")
+    return line, [f"{SIGN_OFF}: {p}" for p in problems]
 
 
 def file_bytes(data: dict) -> bytes:
@@ -96,16 +135,28 @@ def summary(body: str, assets: dict[str, bytes]) -> str:
 
 
 def render(
-    bundle: LectureBundle, body: str, assets: dict[str, bytes], runner: Runner, output: Path
+    bundle: LectureBundle,
+    body: str,
+    assets: dict[str, bytes],
+    runner: Runner,
+    output: Path,
+    sign_off: str | None = None,
 ) -> tuple[BuildResult | None, str]:
     """Validate and render. Returns the build (None when invalid or failed) and the message for
     the agent."""
-    issues = validate_body(body, assets)
+    sign_off, sign_off_issues = check_sign_off(sign_off)
+    issues = [*validate_body(body, assets), *sign_off_issues]
     if issues:
         listed = "\n".join(f"- {issue}" for issue in issues[:40])
         more = f"\n- ... and {len(issues) - 40} more" if len(issues) > 40 else ""
         return None, f"NOT RENDERED. Fix these problems in {NOTE} and render again:\n{listed}{more}"
-    result = stage_and_render(front_matter(bundle) + "\n\n" + body + "\n", assets, runner, output)
+    result = stage_and_render(
+        front_matter(bundle) + "\n\n" + body + "\n",
+        assets,
+        runner,
+        output,
+        page_chrome(bundle, sign_off),
+    )
     if not result.ok:
         return None, f"RENDER FAILED. Fix the note and render again.\n{result.log}"[:MAX_REPORT]
     message = f"OK: rendered {summary(body, assets)}."
@@ -135,7 +186,8 @@ def make_render_tool(
 
     @tool
     def render_notes() -> str:
-        """Validate /notes/index.qmd (and /notes/assets/*.svg) and render it to HTML with Quarto.
+        """Validate /notes/index.qmd (with /notes/assets/*.svg and /notes/sign-off.txt) and
+        render it to HTML with Quarto.
 
         Returns OK with a short summary and any warnings, or the list of problems to fix. Call it
         after writing the note and after every round of fixes."""
@@ -147,16 +199,17 @@ def make_render_tool(
                 "rendered will be published. Finish with your report."
             )
         body, assets = read_note(backend)
+        sign_off = read_sign_off(backend)
         if not body or not body.strip():
             return f"Nothing to render: write the note's body to {NOTE} first."
         state.renders += 1
         with progress.action(f"Rendering the notes ({state.renders})") as action:
-            result, message = render(bundle, body, assets, runner, output)
+            result, message = render(bundle, body, assets, runner, output, sign_off)
             if result is None:
                 action.status = "failed"
                 action.detail = " ".join(message.splitlines()[:4])[:400]
             else:
-                state.good, state.good_digest = result, digest(body, assets)
+                state.good, state.good_digest = result, digest(body, assets, sign_off)
                 state.warnings = result.warnings
                 action.detail = summary(body, assets)
         return message

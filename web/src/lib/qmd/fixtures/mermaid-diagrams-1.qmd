@@ -1,0 +1,9 @@
+```{mermaid}
+%%| label: fig-history
+%%| fig-cap: "Milestones"
+timeline
+  title Розвиток теорії
+  1900 : Перша ідея
+  1950 : Доведення
+  2000 : Застосування
+```

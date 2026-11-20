@@ -1,0 +1,19 @@
+```{ojs}
+//| echo: false
+viewof k = Inputs.range([0.2, 3], {value: 1, step: 0.1, label: "Stretch factor λ"})
+```
+
+```{ojs}
+//| echo: false
+//| label: fig-stretch
+//| fig-cap: "The vector v and Av = λv for the chosen λ"
+Plot.plot({
+  aspectRatio: 1,
+  x: {domain: [-3, 3]}, y: {domain: [-3, 3]},
+  marks: [
+    Plot.ruleX([0]), Plot.ruleY([0]),
+    Plot.arrow([{x1: 0, y1: 0, x2: 1, y2: 0.5}], {x1: "x1", y1: "y1", x2: "x2", y2: "y2", stroke: "gray"}),
+    Plot.arrow([{x1: 0, y1: 0, x2: k, y2: 0.5 * k}], {x1: "x1", y1: "y1", x2: "x2", y2: "y2", stroke: "steelblue", strokeWidth: 2})
+  ]
+})
+```

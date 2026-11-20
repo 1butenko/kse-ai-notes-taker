@@ -1,0 +1,7 @@
+$$
+\begin{aligned}
+\det\begin{pmatrix} 2-\lambda & 1 \\ 1 & 2-\lambda \end{pmatrix}
+  &= (2-\lambda)^2 - 1 && \text{expand the } 2\times 2 \text{ determinant} \\
+  &= (\lambda - 1)(\lambda - 3) && \text{difference of squares}
+\end{aligned}
+$$

@@ -56,7 +56,7 @@ The writer's only custom tool. It takes no arguments.
 | Cells | Only `{dot}`, `{mermaid}` and `{ojs}` with allowlisted options (`label: fig-…`, `fig-cap`, `echo`, `panel`, …). Other code goes in plain fences (```` ```python ````) and is only displayed |
 | Markdown | No shortcodes, raw blocks or raw attributes |
 | HTML | Only `kbd sub sup br details summary`, without attributes |
-| Divs and spans | Allowlisted classes (callouts, `panel-tabset`, columns, margin, layout) and attributes; ids prefixed `sec- fig- tbl- eq- def- thm- exm-` … |
+| Divs and spans | Allowlisted classes (callouts, `learning-goals`, `panel-tabset`, columns, margin, layout) and attributes; ids prefixed `sec- fig- tbl- eq- def- thm- exm-` … |
 | Images | Only the note's own `assets/<name>.svg` |
 | SVG assets | Parsed element by element: no script, `foreignObject`, `image`, event handlers or external references |
 | Links | `http(s)`, `mailto` and `#` only |
@@ -70,6 +70,8 @@ Problems come back with their line numbers, so the agent can fix them.
    - HTML options: TOC, numbered sections, MathJax, margin citations.
    - The CSL references.
    - Ukrainian callout and cross-reference titles when the syllabus is Ukrainian; Quarto's own file is `ua`, not `uk`.
+   - The web app's look: `theme: [default, kse-theme.scss]` sets Bootstrap's colours, font and radius to the KSE tokens; `lecture-notes.css` holds the shadcn tokens (`--background`, `--muted-foreground`, ...) and draws callouts, tabsets, tables, code, `details` and Observable inputs like the app's shadcn components. Callouts are Cards with a lucide icon for their kind; the objectives callout (`.callout-note .learning-goals`) is a Card whose goals are table rows, each a bold label over a muted line. KSE Sans ships with the page (`templates/fonts/`, published under `fonts/`).
+   - Our header and footer (`build.page_chrome`, styled in `templates/lecture-notes.css`): the KSE logo (`templates/kse-logo.svg`, inlined) with a "Notes" badge, and a footer with "Generated with ♥ by KSE Note Agent" and a sign-off line. The agent may write that line to `/notes/sign-off.txt`: one plain-text line of at most 120 characters, escaped, checked by `check_sign_off`. Without it a default line is shown in the page's language.
 
 3. It renders with `quarto render index.qmd --to html --no-execute`:
    - in a fresh temporary project;
@@ -77,6 +79,8 @@ Problems come back with their line numbers, so the agent can fix them.
    - with an environment stripped of our secrets.
 
 4. It reports OK with a summary and Quarto's warnings (unresolved references or citations), or the failure log. The last good build is kept and published at the end. Renders are capped (`LECTURE_NOTES_MAX_RENDERS`, default 12).
+
+**Re-rendering without the model.** After a change to our page (front matter, theme, CSS, header, footer), a finished run can be rendered again from the body and assets it published, with no model calls: `docker compose exec worker python -m app.note_taker.lecture_notes.rerender <run-id> ...`. It keeps the agent's sign-off, replaces the run's published files, and refuses when the lecture's readings changed since the run (the citation keys would point at other readings).
 
 How the visuals are drawn:
 
@@ -134,10 +138,22 @@ Every run is one Langfuse trace when `LANGFUSE_*` keys are set and `LANGFUSE_TRA
 
 **Privacy.** Traces contain the reading text the agent read. Set `LANGFUSE_TRACING=false` where that must not leave the app; prompts and skills still load from Langfuse.
 
+## Editing by hand
+
+A teacher can edit a lecture's published notes in the web editor (`/lectures/<course>/<session>/edit`, Plate). The editor turns the Quarto body into blocks and back (`web/src/lib/qmd/`); see [web.md](../dev/web.md).
+
+1. `GET /lecture-notes/runs/{run}/source` gives the body, the SVG asset names and the readings' citation keys (`rerender.read_published`, `front_references`).
+2. `POST /lecture-notes/runs/{run}/edits` checks the body with the same validator as the agent's notes (`validate_body`) and refuses with 422 and line numbers. The validator first refuses a body over 300 KB, and any line over 5,000 characters (`MAX_LINE_CHARS`), before its regex checks run (ReDoS guard). It also refuses (409) when the lecture's readings changed since that version, because the citations would point at other readings.
+3. The API inserts a run with `kind = 'edit'`, `edited_from` and `edited_by` (`runs.start_edit`). Unlike an agent run, it is never refused because another run is going.
+4. The worker's `runs.execute_edit` renders the body with `rerender.render_and_publish`, with no model call. The figures are the old version's plus the editor's new or changed ones, minus those the body no longer shows (`edit_assets`). The agent's sign-off is kept. The run ends `succeeded` with the report "Edited by hand.", or `failed` with the error.
+
+The lecture's current notes are its newest succeeded run. Earlier runs stay in the database and S3, but the web shows no version picker.
+
 ## Storage and API
 
 **PostgreSQL `lecture_note_runs`.** One row per run:
 - the course and lecture;
+- the kind: `agent` or `edit`, and for an edit the run it started from and the teacher who saved it;
 - the status: `running`, `succeeded`, `failed` or `cancelled`;
 - the step, todos and actions, report and error;
 - the published files, the readings fingerprint, the model, prompt versions, trace id and render count.
@@ -152,9 +168,11 @@ Run `make db-init` to create it.
 | `GET /lecture-notes/{course}/{session}/runs` | The lecture's runs, newest first, with `readings_changed` |
 | `GET /lecture-notes/runs/{run}` | One run, to poll |
 | `POST /lecture-notes/runs/{run}/cancel` | Stop it, before the next model call or render |
-| `GET /lecture-notes/runs/{run}/site/{path}` | A published file; only paths the run published |
+| `GET /lecture-notes/runs/{run}/source` | The published body, asset names and readings, for the editor. 409 unless the run is published |
+| `POST /lecture-notes/runs/{run}/edits` | Save an edit as a new `edit` run (202). 409 when not published or the readings changed; 422 with the checker's problems |
+| `GET /lecture-notes/runs/{run}/site/{path}` | A file of the lecture's newest published run, whichever of its runs `{run}` names (so a shared link shows later edits); only paths that run published |
 
-**How the page is served.** It is model-written, so HTML is served with `Content-Security-Policy: sandbox allow-scripts …` and an opaque origin. Its own files and `https://cdn.jsdelivr.net/npm/` are the only sources it may load. `'unsafe-eval'` is allowed because OJS compiles cells in the browser.
+**How the page is served.** It is model-written, so HTML is served with `Content-Security-Policy: sandbox allow-scripts …` and an opaque origin. Its own files and `https://cdn.jsdelivr.net/npm/` are the only sources it may load. `'unsafe-eval'` is allowed because OJS compiles cells in the browser. Only Quarto's hashed libraries (`index_files/`) are cached as immutable; the page, its CSS, fonts and assets are `no-cache`, because a re-render replaces them under the same names.
 
 ## Configuration (worker)
 

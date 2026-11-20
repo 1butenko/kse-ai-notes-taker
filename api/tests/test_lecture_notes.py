@@ -18,6 +18,7 @@ from app.note_taker.lecture_notes.agent import build_lecture_notes_agent
 from app.note_taker.lecture_notes.build import (
     RenderOutcome,
     front_matter,
+    page_chrome,
     stage_and_render,
     warning_lines,
 )
@@ -27,7 +28,7 @@ from app.note_taker.lecture_notes.readings import (
     load_lecture,
     seed_files,
 )
-from app.note_taker.lecture_notes.tools import RunCancelled
+from app.note_taker.lecture_notes.tools import RunCancelled, check_sign_off, render
 from app.note_taker.lecture_notes.validate import validate_body
 from app.worker.config import WorkerSettings
 from tests.courses import course
@@ -218,6 +219,19 @@ def test_validator_reports_lines() -> None:
     assert issue.line == 3 and str(issue).startswith("line 3:")
 
 
+def test_validator_refuses_long_lines_before_its_slow_checks() -> None:
+    import time
+
+    # Crafted to be quadratic in the line checks (CodeQL py/polynomial-redos).
+    crafted = "![" * 20_000 + "\n" + "<A" + "-" * 50_000
+    start = time.monotonic()
+    issues = validate_body("ok\n" + crafted)
+    assert time.monotonic() - start < 1
+    assert [i.line for i in issues] == [2, 3]
+    assert "characters" in issues[0].message
+    assert validate_body("x" * 400_000)[0].message.startswith("the note is over")
+
+
 def test_skill_examples_pass_the_validator() -> None:
     """The skills teach only what render_notes accepts."""
     import re
@@ -268,9 +282,13 @@ def test_render_adds_our_front_matter_and_keeps_only_the_site(tmp_path: Path) ->
         "index.html",
         "index.qmd",
         "lecture-notes.css",
+        "fonts/KSE-SansRegular.woff2",
+        "fonts/KSE-SansMedium.woff2",
+        "fonts/KSE-SansBold.woff2",
         "assets/dot.svg",
         "index_files/libs/quarto.js",
     }
+    assert "theme: [default, kse-theme.scss]" in qmd
 
 
 def test_failed_render_keeps_the_previous_site(tmp_path: Path) -> None:
@@ -290,6 +308,59 @@ def test_ukrainian_front_matter() -> None:
     bundle = LectureBundle("1", "s1", "Лекція 1", 1, None, "Матриці", [], "uk", [], [])
     text = front_matter(bundle)
     assert 'lang: "uk"' in text and 'callout-tip-title: "Порада"' in text
+
+
+def test_page_chrome_has_the_logo_and_escapes_the_sign_off(tmp_path: Path) -> None:
+    from app.note_taker.lecture_notes.readings import LectureBundle
+
+    bundle = LectureBundle("1", "s1", "Lecture 1", 1, None, "Matrices", [], "en", [], [])
+    runner = FakeRunner()
+    chrome = page_chrome(bundle, "Stay curious & keep going")
+
+    result = stage_and_render(
+        front_matter(bundle) + "\n\nBody", {}, runner, tmp_path / "site", chrome
+    )
+
+    assert "include-before-body: notes-header.html" in runner.calls[0]
+    assert 'aria-label="Kyiv School of Economics"' in chrome["notes-header.html"]
+    assert "Stay curious &amp; keep going" in chrome["notes-footer.html"]
+    assert "KSE Note Agent" in chrome["notes-footer.html"]
+    assert not {"notes-header.html", "notes-footer.html"} & set(result.files)
+    default = page_chrome(LectureBundle("1", "s1", "", 1, None, "М", [], "uk", [], []))
+    assert "З вірою у ваше зростання" in default["notes-footer.html"]
+
+
+def test_sign_off_rules() -> None:
+    assert check_sign_off(None) == (None, [])
+    assert check_sign_off("  \n") == (None, [])
+    assert check_sign_off(" May all your equilibria be stable.\n") == (
+        "May all your equilibria be stable.",
+        [],
+    )
+    for bad in ["two\nlines", "x" * 121, "<b>hi</b>", "see https://x.y", "$x^2$"]:
+        assert check_sign_off(bad)[1], bad
+
+
+def test_an_invalid_sign_off_is_not_rendered(tmp_path: Path) -> None:
+    from app.note_taker.lecture_notes.readings import LectureBundle
+
+    bundle = LectureBundle("1", "s1", "Lecture 1", 1, None, "Matrices", [], "en", [], [])
+    result, message = render(bundle, "Body", {}, FakeRunner(), tmp_path / "site", "<script>")
+    assert result is None and "/notes/sign-off.txt" in message
+
+
+def test_rerender_reads_back_the_body_and_the_agent_sign_off() -> None:
+    from app.note_taker.lecture_notes.readings import LectureBundle
+    from app.note_taker.lecture_notes.rerender import old_sign_off, split_front_matter
+
+    bundle = LectureBundle("1", "s1", "Lecture 1", 1, None, "Matrices", [], "en", [], [])
+    front, body = split_front_matter(front_matter(bundle) + "\n\n## One\n\nText\n")
+    assert body == "## One\n\nText\n" and front.startswith('title: "Matrices"')
+
+    footer = page_chrome(bundle, "Rank & file")["notes-footer.html"]
+    assert old_sign_off(f"<html>{footer}</html>") == "Rank & file"
+    assert old_sign_off(page_chrome(bundle)["notes-footer.html"]) is None
+    assert old_sign_off("<html>old page</html>") is None
 
 
 def test_warning_lines_strip_colours() -> None:
@@ -447,7 +518,7 @@ def run_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     course(tmp_path)
     settings = WorkerSettings(uploads_dir=tmp_path, openrouter_api_key="k")
     monkeypatch.setattr("app.worker.config.get_worker_settings", lambda: settings)
-    record: dict[str, Any] = {"progress": []}
+    record: dict[str, Any] = {"progress": [], "uploads": tmp_path}
     monkeypatch.setattr(runs, "save_progress", lambda *args: record["progress"].append(args))
     monkeypatch.setattr(
         runs, "finish_run", lambda run_id, status, **kw: record.update(status=status, **kw)
@@ -677,3 +748,69 @@ def test_session_fingerprint_follows_files_and_excerpt_pages(tmp_path: Path) -> 
     plan.proposals[0].pdf_end = 2
     plan.sessions[0].files.append("1/reading/extra.md")
     assert session_fingerprint(plan, "s1") != before
+
+
+# A teacher's edits
+
+
+def test_execute_edit_renders_the_body_with_the_versions_figures(
+    run_env: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.note_taker.lecture_notes.readings import load_lecture
+
+    bundle = load_lecture(run_env["uploads"], "1", "s1")
+    parent_id, course_id, run_id = uuid4(), uuid4(), uuid4()
+    stored = {
+        "old/index.qmd": (front_matter(bundle) + "\n\nOld body\n").encode(),
+        "old/index.html": page_chrome(bundle, "Kept sign-off")["notes-footer.html"].encode(),
+        "old/assets/a.svg": SVG,
+        "old/assets/gone.svg": SVG,
+    }
+    parent = {
+        "id": parent_id,
+        "course_id": course_id,
+        "session_id": "s1",
+        "status": "succeeded",
+        "s3_prefix": "old/",
+        "files": ["index.html", "index.qmd", "assets/a.svg", "assets/gone.svg"],
+    }
+    monkeypatch.setattr(runs, "load_run", lambda run: parent if run == parent_id else None)
+    published: dict[str, list[str]] = {}
+
+    def publisher(build: Path, prefix: str) -> list[str]:
+        files = sorted(p.relative_to(build).as_posix() for p in build.rglob("*") if p.is_file())
+        published[prefix] = files
+        return files
+
+    runner = FakeRunner()
+    body = "## Edited\n\n![A figure](assets/a.svg)\n\n![New](assets/b.svg)\n"
+    runs.execute_edit(
+        run_id,
+        parent_id,
+        "1",
+        body,
+        {"assets/b.svg": SVG},
+        runner=runner,
+        publisher=publisher,
+        read=lambda key: stored[key],
+    )
+
+    assert run_env["status"] == "succeeded", run_env.get("error")
+    prefix = f"courses/{course_id}/lecture-notes/s1/{run_id}/"
+    assert list(published) == [prefix] and run_env["s3_prefix"] == prefix
+    assert "assets/a.svg" in run_env["files"] and "assets/b.svg" in run_env["files"]
+    assert "assets/gone.svg" not in run_env["files"]
+    assert "## Edited" in runner.calls[0]
+
+
+def test_execute_edit_records_what_the_checker_refused(
+    run_env: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runs, "load_run", lambda run: None)
+    runs.execute_edit(uuid4(), uuid4(), "1", "Body", {}, runner=FakeRunner())
+    assert run_env["status"] == "failed" and "no longer published" in run_env["error"]
+
+
+def test_edit_assets_keep_only_what_the_body_shows() -> None:
+    kept = runs.edit_assets("![x](assets/a.svg)", {"assets/a.svg": b"1", "assets/b.svg": b"2"}, {})
+    assert kept == {"assets/a.svg": b"1"}
