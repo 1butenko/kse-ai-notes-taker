@@ -27,6 +27,7 @@ from app.worker_contract import (
     BooksResponse,
     LectureNotesCancel,
     LectureNotesCancelResponse,
+    LectureNotesEditRequest,
     LectureNotesRequest,
     LectureNotesResponse,
     MapRequest,
@@ -250,6 +251,23 @@ async def run_lecture_notes(
 
     # A sync function: Starlette runs it in a thread, off the event loop.
     background.add_task(execute)
+    return LectureNotesResponse(started=True)
+
+
+@app.post("/lecture-notes/edits", status_code=status.HTTP_202_ACCEPTED)
+async def edit_lecture_notes(
+    body: LectureNotesEditRequest, background: BackgroundTasks
+) -> LectureNotesResponse:
+    """Render a teacher's edit of a published version in the background, without the model.
+    The outcome is written to its `lecture_note_runs` row."""
+    if not COURSE.match(body.course):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid course: {body.course!r}")
+    from app.note_taker.lecture_notes import runs
+
+    assets = {name: svg.encode("utf-8") for name, svg in body.assets.items()}
+    background.add_task(
+        runs.execute_edit, body.run_id, body.parent_id, body.course, body.body, assets
+    )
     return LectureNotesResponse(started=True)
 
 

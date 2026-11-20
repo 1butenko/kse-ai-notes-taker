@@ -1,0 +1,8 @@
+:::: {.columns}
+::: {.column width="50%"}
+Text explaining the picture.
+:::
+::: {.column width="50%"}
+![Caption](assets/picture.svg){#fig-picture}
+:::
+::::

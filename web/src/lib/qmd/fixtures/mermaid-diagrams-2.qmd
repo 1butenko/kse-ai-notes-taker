@@ -1,0 +1,7 @@
+```{mermaid}
+%%| label: fig-flow
+%%| fig-cap: "Choosing a method"
+flowchart LR
+  A["Square matrix?"] -->|yes| B["Compute det(A − λI)"]
+  A -->|no| C["Use singular values"]
+```

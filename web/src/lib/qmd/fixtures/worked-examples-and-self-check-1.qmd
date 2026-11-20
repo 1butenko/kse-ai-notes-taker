@@ -1,0 +1,8 @@
+::: {.callout-tip title="Try it"}
+Find the eigenvalues of $B = \begin{pmatrix} 4 & 1 \\ 2 & 3 \end{pmatrix}$.
+:::
+
+::: {.callout-note collapse="true" title="Solution"}
+$\det(B - \lambda I) = \lambda^2 - 7\lambda + 10 = (\lambda - 2)(\lambda - 5)$, so
+$\lambda \in \{2, 5\}$.
+:::

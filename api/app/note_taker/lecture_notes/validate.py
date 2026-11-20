@@ -47,6 +47,7 @@ CLASSES = {
     "callout-important",
     "callout-warning",
     "callout-caution",
+    "learning-goals",
     "panel-tabset",
     "panel-sidebar",
     "panel-fill",

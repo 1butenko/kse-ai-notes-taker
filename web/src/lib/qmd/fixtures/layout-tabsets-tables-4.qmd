@@ -1,0 +1,6 @@
+| Method | When it works | Cost |
+|--------|---------------|------|
+| Characteristic polynomial | Small matrices | $O(n^3)$ and up |
+| Power iteration | Dominant eigenvalue only | $O(n^2)$ per step |
+
+: Methods for finding eigenvalues {#tbl-methods tbl-colwidths="[30,45,25]"}

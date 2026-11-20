@@ -12,7 +12,7 @@ Quarto docs: Callout Blocks (quarto.org/docs/authoring/callouts.html), Theorems 
 
 | Type | Use it for |
 |------|-----------|
-| `callout-note` | Objectives, context, "in other words" restatements |
+| `callout-note` | Objectives (with `.learning-goals`, see `lecture-notes-structure`), context, "in other words" restatements |
 | `callout-tip` | Intuition, memory aids, shortcuts, a worked example's key move |
 | `callout-important` | The summary, a result students must remember |
 | `callout-warning` | Common mistakes and misconceptions |

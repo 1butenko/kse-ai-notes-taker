@@ -24,7 +24,7 @@ FIRST_STEP = "Reading the lecture"
 RUN_COLUMNS = (
     "id, course_id, session_id, session_label, status, step, todos, actions, report, error,"
     " s3_prefix, files, readings_fingerprint, model, prompt_versions, langfuse_trace_id, renders,"
-    " started_at, finished_at"
+    " kind, edited_from, edited_by, started_at, finished_at"
 )
 
 # Set by POST /lecture-notes/runs/{id}/cancel; checked before every model call and render.
@@ -47,6 +47,25 @@ def start_run(
         " (course_id, session_id, session_label, step, readings_fingerprint)"
         f" VALUES (%s, %s, %s, %s, %s) RETURNING {RUN_COLUMNS}",
         (course_id, session_id, label, FIRST_STEP, fingerprint),
+    ).fetchone()
+
+
+def start_edit(conn: Any, parent: dict[str, Any], user_id: UUID | None) -> dict[str, Any]:
+    """Create the `running` row of a teacher's edit of `parent`, a succeeded run. It is never
+    refused for a live agent run: the edit is a version of its own."""
+    return conn.execute(
+        "INSERT INTO lecture_note_runs (course_id, session_id, session_label, step,"
+        " readings_fingerprint, kind, edited_from, edited_by)"
+        f" VALUES (%s, %s, %s, %s, %s, 'edit', %s, %s) RETURNING {RUN_COLUMNS}",
+        (
+            parent["course_id"],
+            parent["session_id"],
+            parent["session_label"],
+            "Rendering your edits",
+            parent["readings_fingerprint"],
+            parent["id"],
+            user_id,
+        ),
     ).fetchone()
 
 
@@ -125,7 +144,13 @@ def execute_run(
     from app.note_taker.lecture_notes.agent import build_lecture_notes_agent
     from app.note_taker.lecture_notes.readings import load_lecture
     from app.note_taker.lecture_notes.skill_library import references
-    from app.note_taker.lecture_notes.tools import RunCancelled, digest, note_from_files, render
+    from app.note_taker.lecture_notes.tools import (
+        RunCancelled,
+        digest,
+        note_from_files,
+        render,
+        sign_off_from_files,
+    )
     from app.note_taker.lecture_notes.tracing import traced_run
     from app.note_taker.llm import build_chat_model
     from app.note_taker.sync import MainAgentProgress
@@ -191,11 +216,12 @@ def execute_run(
 
         state = built.state
         body, assets = note_from_files(result.get("files", {}))
-        if body and digest(body, assets) != state.good_digest:
+        sign_off = sign_off_from_files(result.get("files", {}))
+        if body and digest(body, assets, sign_off) != state.good_digest:
             # The agent edited after its last good render: render the final version once more.
             # A failure leaves the last good build in place.
             with progress.action("Rendering the final version") as action:
-                final, message = render(bundle, body, assets, built.runner, output)
+                final, message = render(bundle, body, assets, built.runner, output, sign_off)
                 if final is not None:
                     state.good = final
                 else:
@@ -228,3 +254,54 @@ def execute_run(
     finally:
         CANCEL.pop(run_id, None)
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def load_run(run_id: UUID) -> dict[str, Any] | None:
+    with db.connect() as conn:
+        return conn.execute(
+            f"SELECT {RUN_COLUMNS} FROM lecture_note_runs WHERE id = %s", (run_id,)
+        ).fetchone()
+
+
+def edit_assets(body: str, old: dict[str, bytes], changed: dict[str, bytes]) -> dict[str, bytes]:
+    """The edit's SVG figures: the old version's, with the editor's new or changed ones, keeping
+    only those the body still shows."""
+    merged = {**old, **changed}
+    return {name: data for name, data in merged.items() if name in body}
+
+
+def execute_edit(
+    run_id: UUID,
+    parent_id: UUID,
+    course: str,
+    body: str,
+    changed: dict[str, bytes],
+    *,
+    runner: Any = None,
+    publisher: Callable[[Path, str], list[str]] = publish,
+    read: Any = None,
+) -> None:
+    """Render and publish a teacher's edit of a succeeded run as run `run_id`, without the
+    model. Never raises: the outcome is on the row."""
+    from app.note_taker.lecture_notes.rerender import read_published, render_and_publish
+
+    try:
+        parent = load_run(parent_id)
+        if parent is None or parent["status"] != "succeeded":
+            raise ValueError("The version you edited is no longer published")
+        old = read_published(parent["s3_prefix"], parent["files"], read)
+        prefix = storage.lecture_notes_prefix(parent["course_id"], parent["session_id"], run_id)
+        files = render_and_publish(
+            course,
+            parent["session_id"],
+            old.front,
+            body,
+            edit_assets(body, old.assets, changed),
+            old.sign_off,
+            prefix,
+            runner=runner,
+            publisher=publisher,
+        )
+        finish_run(run_id, "succeeded", report="Edited by hand.", s3_prefix=prefix, files=files)
+    except Exception as error:
+        finish_run(run_id, "failed", error=f"{type(error).__name__}: {error}")

@@ -15,6 +15,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
+from html import escape
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -82,6 +83,62 @@ def quarto_language_lines(language: str) -> list[str]:
     ]
 
 
+HEADER = "notes-header.html"
+FOOTER = "notes-footer.html"
+SIGN_OFF_MAX = 120
+CHROME_TEXT = {
+    "uk": {
+        "badge": "Конспект",
+        "agent": "KSE Note Agent",
+        "made": "Створено з {heart} агентом {agent}",
+        "sign_off": "З вірою у ваше зростання. Ставте запитання: з них починається розуміння.",
+    },
+    "en": {
+        "badge": "Notes",
+        "agent": "KSE Note Agent",
+        "made": "Generated with {heart} by {agent}",
+        "sign_off": "Written with hope for your growth. Keep asking questions.",
+    },
+}
+
+
+@lru_cache
+def logo_svg() -> str:
+    """The KSE logo, inlined so the page loads no extra file."""
+    svg = (TEMPLATES / "kse-logo.svg").read_text(encoding="utf-8").strip()
+    return svg.replace(
+        "<svg ", '<svg class="kse-logo" role="img" aria-label="Kyiv School of Economics" ', 1
+    )
+
+
+def page_chrome(bundle: LectureBundle, sign_off: str | None = None) -> dict[str, str]:
+    """The page's header (KSE logo) and footer (our credit and a one-line sign-off), as include
+    files. The sign-off may be the agent's (already validated); it is escaped here."""
+    text = CHROME_TEXT.get(bundle.language, CHROME_TEXT["en"])
+    agent = f"<strong>{escape(text['agent'])}</strong>"
+    heart = '<span class="kse-heart" role="img" aria-label="love">&#9829;</span>'
+    made = escape(text["made"]).replace("{heart}", heart).replace("{agent}", agent)
+    header = (
+        '<header class="kse-header">\n'
+        '<div class="kse-header-inner">\n'
+        f"{logo_svg()}\n"
+        f'<span class="kse-badge">{escape(text["badge"])}</span>\n'
+        f'<span class="kse-header-agent">{escape(text["agent"])}</span>\n'
+        "</div>\n"
+        "</header>\n"
+    )
+    footer = (
+        '<footer class="kse-footer">\n'
+        '<div class="kse-footer-inner">\n'
+        f"{logo_svg()}\n"
+        f'<p class="kse-footer-made">{made}</p>\n'
+        f'<p class="kse-footer-sign-off">{escape(sign_off or text["sign_off"])}</p>\n'
+        "</div>\n"
+        "</footer>\n"
+    )
+    return {HEADER: header, FOOTER: footer}
+
+
 def front_matter(bundle: LectureBundle) -> str:
     language = bundle.language
     titles = CALLOUT_TITLES.get(language, {})
@@ -109,8 +166,11 @@ def front_matter(bundle: LectureBundle) -> str:
             "    citation-location: margin",
             "    embed-resources: false",
             "    anchor-sections: true",
+            "    theme: [default, kse-theme.scss]",
             "    css: lecture-notes.css",
             "    include-in-header: notes-head.html",
+            f"    include-before-body: {HEADER}",
+            f"    include-after-body: {FOOTER}",
             "    mermaid:",
             "      theme: neutral",
             "---",
@@ -189,10 +249,15 @@ def warning_lines(log: str) -> list[str]:
 
 
 def stage_and_render(
-    qmd: str, assets: dict[str, bytes], runner: Runner, output: Path
+    qmd: str,
+    assets: dict[str, bytes],
+    runner: Runner,
+    output: Path,
+    includes: dict[str, str] | None = None,
 ) -> BuildResult:
-    """Render the full `qmd` with its assets. On success, `output` holds the site (replaced
-    whole); on failure it is left as it was."""
+    """Render the full `qmd` with its assets and our include files (`page_chrome`). On success,
+    `output` holds the site (replaced whole); on failure it is left as it was."""
+    includes = {HEADER: "", FOOTER: "", **(includes or {})}
     with TemporaryDirectory(prefix="lecture-notes-") as temporary:
         stage = Path(temporary) / "site"
         stage.mkdir()
@@ -200,6 +265,10 @@ def stage_and_render(
         (stage / "index.qmd").write_text(qmd, encoding="utf-8")
         shutil.copyfile(TEMPLATES / "lecture-notes.css", stage / "lecture-notes.css")
         shutil.copyfile(TEMPLATES / "notes-head.html", stage / "notes-head.html")
+        shutil.copyfile(TEMPLATES / "kse-theme.scss", stage / "kse-theme.scss")
+        shutil.copytree(TEMPLATES / "fonts", stage / "fonts")
+        for name, text in includes.items():
+            (stage / name).write_text(text, encoding="utf-8")
         for name, data in assets.items():
             target = stage / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -215,7 +284,7 @@ def stage_and_render(
             refs = sorted(set(re.findall(r"\?@[\w-]+", page.read_text(errors="replace"))))
             warnings.append(f"Unresolved cross-references: {', '.join(refs)}")
 
-        for leftover in ("_quarto.yml", "notes-head.html", ".quarto"):
+        for leftover in ("_quarto.yml", "notes-head.html", "kse-theme.scss", *includes, ".quarto"):
             path = stage / leftover
             if path.is_dir():
                 shutil.rmtree(path)

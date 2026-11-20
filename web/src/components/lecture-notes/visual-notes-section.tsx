@@ -154,7 +154,7 @@ export function VisualNotesSection({ course, sessionId, hasReadings }: VisualNot
       <CardFooter className="flex flex-wrap gap-2">
         {current && (
           <Link
-            href={visualNotesPath(course, sessionId, current.id)}
+            href={visualNotesPath(course, sessionId)}
             className={buttonVariants()}
           >
             <PresentationIcon data-icon="inline-start" />

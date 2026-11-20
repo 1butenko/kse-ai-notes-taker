@@ -1,0 +1,12 @@
+::: {#exm-2x2}
+## Eigenvalues of a 2×2 matrix
+Find the eigenvalues of $A = \begin{pmatrix} 2 & 1 \\ 1 & 2 \end{pmatrix}$.
+
+**Step 1. Set up.** We need $\det(A - \lambda I) = 0$ (@eq-char).
+
+**Step 2. Expand.** $(2-\lambda)^2 - 1 = 0$.
+
+**Step 3. Solve.** $\lambda = 1$ or $\lambda = 3$.
+
+**Check.** The trace is $4 = 1 + 3$ and the determinant is $3 = 1 \cdot 3$. ✓
+:::

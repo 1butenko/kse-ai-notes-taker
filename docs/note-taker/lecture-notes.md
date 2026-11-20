@@ -56,7 +56,7 @@ The writer's only custom tool. It takes no arguments.
 | Cells | Only `{dot}`, `{mermaid}` and `{ojs}` with allowlisted options (`label: fig-…`, `fig-cap`, `echo`, `panel`, …). Other code goes in plain fences (```` ```python ````) and is only displayed |
 | Markdown | No shortcodes, raw blocks or raw attributes |
 | HTML | Only `kbd sub sup br details summary`, without attributes |
-| Divs and spans | Allowlisted classes (callouts, `panel-tabset`, columns, margin, layout) and attributes; ids prefixed `sec- fig- tbl- eq- def- thm- exm-` … |
+| Divs and spans | Allowlisted classes (callouts, `learning-goals`, `panel-tabset`, columns, margin, layout) and attributes; ids prefixed `sec- fig- tbl- eq- def- thm- exm-` … |
 | Images | Only the note's own `assets/<name>.svg` |
 | SVG assets | Parsed element by element: no script, `foreignObject`, `image`, event handlers or external references |
 | Links | `http(s)`, `mailto` and `#` only |
@@ -70,6 +70,8 @@ Problems come back with their line numbers, so the agent can fix them.
    - HTML options: TOC, numbered sections, MathJax, margin citations.
    - The CSL references.
    - Ukrainian callout and cross-reference titles when the syllabus is Ukrainian; Quarto's own file is `ua`, not `uk`.
+   - The web app's look: `theme: [default, kse-theme.scss]` sets Bootstrap's colours, font and radius to the KSE tokens; `lecture-notes.css` holds the shadcn tokens (`--background`, `--muted-foreground`, ...) and draws callouts, tabsets, tables, code, `details` and Observable inputs like the app's shadcn components. Callouts are Cards with a lucide icon for their kind; the objectives callout (`.callout-note .learning-goals`) is a Card whose goals are table rows, each a bold label over a muted line. KSE Sans ships with the page (`templates/fonts/`, published under `fonts/`).
+   - Our header and footer (`build.page_chrome`, styled in `templates/lecture-notes.css`): the KSE logo (`templates/kse-logo.svg`, inlined) with a "Notes" badge, and a footer with "Generated with ♥ by KSE Note Agent" and a sign-off line. The agent may write that line to `/notes/sign-off.txt`: one plain-text line of at most 120 characters, escaped, checked by `check_sign_off`. Without it a default line is shown in the page's language.
 
 3. It renders with `quarto render index.qmd --to html --no-execute`:
    - in a fresh temporary project;
@@ -77,6 +79,8 @@ Problems come back with their line numbers, so the agent can fix them.
    - with an environment stripped of our secrets.
 
 4. It reports OK with a summary and Quarto's warnings (unresolved references or citations), or the failure log. The last good build is kept and published at the end. Renders are capped (`LECTURE_NOTES_MAX_RENDERS`, default 12).
+
+**Re-rendering without the model.** After a change to our page (front matter, theme, CSS, header, footer), a finished run can be rendered again from the body and assets it published, with no model calls: `docker compose exec worker python -m app.note_taker.lecture_notes.rerender <run-id> ...`. It keeps the agent's sign-off, replaces the run's published files, and refuses when the lecture's readings changed since the run (the citation keys would point at other readings).
 
 How the visuals are drawn:
 
@@ -152,9 +156,9 @@ Run `make db-init` to create it.
 | `GET /lecture-notes/{course}/{session}/runs` | The lecture's runs, newest first, with `readings_changed` |
 | `GET /lecture-notes/runs/{run}` | One run, to poll |
 | `POST /lecture-notes/runs/{run}/cancel` | Stop it, before the next model call or render |
-| `GET /lecture-notes/runs/{run}/site/{path}` | A published file; only paths the run published |
+| `GET /lecture-notes/runs/{run}/site/{path}` | A file of the lecture's newest published run, whichever of its runs `{run}` names (so a shared link shows later edits); only paths that run published |
 
-**How the page is served.** It is model-written, so HTML is served with `Content-Security-Policy: sandbox allow-scripts …` and an opaque origin. Its own files and `https://cdn.jsdelivr.net/npm/` are the only sources it may load. `'unsafe-eval'` is allowed because OJS compiles cells in the browser.
+**How the page is served.** It is model-written, so HTML is served with `Content-Security-Policy: sandbox allow-scripts …` and an opaque origin. Its own files and `https://cdn.jsdelivr.net/npm/` are the only sources it may load. `'unsafe-eval'` is allowed because OJS compiles cells in the browser. Only Quarto's hashed libraries (`index_files/`) are cached as immutable; the page, its CSS, fonts and assets are `no-cache`, because a re-render replaces them under the same names.
 
 ## Configuration (worker)
 

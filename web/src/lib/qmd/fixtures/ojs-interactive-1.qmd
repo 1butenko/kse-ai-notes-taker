@@ -1,0 +1,13 @@
+::: {.panel-sidebar}
+```{ojs}
+//| echo: false
+viewof n = Inputs.range([10, 1000], {step: 10, value: 100, label: "Sample size"})
+```
+:::
+
+::: {.panel-fill}
+```{ojs}
+//| echo: false
+Plot.rectY(d3.range(n).map(() => d3.randomNormal()()), Plot.binX({y: "count"})).plot()
+```
+:::

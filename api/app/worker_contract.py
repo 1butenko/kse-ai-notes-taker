@@ -69,6 +69,17 @@ class LectureNotesRequest(Traced):
     session_id: str
 
 
+class LectureNotesEditRequest(BaseModel):
+    """A teacher's edit of a succeeded run (`parent_id`), recorded as run `run_id` by the API.
+    `assets` are the new or changed SVG figures, by name (`assets/<name>.svg`)."""
+
+    run_id: UUID
+    parent_id: UUID
+    course: str
+    body: str
+    assets: dict[str, str] = {}
+
+
 class LectureNotesResponse(BaseModel):
     started: bool
 
