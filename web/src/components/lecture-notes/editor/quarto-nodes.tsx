@@ -461,6 +461,18 @@ export function QCellElement(props: PlateElementProps) {
 
 const MAX_SVG_BYTES = 200_000;
 
+/** Starts with <svg>, after an optional XML declaration and comments. A loop, not one regex:
+ * a regex over repeated comments backtracks exponentially on crafted files. */
+function looksLikeSvg(text: string): boolean {
+  let rest = text.trimStart().replace(/^<\?xml[^>]*>/, "").trimStart();
+  while (rest.startsWith("<!--")) {
+    const end = rest.indexOf("-->", 4);
+    if (end < 0) return false;
+    rest = rest.slice(end + 3).trimStart();
+  }
+  return /^<svg[\s>]/i.test(rest);
+}
+
 export function QFigureElement(props: PlateElementProps) {
   const set = useSetNode(props.element);
   const selected = useSelected();
@@ -473,7 +485,7 @@ export function QFigureElement(props: PlateElementProps) {
   const upload = async (f: File) => {
     const text = await f.text();
     if (f.size > MAX_SVG_BYTES) return setProblem("That SVG is over 200 KB.");
-    if (!/^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*<svg[\s>]/i.test(text)) {
+    if (!looksLikeSvg(text)) {
       return setProblem("Choose an SVG file.");
     }
     setProblem(null);

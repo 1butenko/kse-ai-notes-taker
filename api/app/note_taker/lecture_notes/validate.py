@@ -21,6 +21,9 @@ from urllib.parse import unquote
 from xml.etree import ElementTree
 
 MAX_BODY_BYTES = 300_000
+# Several checks below take time quadratic in a line's length on crafted input (ReDoS), and a
+# teacher's edit reaches them too; a longer line is refused before any of them runs on it.
+MAX_LINE_CHARS = 5_000
 MAX_ASSET_BYTES = 200_000
 MAX_DIAGRAMS = 20
 MAX_OJS_CELLS = 6
@@ -224,7 +227,14 @@ def validate_body(body: str, assets: dict[str, bytes] | None = None) -> list[Iss
     assets = assets or {}
     issues: list[Issue] = []
     if len(body.encode()) > MAX_BODY_BYTES:
-        issues.append(Issue(0, f"the note is over {MAX_BODY_BYTES // 1000} KB; shorten it"))
+        return [Issue(0, f"the note is over {MAX_BODY_BYTES // 1000} KB; shorten it")]
+    long_lines = [
+        Issue(n, f"this line is over {MAX_LINE_CHARS:,} characters; break it up")
+        for n, line in enumerate(body.splitlines(), start=1)
+        if len(line) > MAX_LINE_CHARS
+    ]
+    if long_lines:
+        return long_lines
 
     # Reference-style link definitions ([x]: target) are checked like inline links.
     for number, target in (

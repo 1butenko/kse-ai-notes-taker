@@ -219,6 +219,19 @@ def test_validator_reports_lines() -> None:
     assert issue.line == 3 and str(issue).startswith("line 3:")
 
 
+def test_validator_refuses_long_lines_before_its_slow_checks() -> None:
+    import time
+
+    # Crafted to be quadratic in the line checks (CodeQL py/polynomial-redos).
+    crafted = "![" * 20_000 + "\n" + "<A" + "-" * 50_000
+    start = time.monotonic()
+    issues = validate_body("ok\n" + crafted)
+    assert time.monotonic() - start < 1
+    assert [i.line for i in issues] == [2, 3]
+    assert "characters" in issues[0].message
+    assert validate_body("x" * 400_000)[0].message.startswith("the note is over")
+
+
 def test_skill_examples_pass_the_validator() -> None:
     """The skills teach only what render_notes accepts."""
     import re
