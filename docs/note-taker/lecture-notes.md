@@ -61,7 +61,7 @@ The writer's only custom tool. It takes no arguments.
 | Divs and spans | Allowlisted classes (callouts, `learning-goals`, `hook`, `panel-tabset`, columns, margin, layout) and attributes; ids prefixed `sec- fig- tbl- eq- def- thm- exm-` … |
 | The hook | At most one `::: {.hook}`, before the first `##` heading |
 | Images | The note's own `assets/<name>.svg`, or up to 6 `https://` images from the web. A web image is hot-linked and its caption must hold a source link (`Source: [title](https://page)`). In an agent run each must have been checked with `check_image`; a teacher's edit may use any such image |
-| SVG assets | Parsed element by element: no script, `foreignObject`, `image`, event handlers or external references. SMIL animation (`animate`, `animateTransform`, `animateMotion`, `set`, `mpath`) is allowed, except animating `href` or `on*` |
+| SVG assets | Parsed element by element: no script, `foreignObject`, `image`, event handlers or external references. SMIL animation (`animate`, `animateTransform`, `animateMotion`, `set`, `mpath`) is allowed, except animating `href` or `on*`. Layout (`svg_layout.py`): a `<text>` that a line, curve, shape edge or another label runs through is refused, including where animated elements move to. Label boxes are estimated from font size and character count; labels with a halo (`stroke` + `paint-order="stroke"`) and rotated text are exempt |
 | Links | `http(s)`, `mailto` and `#` only |
 | OJS | No network, storage, frame access, imports or eval |
 | Math | No `\href`, `\url`, `\require` or `\input` |
