@@ -18,6 +18,7 @@ Read this page, then the area doc for what you are changing.
 
 <!-- Newest first, at most 20. One line each: - YYYY-MM-DD [#PR title](changes/file.md): summary -->
 
+- 2026-11-23 [#67 Make the note checker's line checks linear-time (CodeQL ReDoS)](changes/2026-11-23-pr67.md): lecture-notes validator drops backtracking regexes (code spans, fences, images, autolinks, HTML tags); the line cap stays as a second guard.
 - 2026-11-20 [#64 Edit lecture notes like a Notion page; one current version per lecture](changes/2026-11-20-pr64.md): Plate notes editor; a save renders without the model as an `edit` run; a lecture's links always show its newest published notes; `api.md`, `data.md`, `web.md` written.
 - 2026-11-19 [#61 web: override katex and minimatch to patched versions](changes/2026-11-19-pr61.md): npm `overrides` in `web/package.json` pull `katex` to the root 0.19.1 and `minimatch` to `^11.0.9` under `@ts-morph/common`; closes two Dependabot alerts.
 - 2026-11-19 [#57 Fix the deploy: Python 3.12 image, OIDC subject for the deploy role](changes/2026-11-19-pr57.md): API image back to `python:3.12-slim` (Dependabot ignores Python minor/major); deploy role trusts the immutable OIDC subject and the `Production` environment.
