@@ -21,6 +21,7 @@ The AI Note Taker's data is in Aurora PostgreSQL (IAM authentication, no passwor
 - `model`, `prompt_versions`, `langfuse_trace_id`, `renders`.
 - `kind`: `agent` (written by the model, the default) or `edit` (a teacher's save, rendered without the model).
 - `edited_from`: the run an `edit` started from (`ON DELETE SET NULL`). `edited_by`: the `users` row who saved it.
+- `motivation` (jsonb, nullable): the motivation scout's decision on the note's opening hook: `needed`, `kind`, `device`, `reason`, `candidates`, `sources`. It is null for edits and for older runs. Run `make db-init` to add the column.
 - A lecture's current notes are its newest `succeeded` run, found by `course_id`, `session_id` and `started_at`. Older runs stay as earlier versions.
 
 ## S3 keys

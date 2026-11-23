@@ -55,6 +55,8 @@ class LectureNotesRun(BaseModel):
     kind: str = "agent"
     edited_from: UUID | None = None
     edited_by: UUID | None = None
+    # The motivation scout's decision on the opening hook (needed, kind, device, reason, ...).
+    motivation: dict[str, Any] | None = None
     # The lecture's readings changed since this run read them.
     readings_changed: bool = False
     started_at: datetime
@@ -386,7 +388,9 @@ def site_policy(base: str) -> str:
         # opaque origin, so it reaches no cookies or storage of the app.
         f"script-src 'unsafe-inline' 'unsafe-eval' {base} {CDN}; "
         f"style-src 'unsafe-inline' {base} {CDN}; "
-        f"img-src data: blob: {base}; font-src data: {base} {CDN}; "
+        # Images in the note's hook are hot-linked from the web (lecture_notes/web.py); the
+        # page sends no referrer, so their hosts do not see which course links them.
+        f"img-src data: blob: {base} https:; font-src data: {base} {CDN}; "
         f"connect-src {base} {CDN}; worker-src blob:; "
         "base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'"
     )

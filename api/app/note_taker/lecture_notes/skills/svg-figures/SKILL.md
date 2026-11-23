@@ -53,3 +53,24 @@ Quarto docs: Figures (quarto.org/docs/authoring/figures.html).
 - Text at least `font-size="12"` at the viewBox scale. Cyrillic text works.
 - Check your coordinates: compute positions, don't eyeball them. A wrong picture is worse than
   none.
+
+## Text and labels
+
+No line, curve, shape or other label may cross a piece of text. Crossed labels are the most
+common fault in these figures.
+
+- Reserve room for labels before you draw: a legend column on the right of the plot (widen the
+  `viewBox` for it) or a row above it. Plot the data inside its own box and keep labels out of
+  that box.
+- Prefer direct labels just past the right end of each series, in its colour, at the y where
+  that series ends. Space them at least `1.3 × font-size` apart vertically; nudge them apart if
+  the series end close together.
+- Estimate each label's box before you place it: width ≈ `0.6 × font-size × characters`,
+  height ≈ `font-size`, baseline at `y`. Check that box against every path at that x range by
+  computing the path's y there. If they meet, move the label.
+- If a label must sit on top of the drawing (an annotation pointing at a feature), give it a
+  white halo so lines behind it don't cut through the letters:
+  `<text ... stroke="#fff" stroke-width="4" stroke-linejoin="round" paint-order="stroke">`.
+- Use one `font-size` for all labels in a figure (axis ticks may be one size smaller), and
+  `text-anchor="middle"` for tick labels centred under their tick.
+- In an animation, nothing that moves may pass over text. Text itself stays still.

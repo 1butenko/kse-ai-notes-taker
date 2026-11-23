@@ -34,6 +34,12 @@ class WorkerSettings(BaseSettings):
     lecture_notes_max_chars: int = 400_000
     # Lecture-notes runs at once on this worker.
     lecture_notes_concurrency: int = 2
+    # The motivation scout's web access (lecture_notes/web.py): OpenRouter's web search on the
+    # search model (empty: openrouter_model), and checked images hot-linked from the web.
+    lecture_notes_web: bool = True
+    lecture_notes_search_model: str = ""
+    lecture_notes_max_searches: int = 6
+    lecture_notes_max_images: int = 4
 
 
 @lru_cache

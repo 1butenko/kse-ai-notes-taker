@@ -1,0 +1,9 @@
+::: {.hook}
+Every lunchtime the same thing happens at the university canteen: two cashiers, a queue out
+of the door, and then, ten minutes later, nobody. The cashiers did not get faster.
+
+![People arrive in bursts; the queue grows faster than it shrinks](assets/queue.svg)
+
+Why do queues explode when the servers are only *slightly* busier? This lecture's model
+answers that with one formula.
+:::

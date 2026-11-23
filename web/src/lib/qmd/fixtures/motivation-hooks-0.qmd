@@ -1,0 +1,10 @@
+::: {.hook}
+In 1804 a weaver in Lyon could change the pattern of a silk cloth without touching the loom.
+He swapped a chain of punched cards. Each card said, hole by hole, which threads to lift.
+The loom was following a **program**, more than a century before the first computer.
+
+![Punched cards of a Jacquard loom. Source: [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Jacquard.loom.cards.jpg)](https://upload.wikimedia.org/wikipedia/commons/thumb/2/2d/Jacquard.loom.cards.jpg/640px-Jacquard.loom.cards.jpg)
+
+A program is just data that a machine reads. That idea is the whole of this lecture:
+how can a list of symbols control a machine?
+:::

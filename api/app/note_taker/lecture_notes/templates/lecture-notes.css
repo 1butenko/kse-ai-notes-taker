@@ -715,3 +715,68 @@ div.csl-entry {
 .kse-heart {
   color: var(--destructive);
 }
+
+/* The hook (`::: {.hook}`): the page's opening, written to make the reader want to learn. It is
+   deliberately not a card or a callout, which readers skip: lead-paragraph type, media at the
+   text's full width with a muted caption (its source link), and a gentle fade in. */
+
+.hook {
+  margin: 0.5rem 0 2rem;
+  font-size: 1.15rem;
+  line-height: 1.7;
+  animation: hook-in 0.6s ease-out both;
+}
+
+.hook > p:first-child::first-line {
+  font-weight: 500;
+}
+
+.hook figure,
+.hook .quarto-figure {
+  margin: 1.25rem 0;
+}
+
+.hook img {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+
+.hook img[src$=".svg"] {
+  object-fit: contain;
+  background: none;
+}
+
+.hook figcaption,
+.hook .figure-caption {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+}
+
+.hook figcaption a,
+.hook .figure-caption a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+@keyframes hook-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hook {
+    animation: none;
+  }
+}
