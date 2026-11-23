@@ -211,6 +211,13 @@ def test_site_serves_only_published_files_in_a_sandbox(
     policy = page.headers["content-security-policy"]
     assert policy.startswith("sandbox allow-scripts") and "'unsafe-eval'" in policy
     assert "default-src 'none'" in policy and "https://cdn.jsdelivr.net/npm/" in policy
+    # Hook images are hot-linked from the web, and their hosts get no referrer.
+    assert "img-src data: blob: " in policy and " https:;" in policy
+    assert (
+        "script-src 'unsafe-inline' 'unsafe-eval' " in policy
+        and "https:;" not in (policy.split("script-src", 1)[1].split(";", 1)[0])
+    )
+    assert page.headers["referrer-policy"] == "no-referrer"
     assert page.headers["access-control-allow-origin"] == "*"
     assert "x-book-published" not in page.headers
     assert keys == ["courses/x/lecture-notes/s1/r/index.html"]
@@ -363,6 +370,21 @@ def test_an_edit_is_a_new_version_the_worker_renders(
     assert response.json()["edited_from"] == str(published["id"])
     assert began == [(published, TEST_USER)]
     assert executed == [(edit["id"], published["id"], "1", body, {"assets/b.svg": SVG})]
+
+
+def test_an_edit_may_hot_link_an_image_with_its_source(
+    published: dict, worker_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(lecture_notes, "begin_edit", lambda parent, user: run_row(kind="edit"))
+    monkeypatch.setattr(runs, "execute_edit", lambda *args: None)
+    image = "![A loom. Source: [Commons](https://commons.test/x)](https://upload.test/a.jpg)"
+    client = TestClient(app)
+    url = f"/lecture-notes/runs/{published['id']}/edits"
+
+    hooked = client.post(url, json={"body": "::: {.hook}\n" + image + "\n:::\n"})
+    assert hooked.status_code == 202, hooked.text
+    refused = client.post(url, json={"body": "![A loom](https://upload.test/a.jpg)\n"})
+    assert refused.status_code == 422 and "source" in refused.text
 
 
 def test_an_edit_the_checker_refuses_lists_its_lines(published: dict) -> None:

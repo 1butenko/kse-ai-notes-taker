@@ -168,7 +168,12 @@ function scan(lines: string[]): Segment[] {
       }
     }
 
-    const figure = line.match(/^!\[(.*)\]\((assets\/[^)\s]+)\)(\{[^{}]*\})?\s*$/)
+    // The note's own SVG, or an image hot-linked from the web whose caption holds its source
+    // link (`![Cards. Source: [Commons](https://...)](https://.../a.jpg)`); remark would flatten
+    // that link into the alt text.
+    const figure = line.match(
+      /^!\[(.*)\]\((assets\/[^)\s]+|https:\/\/[^)\s]+)\)(\{[^{}]*\})?\s*$/,
+    )
     if (figure && isBlank(md.at(-1)) && isBlank(lines[i + 1])) {
       const attrs = figure[3] ? parseAttrs(figure[3]) : emptyAttrs()
       if (attrs) {

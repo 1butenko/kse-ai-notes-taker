@@ -205,3 +205,19 @@ describe("nodes", () => {
     expect(out).toContain("::: {.column}\n\nA\n\n:::")
   })
 })
+
+describe("the hook", () => {
+  test("a hot-linked image keeps the source link in its caption", () => {
+    const image =
+      "![Cards. Source: [Commons](https://commons.test/wiki/Loom)](https://upload.test/a%28b%29.jpg)"
+    const body = `::: {.hook}\nIn 1804 a loom read cards.\n\n${image}\n\nWhy?\n:::\n`
+    const [div] = parse(body)
+    expect(div.attrs.classes).toEqual(["hook"])
+    const figure = div.children.find((n: { type: string }) => n.type === "qfigure")
+    expect(figure).toMatchObject({
+      src: "https://upload.test/a%28b%29.jpg",
+      caption: "Cards. Source: [Commons](https://commons.test/wiki/Loom)",
+    })
+    expect(roundTrip(body)).toContain(image)
+  })
+})

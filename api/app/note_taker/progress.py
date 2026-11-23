@@ -30,6 +30,7 @@ class Progress:
     save: Save | None = None
     todo_list: list[dict[str, str]] = field(default_factory=list)
     actions: list[Action] = field(default_factory=list)
+    activity: str | None = None
 
     def set_todos(self, todos: list[dict[str, Any]]) -> None:
         self.todo_list = [
@@ -43,6 +44,7 @@ class Progress:
     def action(self, text: str) -> Iterator[Action]:
         """One step the page shows as running, then done (with `detail`) or failed."""
         entry = Action(text)
+        self.activity = None  # stale once a tool reports its own step
         self.actions = [*self.actions, entry][-MAX_ACTIONS:]
         self.flush()
         try:
@@ -60,10 +62,19 @@ class Progress:
         self.actions = [*self.actions, Action(text, "done", detail)][-MAX_ACTIONS:]
         self.flush()
 
+    def set_activity(self, text: str | None) -> None:
+        """What the agent is doing between actions (reading a file, writing the note); shown as
+        the step when no action is running. Saved only when it changes."""
+        if text != self.activity:
+            self.activity = text
+            self.flush()
+
     def step(self) -> str | None:
         running = [a.text for a in self.actions if a.status == "running"]
         if running:
             return running[-1]
+        if self.activity:
+            return self.activity
         active = [t["content"] for t in self.todo_list if t["status"] == "in_progress"]
         return active[0] if active else None
 

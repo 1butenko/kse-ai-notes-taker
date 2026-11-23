@@ -1,6 +1,6 @@
 ---
 name: lecture-notes-structure
-description: Use first, for every note. The shape of a lecture page - objectives, a hook, one idea per section with stable ids, recap and key terms - and the Quarto Markdown basics (headings, cross-references, footnotes) the page is built from.
+description: Use first, for every note. The shape of a lecture page - the opening hook, objectives, one idea per section with stable ids, recap and key terms - and the Quarto Markdown basics (headings, cross-references, footnotes) the page is built from.
 ---
 
 # Lecture notes structure
@@ -14,13 +14,14 @@ the table of contents, numbering, citations and styling. Never write a `---` met
 
 ## The page shape
 
-1. **What you will learn**: a `callout-note` with the `learning-goals` class and 3 to 5 concrete
+1. **The hook** (when the lecture needs one): the `.hook` div the `motivation` subagent drafted
+   in `/notes/motivation.md`, first in the body, with no heading and no callout. See
+   `motivation-hooks`.
+2. **What you will learn**: a `callout-note` with the `learning-goals` class and 3 to 5 concrete
    objectives ("compute...", "explain why...", "recognise when..."). No section heading before
    it. The page draws it as a card: the first sentence under the title, then one row per goal.
    Write each goal as a short bold label, a backslash line break, and one line that says what the
    student will be able to do. Use a bulleted list; the rows are not numbered.
-2. **Why it matters**: one short paragraph or a concrete motivating example (a hook), as the
-   first `##` section.
 3. **Concept sections**: one `##` per big idea from the syllabus subtopics, in teaching order.
    Inside each, `###` for sub-steps. Each section follows: intuition, then the formal statement,
    then a worked example, then a check-yourself question. Put a visual in most sections.

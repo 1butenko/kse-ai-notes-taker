@@ -271,7 +271,8 @@ def test_skill_examples_pass_the_validator() -> None:
     """The skills teach only what render_notes accepts."""
     import re
 
-    assets = {f"assets/{n}.svg": SVG for n in ["projection", "picture", "before", "after"]}
+    names = ["projection", "picture", "before", "after", "queue"]
+    assets = {f"assets/{n}.svg": SVG for n in names}
     for path in sorted(skill_library.SKILLS_DIR.glob("*/SKILL.md")):
         text = path.read_text(encoding="utf-8")
         for match in re.finditer(r"^(`{3,4})markdown\n(.*?)^\1\s*$", text, re.S | re.M):
@@ -616,7 +617,7 @@ def test_execute_run_records_an_unknown_lecture(run_env: dict) -> None:
 
 def test_repo_skills_are_well_formed() -> None:
     skills = skill_library.local_skills()
-    assert len(skills) == 10
+    assert len(skills) == 11
     for name, files in skills.items():
         assert skill_library.valid(name, files), name
 
@@ -849,3 +850,440 @@ def test_execute_edit_records_what_the_checker_refused(
 def test_edit_assets_keep_only_what_the_body_shows() -> None:
     kept = runs.edit_assets("![x](assets/a.svg)", {"assets/a.svg": b"1", "assets/b.svg": b"2"}, {})
     assert kept == {"assets/a.svg": b"1"}
+
+
+# The opening hook: validator rules, the scout's web tools, and the scout in a run
+
+WEB_IMAGE = "https://upload.test/loom.png"
+HOOK = (
+    "::: {.hook}\n"
+    "In 1804 a loom read punched cards.\n\n"
+    f"![Jacquard's cards. Source: [Commons](https://commons.test/wiki/Loom)]({WEB_IMAGE})\n\n"
+    "How can a list of symbols control a machine?\n"
+    ":::\n"
+)
+
+
+def test_hook_opens_the_page_once() -> None:
+    assert validate_body(HOOK + "\n## Programs {#sec-p}\n\nText.\n") == []
+    [late] = validate_body("## A {#sec-a}\n\n" + HOOK)
+    assert "before the first ## heading" in late.message
+    [twice] = validate_body(HOOK + "\n" + HOOK)
+    assert "only one .hook" in twice.message
+
+
+@pytest.mark.parametrize(
+    ("body", "problem"),
+    [
+        (f"![A loom]({WEB_IMAGE})", "add its source"),
+        ("![A. Source: [x](https://a.test)](http://upload.test/a.png)", "use your own"),
+        ("![A. Source: [x](https://a.test)](data:image/png;base64,AAAA)", "use your own"),
+        ("![A. Source: [x](javascript:alert(1))](https://a.test/a.png)", "only http(s)"),
+    ],
+)
+def test_web_images_need_https_and_a_source_link(body: str, problem: str) -> None:
+    issues = validate_body(body)
+    assert any(problem in i.message for i in issues), issues
+
+
+def test_web_images_must_be_checked_in_an_agent_run() -> None:
+    assert validate_body(HOOK, web_images={WEB_IMAGE}) == []
+    [issue] = validate_body(HOOK, web_images=set())
+    assert "call check_image" in issue.message
+    many = "\n\n".join(
+        f"![P. Source: [s](https://s.test)](https://i.test/{n}.png)" for n in range(7)
+    )
+    assert any("at most 6 images" in i.message for i in validate_body(many))
+
+
+def test_images_with_links_in_captions_are_read_in_linear_time() -> None:
+    import time
+
+    from app.note_taker.lecture_notes.validate import MAX_LINE_CHARS, images
+
+    text = "x ![a [b](https://c.test) d](https://e.test/f.png){#fig-g} y"
+    assert images(text) == [(2, 50, "a [b](https://c.test) d", "https://e.test/f.png")]
+    start = time.monotonic()
+    for line in ["![[" * (MAX_LINE_CHARS // 3), "![]" * (MAX_LINE_CHARS // 3), "![a](" * 1000]:
+        validate_body(line)
+    assert time.monotonic() - start < 1
+
+
+ANIMATED = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="2">'
+    b'<animate attributeName="r" values="1;4;1" dur="2s" repeatCount="indefinite"/>'
+    b'<animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="3s"/>'
+    b"</circle></svg>"
+)
+
+
+@pytest.mark.parametrize(
+    "svg",
+    [
+        b'<svg xmlns="http://www.w3.org/2000/svg"><set attributeName="href" to="#a"/></svg>',
+        b'<svg xmlns="http://www.w3.org/2000/svg"><animate attributeName="xlink:href" '
+        b'values="#a;#b"/></svg>',
+        b'<svg xmlns="http://www.w3.org/2000/svg"><set attributeName="onclick" to="x"/></svg>',
+    ],
+)
+def test_svg_may_animate_but_not_links_or_handlers(svg: bytes) -> None:
+    assert validate_body("![x](assets/a.svg)", {"assets/a.svg": ANIMATED}) == []
+    assert validate_body("![x](assets/a.svg)", {"assets/a.svg": svg})
+
+
+def test_the_hook_skill_svg_examples_are_valid() -> None:
+    import re
+
+    from app.note_taker.lecture_notes.validate import svg_issues
+
+    text = (skill_library.SKILLS_DIR / "motivation-hooks/SKILL.md").read_text(encoding="utf-8")
+    examples = re.findall(r"^```xml\n(.*?)^```\s*$", text, re.S | re.M)
+    assert examples
+    for svg in examples:
+        assert svg_issues("assets/queue.svg", svg.encode()) == []
+
+
+def png(width: int = 400, height: int = 300) -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), "steelblue").save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+HOSTS = {
+    "upload.test": ["93.184.216.34"],
+    "commons.test": ["93.184.216.35"],
+    "inside.test": ["10.0.0.5"],
+    "loop.test": ["127.0.0.1"],
+}
+
+
+def web_access(pages: dict[str, Any], **kwargs: Any) -> Any:
+    """A fake web: `pages` maps a URL to its bytes, or to (status, headers) for a redirect."""
+    import httpx
+
+    from app.note_taker.lecture_notes.web import WebAccess
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = pages.get(str(request.url))
+        if page is None:
+            return httpx.Response(404)
+        if isinstance(page, tuple):
+            return httpx.Response(page[0], headers=page[1])
+        kind = "text/html" if page.startswith(b"<html") else "image/png"
+        return httpx.Response(200, content=page, headers={"content-type": kind})
+
+    def resolve(host: str) -> list[str]:
+        if host not in HOSTS:
+            raise OSError("unknown host")
+        return HOSTS[host]
+
+    options = {"search": None, "describe": lambda data: "A blue rectangle.", **kwargs}
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return WebAccess(client=client, resolve=resolve, **options)
+
+
+def web_tools(access: Any) -> tuple[dict[str, Any], Any]:
+    from app.note_taker.lecture_notes.tools import RenderState
+    from app.note_taker.lecture_notes.web import make_web_tools
+
+    state = RenderState()
+    return {t.name: t for t in make_web_tools(state, access)}, state
+
+
+def test_check_image_records_a_real_image_and_gives_its_markdown() -> None:
+    tools, state = web_tools(web_access({WEB_IMAGE: png()}))
+    reply = tools["check_image"].invoke(
+        {
+            "image_url": WEB_IMAGE,
+            "source_page": "https://commons.test/wiki/Loom",
+            "source_title": "Loom [Commons]",
+        }
+    )
+    assert reply.startswith("OK: PNG 400x300") and "A blue rectangle." in reply
+    markdown = reply.splitlines()[-1]
+    assert markdown.endswith(f"(https://commons.test/wiki/Loom)]({WEB_IMAGE})")
+    assert "Source: [Loom (Commons)]" in markdown
+    assert WEB_IMAGE in state.web_images
+    filled = markdown.replace("<what it shows and why it matters>", "Cards")
+    assert validate_body(filled, web_images=set(state.web_images)) == []
+    # Left as it came, the placeholder is refused, so the agent must write a caption.
+    assert validate_body(markdown, web_images=set(state.web_images))
+
+
+@pytest.mark.parametrize(
+    ("pages", "url", "problem"),
+    [
+        ({}, "http://upload.test/a.png", "only https://"),
+        ({}, "https://inside.test/a.png", "not a public host"),
+        ({}, "https://loop.test/a.png", "not a public host"),
+        ({}, "https://upload.test:8443/a.png", "no credentials or ports"),
+        (
+            {"https://upload.test/r.png": (302, {"location": "https://inside.test/a.png"})},
+            "https://upload.test/r.png",
+            "not a public host",
+        ),
+        ({"https://upload.test/a.png": b"<html>not an image</html>"}, "", "cannot identify"),
+        ({"https://upload.test/a.png": png(50, 50)}, "", "too small"),
+    ],
+)
+def test_check_image_refuses(pages: dict, url: str, problem: str) -> None:
+    tools, state = web_tools(web_access(pages))
+    reply = tools["check_image"].invoke(
+        {
+            "image_url": url or "https://upload.test/a.png",
+            "source_page": "https://commons.test/p",
+            "source_title": "P",
+        }
+    )
+    assert reply.startswith("Cannot use this image") and problem in reply, reply
+    assert state.web_images == {}
+
+
+def test_check_image_refuses_large_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.note_taker.lecture_notes import web
+
+    monkeypatch.setattr(web, "MAX_IMAGE_BYTES", 1000)
+    tools, _ = web_tools(web_access({WEB_IMAGE: png(800, 600) + b"x" * 2000}))
+    reply = tools["check_image"].invoke(
+        {"image_url": WEB_IMAGE, "source_page": "https://commons.test/p", "source_title": "P"}
+    )
+    assert reply.startswith("Cannot use") and "MB" in reply
+
+
+def test_page_images_lists_a_pages_images() -> None:
+    page = (
+        b'<html><head><title>Loom</title><meta property="og:image" content="/og.jpg">'
+        b'</head><body><img src="cards.png" alt="Punched cards" width="640" height="480">'
+        b'<img src="data:image/png;base64,AAAA"><img src="http://plain.test/x.png"></body></html>'
+    )
+    tools, _ = web_tools(web_access({"https://commons.test/wiki/Loom": page}))
+    reply = tools["page_images"].invoke({"url": "https://commons.test/wiki/Loom"})
+    assert "Page: Loom" in reply
+    assert "https://commons.test/og.jpg" in reply
+    assert "https://commons.test/wiki/cards.png (640x480) alt: 'Punched cards'" in reply
+    assert "data:" not in reply and "plain.test" not in reply
+
+
+def test_web_search_returns_sources_and_is_capped() -> None:
+    from app.note_taker.lecture_notes.web import WebLimits
+
+    queries = []
+
+    def search(query: str) -> dict[str, Any]:
+        queries.append(query)
+        return {
+            "answer": "Patented in 1804.",
+            "sources": [{"url": "https://h.test/loom", "title": "Loom", "snippet": "1804"}],
+        }
+
+    tools, _ = web_tools(web_access({}, search=search, limits=WebLimits(searches=1)))
+    reply = tools["web_search"].invoke({"query": "Jacquard loom year"})
+    assert "Patented in 1804." in reply and "https://h.test/loom" in reply
+    assert tools["web_search"].invoke({"query": "again"}).startswith("Search limit reached")
+    assert queries == ["Jacquard loom year"]
+
+
+def test_openrouter_search_reads_url_citations() -> None:
+    import json
+
+    import httpx
+
+    from app.note_taker.lecture_notes.web import openrouter_search
+
+    sent = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        cited = {"type": "url_citation", "url_citation": {"url": "https://h.test", "title": "H"}}
+        message = {"content": "In 1804.", "annotations": [cited, cited]}
+        return httpx.Response(200, json={"choices": [{"message": message}]})
+
+    search = openrouter_search(
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        base_url="https://openrouter.test/api/v1",
+        api_key="k",
+        model="m",
+    )
+    found = search("When?")
+    assert found["answer"] == "In 1804."
+    assert [s["url"] for s in found["sources"]] == ["https://h.test"]
+    assert sent[0]["plugins"] == [{"id": "web", "max_results": 5}] and sent[0]["model"] == "m"
+
+
+def test_read_decision_keeps_known_bounded_fields() -> None:
+    from app.note_taker.lecture_notes.motivation import read_decision
+
+    assert read_decision(None) is None and read_decision("not json") is None
+    decision = read_decision(
+        '{"needed": true, "kind": "historical", "device": "teleport", "reason": "r",'
+        ' "sources": [{"url": "https://a.test", "title": "A"}, {"url": "javascript:x"}],'
+        ' "extra": 1}'
+    )
+    assert decision == {
+        "needed": True,
+        "kind": "historical",
+        "reason": "r",
+        "sources": [{"url": "https://a.test", "title": "A"}],
+    }
+
+
+NOTE_OK = "\n## Systems {#sec-s}\n\nText [@r1, p. 10].\n"
+DECISION = '{"needed": true, "kind": "historical", "device": "web-image", "reason": "r"}'
+
+
+def scout_script(hook: str, *, check: bool = True) -> list[AIMessage]:
+    checked = call(
+        "check_image",
+        {
+            "image_url": WEB_IMAGE,
+            "source_page": "https://commons.test/wiki/Loom",
+            "source_title": "Commons",
+        },
+        "s1",
+    )
+    return [
+        call("task", {"subagent_type": "motivation", "description": "Find a hook"}, "m0"),
+        # The scout (the same model).
+        *([checked] if check else []),
+        call("write_file", {"file_path": "/notes/index.qmd", "content": "by the scout"}, "s2"),
+        call("write_file", {"file_path": "/notes/motivation.json", "content": DECISION}, "s3"),
+        call("write_file", {"file_path": "/notes/motivation.md", "content": hook}, "s4"),
+        AIMessage(content="Hook: historical, web image."),
+        # The writer again.
+        call("write_file", {"file_path": "/notes/index.qmd", "content": hook + NOTE_OK}, "w1"),
+        call("render_notes", {}, "w2"),
+        AIMessage(content="Report: a hook and 1 section."),
+    ]
+
+
+def test_the_scout_drafts_a_hook_with_a_checked_web_image(tmp_path: Path) -> None:
+    course(tmp_path)
+    bundle = load_lecture(tmp_path, "1", "s1")
+    model = ScriptedModel(messages=iter(scout_script(HOOK)))
+    model.tools_seen, model.prompts = [], []
+    runner = FakeRunner()
+    built = build_lecture_notes_agent(
+        bundle,
+        tmp_path / "build",
+        model=model,
+        runner=runner,
+        skills=[SKILL],
+        web=web_access({WEB_IMAGE: png()}),
+    )
+
+    result = built.agent.invoke(
+        {"messages": [("user", built.request)], "files": built.files},
+        config={"recursion_limit": 60},
+    )
+
+    assert result["messages"][-1].text == "Report: a hook and 1 section."
+    assert built.state.good is not None and len(runner.calls) == 1
+    assert "::: {.hook}" in runner.calls[0] and WEB_IMAGE in runner.calls[0]
+    assert "/notes/motivation.json" in result["files"]
+    assert "by the scout" not in str(result["files"]["/notes/index.qmd"]["content"])
+    # The scout had the web tools; the writer did not.
+    scout_tools = [tools for tools in model.tools_seen if "check_image" in tools]
+    writer_tools = [tools for tools in model.tools_seen if "render_notes" in tools]
+    assert scout_tools and writer_tools
+    assert all("check_image" not in tools for tools in writer_tools)
+    assert {"web_search", "page_images"} <= set(scout_tools[0])
+    assert built.prompt_versions["note-taker/lecture-notes/motivation"] is None  # fallback
+
+
+def test_without_a_check_a_web_image_is_refused(tmp_path: Path) -> None:
+    course(tmp_path)
+    bundle = load_lecture(tmp_path, "1", "s1")
+    result, message = render(bundle, HOOK, {}, FakeRunner(), tmp_path / "b", None, set())
+    assert result is None and "call check_image" in message
+
+
+def test_execute_run_records_the_scouts_decision(run_env: dict) -> None:
+    offline_hook = "::: {.hook}\nType 40 random digits.\n:::\n"
+    runs.execute_run(
+        uuid4(),
+        uuid4(),
+        "1",
+        "s1",
+        model=ScriptedModel(messages=iter(scout_script(offline_hook, check=False))),
+        runner=FakeRunner(),
+        skills=[SKILL],
+        publisher=lambda build, prefix: ["index.html"],
+    )
+    assert run_env["status"] == "succeeded", run_env.get("error")
+    assert run_env["motivation"] == {
+        "needed": True,
+        "kind": "historical",
+        "device": "web-image",
+        "reason": "r",
+    }
+
+
+# What the lecture page shows as the current step
+
+
+def test_the_step_follows_the_writer_and_its_subagents(tmp_path: Path) -> None:
+    from app.note_taker.lecture_notes.activity import NotesActivity
+    from app.note_taker.progress import Progress
+
+    course(tmp_path)
+    bundle = load_lecture(tmp_path, "1", "s1")
+    steps: list[str | None] = []
+    progress = Progress(save=lambda todos, actions, step: steps.append(step))
+    script = [
+        call("read_file", {"file_path": "/lecture/brief.md"}, "r0"),
+        call("read_file", {"file_path": bundle.readings[0].path}, "r1"),
+        *writer_script(NOTE),
+    ]
+    built = build_lecture_notes_agent(
+        bundle,
+        tmp_path / "build",
+        model=ScriptedModel(messages=iter(script)),
+        runner=FakeRunner(),
+        skills=[SKILL],
+        progress=progress,
+    )
+    built.agent.invoke(
+        {"messages": [("user", built.request)], "files": built.files},
+        config={"recursion_limit": 60, "callbacks": [NotesActivity(progress)]},
+    )
+
+    shown = [s for i, s in enumerate(steps) if s and (i == 0 or steps[i - 1] != s)]
+    assert shown[0] == "Reading the lecture brief"
+    assert shown[1].startswith("Reading ") and "/" not in shown[1]  # the reading's name
+    for expected in ["Writing the notes", "Rendering the notes (1)", "Revising the notes"]:
+        assert expected in shown, shown
+    assert "Reviewing the notes" in shown and "Working on the notes" in shown
+    assert shown.index("Reviewing the notes") < shown.index("Working on the notes")
+    # Once started, the step never falls back to nothing (the page's "Reading the lecture").
+    first = steps.index("Reading the lecture brief")
+    assert all(steps[first:]), steps
+    # The writer's todo list is the one shown.
+    assert progress.todo_list == [{"content": "Write", "status": "in_progress"}]
+
+
+def test_a_subagents_todos_do_not_replace_the_writers() -> None:
+    from app.note_taker.lecture_notes.activity import NotesActivity
+    from app.note_taker.progress import Progress
+
+    progress = Progress()
+    activity = NotesActivity(progress)
+    todos = {"todos": [{"content": "Plan", "status": "in_progress"}]}
+    activity.on_tool_start({"name": "write_todos"}, "", inputs=todos, metadata={})
+    activity.on_tool_start(
+        {"name": "write_todos"},
+        "",
+        inputs={"todos": [{"content": "Check", "status": "pending"}]},
+        metadata={"lc_agent_name": "reviewer"},
+    )
+    activity.on_tool_start(
+        {"name": "read_file"},
+        "",
+        inputs={"file_path": "/readings/02-eigen-values.md"},
+        metadata={"lc_agent_name": "reviewer"},
+    )
+    assert progress.todo_list[0]["content"] == "Plan"
+    assert progress.step() == "Review: Reading eigen values"

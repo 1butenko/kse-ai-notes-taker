@@ -49,6 +49,8 @@ class RenderState:
     good_digest: str | None = None  # of the body and assets of the last good build
     good: BuildResult | None = None
     warnings: list[str] = field(default_factory=list)
+    # https:// images the motivation scout checked (web.check_image): URL -> its record.
+    web_images: dict[str, dict] = field(default_factory=dict)
 
 
 def digest(body: str, assets: dict[str, bytes], sign_off: str | None = None) -> str:
@@ -141,11 +143,12 @@ def render(
     runner: Runner,
     output: Path,
     sign_off: str | None = None,
+    web_images: set[str] | None = None,
 ) -> tuple[BuildResult | None, str]:
     """Validate and render. Returns the build (None when invalid or failed) and the message for
-    the agent."""
+    the agent. `web_images`: the https:// images checked in this run (None allows any)."""
     sign_off, sign_off_issues = check_sign_off(sign_off)
-    issues = [*validate_body(body, assets), *sign_off_issues]
+    issues = [*validate_body(body, assets, web_images), *sign_off_issues]
     if issues:
         listed = "\n".join(f"- {issue}" for issue in issues[:40])
         more = f"\n- ... and {len(issues) - 40} more" if len(issues) > 40 else ""
@@ -204,7 +207,9 @@ def make_render_tool(
             return f"Nothing to render: write the note's body to {NOTE} first."
         state.renders += 1
         with progress.action(f"Rendering the notes ({state.renders})") as action:
-            result, message = render(bundle, body, assets, runner, output, sign_off)
+            result, message = render(
+                bundle, body, assets, runner, output, sign_off, set(state.web_images)
+            )
             if result is None:
                 action.status = "failed"
                 action.detail = " ".join(message.splitlines()[:4])[:400]

@@ -178,9 +178,11 @@ function Editor({
       source,
       assetNames,
       assetUrl: (name: string) =>
-        name in newAssets
-          ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(newAssets[name])}`
-          : lectureNotesSiteUrl(runId, name),
+        name.startsWith("https://")
+          ? name // an image hot-linked from the web (the note's hook)
+          : name in newAssets
+            ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(newAssets[name])}`
+            : lectureNotesSiteUrl(runId, name),
       addAsset: (fileName: string, svg: string) => {
         const base =
           fileName

@@ -105,6 +105,9 @@ CREATE INDEX IF NOT EXISTS lecture_note_runs_session_idx
 ALTER TABLE lecture_note_runs ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'agent';
 ALTER TABLE lecture_note_runs
     ADD COLUMN IF NOT EXISTS edited_from uuid REFERENCES lecture_note_runs (id) ON DELETE SET NULL;
+-- The motivation scout's decision on the note's opening hook (lecture_notes/motivation.py):
+-- {"needed", "kind", "device", "reason", "candidates", "sources"}; null for edits and older runs.
+ALTER TABLE lecture_note_runs ADD COLUMN IF NOT EXISTS motivation jsonb;
 
 -- Teachers, signed in with their KSE Google account (the web's Auth.js; app/routers/auth.py).
 CREATE TABLE IF NOT EXISTS users (
