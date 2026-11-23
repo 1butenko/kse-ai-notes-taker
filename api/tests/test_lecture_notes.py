@@ -232,6 +232,41 @@ def test_validator_refuses_long_lines_before_its_slow_checks() -> None:
     assert validate_body("x" * 400_000)[0].message.startswith("the note is over")
 
 
+def test_line_checks_are_fast_on_crafted_lines_under_the_cap() -> None:
+    import time
+
+    from app.note_taker.lecture_notes.validate import MAX_LINE_CHARS, line_issues
+
+    n = MAX_LINE_CHARS // 4
+    crafted = [
+        "`" * MAX_LINE_CHARS,
+        "``` " + " " * (MAX_LINE_CHARS - 5) + "x",
+        "::: " + " " * (MAX_LINE_CHARS - 5) + "x",
+        "![" * n,
+        "![](" * n,
+        "<http:" * n,
+        "<a" * n,
+        'a="' * n,
+    ]
+    start = time.monotonic()
+    for line in crafted:
+        validate_body(line)
+        line_issues(1, line, {})
+    assert time.monotonic() - start < 1
+
+
+def test_linear_rewrites_match_the_old_regexes() -> None:
+    import re
+
+    from app.note_taker.lecture_notes.validate import html_tags, strip_code_spans
+
+    for text in ["<b>x</b>", "a <span class='x'>b", "<b <i>", "<em>", "1 < 2 > 0", "<a", "</q >"]:
+        assert html_tags(text) == re.findall(r"</?([A-Za-z][\w-]*)([^>]*)>", text)
+    assert strip_code_spans("a `{x}` b ``c ` d`` e") == "a   b   e"
+    assert strip_code_spans("a ` b") == "a ` b"
+    assert strip_code_spans("``a` `b``") == " "
+
+
 def test_skill_examples_pass_the_validator() -> None:
     """The skills teach only what render_notes accepts."""
     import re

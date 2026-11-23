@@ -16,17 +16,19 @@ Each problem comes back with its line, so the agent can fix it and render again.
 
 import html
 import re
+from bisect import bisect_right
 from dataclasses import dataclass
 from urllib.parse import unquote
 from xml.etree import ElementTree
 
 MAX_BODY_BYTES = 300_000
-# Several checks below take time quadratic in a line's length on crafted input (ReDoS), and a
-# teacher's edit reaches them too; a longer line is refused before any of them runs on it.
+# The line checks below are written to run in linear time (no backtracking regexes on a teacher's
+# text); the cap is a second line of defence against slow input.
 MAX_LINE_CHARS = 5_000
 MAX_ASSET_BYTES = 200_000
 MAX_DIAGRAMS = 20
 MAX_OJS_CELLS = 6
+TAG_NAME = re.compile(r"</?([A-Za-z][\w-]*)")
 ASSET_NAME = re.compile(r"^assets/[a-z0-9][a-z0-9-]{0,60}\.svg$")
 
 CELLS = {"mermaid", "dot", "ojs"}
@@ -191,9 +193,56 @@ def attribute_issues(line: int, attrs: list[tuple[str, str]]) -> list[Issue]:
     return issues
 
 
+def strip_code_spans(text: str) -> str:
+    """Text with each inline code span replaced by a space.
+
+    As in CommonMark, a run of n backticks opens a span that the next run of exactly n closes.
+    Runs are paired through an index by length, so this is linear; the backreference regex
+    (`+)(.+?)\\1 backtracks polynomially on long backtick runs.
+    """
+    runs = [(m.start(), m.end()) for m in re.finditer(r"`+", text)]
+    by_length: dict[int, list[int]] = {}
+    for index, (start, end) in enumerate(runs):
+        by_length.setdefault(end - start, []).append(index)
+    out, pos, index = [], 0, 0
+    while index < len(runs):
+        start, end = runs[index]
+        same = by_length[end - start]
+        later = bisect_right(same, index)
+        if later == len(same):
+            index += 1
+            continue
+        close = same[later]
+        out += [text[pos:start], " "]
+        pos, index = runs[close][1], close + 1
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def html_tags(text: str) -> list[tuple[str, str]]:
+    """(name, attributes) of each <tag ...> or </tag ...>, read up to the next '>'.
+
+    Same result as re.findall(r"</?([A-Za-z][\\w-]*)([^>]*)>", text), without that regex's
+    quadratic time on many '<' and no '>'.
+    """
+    tags = []
+    pos = 0
+    while (start := text.find("<", pos)) != -1:
+        name = TAG_NAME.match(text, start)
+        if not name:
+            pos = start + 1
+            continue
+        end = text.find(">", name.end())
+        if end == -1:
+            break  # no '>' further on, so no later tag either
+        tags.append((name[1], text[name.end() : end]))
+        pos = end + 1
+    return tags
+
+
 def strip_inline(text: str) -> str:
     """Prose without inline code and math, which may hold braces and angle brackets."""
-    text = re.sub(r"(`+)(.+?)\1", " ", text)
+    text = strip_code_spans(text)
     return re.sub(r"\$\$.+?\$\$|\$[^$\n]+?\$", " ", text)
 
 
@@ -253,9 +302,14 @@ def validate_body(body: str, assets: dict[str, bytes] | None = None) -> list[Iss
     in_math = False
     diagrams = ojs = 0
     for number, line in enumerate(lines, start=1):
-        match = re.match(r"^\s*(`{3,}|~{3,})\s*(.*?)\s*$", line)
+        match = re.match(r"(`{3,}|~{3,})(.*)", line.lstrip())
         if fence:
-            if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2]:
+            if (
+                match
+                and match[1][0] == fence[0]
+                and len(match[1]) >= len(fence)
+                and not match[2].strip()
+            ):
                 if cell:
                     issues += cell_issues(cell, cell_start, cell_lines)
                 fence, cell, cell_lines = None, None, []
@@ -263,7 +317,7 @@ def validate_body(body: str, assets: dict[str, bytes] | None = None) -> list[Iss
                 cell_lines.append(line)
             continue
         if match:
-            fence, info = match[1], match[2]
+            fence, info = match[1], match[2].strip()
             braced = re.fullmatch(r"\{\s*([\w-]+)\s*\}", info)
             if braced and braced[1] in CELLS:
                 cell, cell_start = braced[1], number
@@ -315,7 +369,7 @@ def outside_math(line: str, in_math: bool) -> tuple[str, bool]:
 
 def line_issues(number: int, line: str, assets: dict[str, bytes]) -> list[Issue]:
     issues = []
-    if re.fullmatch(r"\s*(?:---|\.\.\.)\s*", line):
+    if line.strip() in ("---", "..."):
         return [Issue(number, "metadata blocks are not allowed; use *** for a horizontal rule")]
     if re.search(r"\{\{\s*[<%]", line):
         issues.append(Issue(number, "shortcodes ({{< >}}) are not allowed"))
@@ -325,14 +379,17 @@ def line_issues(number: int, line: str, assets: dict[str, bytes]) -> list[Issue]
         issues.append(Issue(number, "this TeX command is not allowed"))
 
     prose = strip_inline(line)
-    div = re.match(r"^\s*:{3,}\s*(.*?)\s*:*\s*$", prose)
-    if div and div[1]:
-        inner = div[1][1:-1] if div[1].startswith("{") and div[1].endswith("}") else div[1]
+    # A div fence (::: {.callout-note}, ::: aside), read with str methods: the regex for it,
+    # ^\s*:{3,}\s*(.*?)\s*:*\s*$, backtracks polynomially on long runs of spaces.
+    fenced = prose.strip()
+    div = fenced.lstrip(":").strip().rstrip(":").strip() if fenced.startswith(":::") else ""
+    if div:
+        inner = div[1:-1] if div.startswith("{") and div.endswith("}") else div
         attrs = parse_attributes(
             inner if inner.startswith(("{", ".", "#")) or "=" in inner else "." + inner
         )
         if attrs is None:
-            issues.append(Issue(number, f"cannot read the div attributes {div[1]!r}"))
+            issues.append(Issue(number, f"cannot read the div attributes {div!r}"))
         else:
             issues += attribute_issues(number, attrs)
         return issues
@@ -345,18 +402,20 @@ def line_issues(number: int, line: str, assets: dict[str, bytes]) -> list[Issue]
         ):
             issues += attribute_issues(number, attrs)
 
-    for path in re.findall(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)", prose):
+    # The scanned character classes leave out the opening character ('[', '(' and '<'), so a
+    # failed match never rescans text where the next attempt starts: linear, not quadratic.
+    for path in re.findall(r"!\[[^\[\]]*\]\(\s*<?([^)\s>]+)", prose):
         if not ASSET_NAME.fullmatch(path):
             issues.append(Issue(number, f"image {path!r}: use your own assets/<name>.svg files"))
         elif path not in assets:
             issues.append(Issue(number, f"image {path!r} does not exist in /notes/assets/"))
-    without_images = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", prose)
+    without_images = re.sub(r"!\[[^\[\]]*\]\([^()]*\)", " ", prose)
     for target in re.findall(r"\]\(\s*<?([^)\s>]+)", without_images):
         if not re.match(r"(?:https?://|mailto:|#)", target):
             issues.append(Issue(number, f"link {target!r}: only http(s), mailto and # links"))
 
-    without_autolinks = re.sub(r"<(?:https?|mailto):[^>\s]+>", " ", prose)
-    for tag, attrs in re.findall(r"</?([A-Za-z][\w-]*)([^>]*)>", without_autolinks):
+    without_autolinks = re.sub(r"<(?:https?|mailto):[^<>\s]+>", " ", prose)
+    for tag, attrs in html_tags(without_autolinks):
         if tag.lower() not in INLINE_HTML or attrs.strip(" /"):
             issues.append(Issue(number, f"HTML <{tag}> is not allowed; use Markdown"))
     if re.search(r"<[!?]", without_autolinks):
