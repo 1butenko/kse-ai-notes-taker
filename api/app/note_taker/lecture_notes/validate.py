@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from urllib.parse import unquote
 from xml.etree import ElementTree
 
+from app.note_taker.lecture_notes.svg_layout import overlap_issues
+
 MAX_BODY_BYTES = 300_000
 # The line checks below are written to run in linear time (no backtracking regexes on a teacher's
 # text); the cap is a second line of defence against slow input.
@@ -576,4 +578,6 @@ def svg_issues(name: str, data: bytes) -> list[str]:
                 or "expression(" in css
             ):
                 problems.append("<style> may not import or load anything")
+    if not problems:
+        problems += overlap_issues(root)
     return problems

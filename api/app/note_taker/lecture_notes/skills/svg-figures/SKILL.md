@@ -57,7 +57,9 @@ Quarto docs: Figures (quarto.org/docs/authoring/figures.html).
 ## Text and labels
 
 No line, curve, shape or other label may cross a piece of text. Crossed labels are the most
-common fault in these figures.
+common fault in these figures. `render_notes` checks this: it estimates every label's box and
+refuses the figure if a line, curve, shape edge, moving element or other label runs through it.
+The axes and dashed guides count too.
 
 - Reserve room for labels before you draw: a legend column on the right of the plot (widen the
   `viewBox` for it) or a row above it. Plot the data inside its own box and keep labels out of

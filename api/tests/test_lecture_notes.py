@@ -1287,3 +1287,101 @@ def test_a_subagents_todos_do_not_replace_the_writers() -> None:
     )
     assert progress.todo_list[0]["content"] == "Plan"
     assert progress.step() == "Review: Reading eigen values"
+
+
+SVG_HEAD = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200" role="img" font-size="14">'
+)
+
+
+def layout(body: str) -> list[str]:
+    from app.note_taker.lecture_notes.validate import svg_issues
+
+    return svg_issues("assets/plot.svg", f"{SVG_HEAD}<title>t</title>{body}</svg>".encode())
+
+
+def test_a_line_through_a_label_is_reported() -> None:
+    issues = layout(
+        '<line x1="80" y1="20" x2="80" y2="180" stroke="#333"/>'
+        '<text x="92" y="58" text-anchor="middle">patient</text>'
+    )
+    assert len(issues) == 1
+    assert '"patient" at (92, 58) is crossed by a <line>' in issues[0]
+
+
+def test_a_curve_through_a_label_is_reported() -> None:
+    issues = layout(
+        '<path d="M 0 150 C 100 20 200 20 300 150" fill="none" stroke="#4a78b5"/>'
+        '<text x="120" y="60">daily rhythm</text>'
+    )
+    assert "is crossed by a <path>" in issues[0]
+
+
+def test_labels_clear_of_the_drawing_pass() -> None:
+    assert (
+        layout(
+            '<line x1="40" y1="20" x2="40" y2="160" stroke="#333"/>'
+            '<line x1="40" y1="160" x2="300" y2="160" stroke="#333"/>'
+            '<path d="M 40 150 C 100 20 200 20 300 150" fill="none" stroke="#4a78b5"/>'
+            '<text x="40" y="180" text-anchor="middle">0</text>'
+            '<text x="310" y="150" fill="#4a78b5">daily rhythm</text>'
+            '<rect x="100" y="100" width="120" height="40" fill="none" stroke="#333"/>'
+            '<text x="160" y="125" text-anchor="middle">inside a box</text>'
+        )
+        == []
+    )
+
+
+def test_a_label_with_a_halo_may_sit_on_lines() -> None:
+    assert (
+        layout(
+            '<line x1="80" y1="20" x2="80" y2="180" stroke="#333"/>'
+            '<text x="92" y="58" text-anchor="middle" stroke="#fff" stroke-width="4" '
+            'paint-order="stroke">peak</text>'
+        )
+        == []
+    )
+
+
+def test_a_moving_marker_over_a_label_is_reported() -> None:
+    smil = layout(
+        '<text x="200" y="66">label</text>'
+        '<circle cx="20" cy="60" r="6"><animate attributeName="cx" values="20;380" dur="4s" '
+        'repeatCount="indefinite"/></circle>'
+    )
+    css = layout(
+        "<style>@keyframes scan { from { transform: translateX(0); } "
+        "to { transform: translateX(300px); } } .scanner { animation: scan 6s linear infinite; }"
+        "</style>"
+        '<text x="200" y="66">label</text>'
+        '<g class="scanner"><line x1="40" y1="20" x2="40" y2="180" stroke="#333"/></g>'
+    )
+    assert "passes over a <circle>" in smil[0]
+    assert "passes over a <line>" in css[0]
+
+
+def test_a_growing_bar_is_checked_frame_by_frame() -> None:
+    # y and height move together, so the bar never reaches the label under the axis.
+    bar = (
+        '<rect x="105" y="158" width="28" height="32">'
+        '<animate attributeName="height" values="32;128;32" dur="6s" repeatCount="indefinite"/>'
+        '<animate attributeName="y" values="158;62;158" dur="6s" repeatCount="indefinite"/>'
+        "</rect>"
+    )
+    assert layout(bar + '<text x="119" y="214" text-anchor="middle">now</text>') == []
+    assert "passes over a <rect>" in layout(bar + '<text x="108" y="70">top</text>')[0]
+
+
+def test_overlapping_labels_are_reported() -> None:
+    issues = layout('<text x="100" y="50">weekly drift</text><text x="110" y="55">forecast</text>')
+    assert "overlaps" in issues[0]
+
+
+def test_rotated_text_is_not_checked() -> None:
+    assert (
+        layout(
+            '<line x1="0" y1="100" x2="400" y2="100" stroke="#333"/>'
+            '<text x="20" y="100" transform="rotate(-90 20 100)">calls</text>'
+        )
+        == []
+    )
