@@ -302,7 +302,7 @@ def validate_body(body: str, assets: dict[str, bytes] | None = None) -> list[Iss
     in_math = False
     diagrams = ojs = 0
     for number, line in enumerate(lines, start=1):
-        match = re.match(r"\s*(`{3,}|~{3,})(.*)", line)
+        match = re.match(r"(`{3,}|~{3,})(.*)", line.lstrip())
         if fence:
             if (
                 match
