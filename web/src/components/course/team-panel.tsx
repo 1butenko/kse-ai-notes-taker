@@ -487,7 +487,10 @@ function ActivityCard({ course, changes }: { course: string; changes: number }) 
               <Item key={event.id} size="xs">
                 <ItemContent className="min-w-0">
                   <p className="text-sm">
-                    <span className="font-medium">{event.actor_name ?? "Unknown user"}</span>{" "}
+                    {/* Runs from before the activity log, and the worker's own syncs, have no actor. */}
+                    <span className="font-medium">
+                      {event.actor_name || event.actor_email || "Someone"}
+                    </span>{" "}
                     {describeEvent(event)}
                   </p>
                   <ItemDescription>
