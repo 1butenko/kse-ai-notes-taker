@@ -18,11 +18,13 @@ The web app (`web/`) is a Next.js App Router app with TypeScript, Tailwind and s
 | [src/components/ui/](../../web/src/components/ui/) | shadcn components; add more with `npx shadcn@latest add <name>` |
 | `src/components/course`, `dashboard`, `account` | Course, lecture and account screens |
 | [src/components/lecture-notes/](../../web/src/components/lecture-notes/) | Notes viewer, polling hooks, and the editor |
+| [src/components/agent/agent-trace.tsx](../../web/src/components/agent/agent-trace.tsx) | `AgentTrace`: a run's todos as steps with their actions grouped under them; used by the course agent console and the lecture notes progress section. Built on `ui/trace.tsx` and `ui/collapsible.tsx` |
 | [src/lib/qmd/](../../web/src/lib/qmd/) | Quarto body ⇄ editor nodes (`convert.ts`), ids, citations, attrs; vitest tests and `fixtures/*.qmd` |
 
 ## How it works
 
 - **Viewer.** `/visual` shows the lecture's newest published notes in a sandboxed iframe (`visual-notes-viewer.tsx`); there is no version picker. `visualNotesPath(course, session, saving)` takes the run of a save being rendered and shows its progress until it is published. `siteUrl` adds `?v=2` to `index.html` so browsers drop the old immutable copy.
+- **Progress trace.** `AgentTrace` takes a `TracedRun` (`status`, `step`, `todos`, `actions`, `started_at`, `finished_at`). Each `AgentAction.todo` names the todo in progress when it started; the trace shows the action under that step. Actions without a `todo` (before the plan, or runs saved before this field) show outside any step.
 - **Editor.** `/edit` loads `NotesEditorLoader`, which opens the newest published version with `getLectureNotesSource`. The body is parsed to Plate nodes by `parseQmd` and written back by `serializeQmd`. Anything the parser can't place is kept verbatim in a `qraw` node, so a save never drops text.
 - **Save.** `saveLectureNotesEdit` posts `{body, assets}`. A 422 `ApiError` carries `NoteIssue[]` (`line`, `message`). On 202 the page goes to the viewer, which polls the new run. An unsaved edit is kept in `localStorage` (`editor/draft.ts`).
 - **Editor files** (`components/lecture-notes/editor/`):

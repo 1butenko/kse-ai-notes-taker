@@ -18,6 +18,7 @@ Read this page, then the area doc for what you are changing.
 
 <!-- Newest first, at most 20. One line each: - YYYY-MM-DD [#PR title](changes/file.md): summary -->
 
+- 2026-11-24 [#70 Show the note taker's progress as a trace of steps and actions](changes/2026-11-24-pr70.md): actions record their `todo`; shared `AgentTrace` (shadcn `trace` + `collapsible`) groups them under steps in the course console and lecture notes page.
 - 2026-11-23 [#69 Refuse SVG figures whose labels are crossed by lines](changes/2026-11-23-pr69.md): `render_notes` estimates each `<text>` box and refuses figures where a line, curve, shape edge, moving element or other label crosses it (`svg_layout.py`).
 - 2026-11-23 [#68 Open lecture notes with a motivating hook](changes/2026-11-23-pr68.md): a motivation scout subagent (the only one with web tools) drafts an opening `.hook` (checked image, animated SVG or try-it-first); stored in `lecture_note_runs.motivation`; SVG labels stay clear of the data.
 - 2026-11-23 [#67 Make the note checker's line checks linear-time (CodeQL ReDoS)](changes/2026-11-23-pr67.md): lecture-notes validator drops backtracking regexes (code spans, fences, images, autolinks, HTML tags); the line cap stays as a second guard.

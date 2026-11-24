@@ -1,8 +1,10 @@
 """What the AI Note Taker is doing, for the course page: its todo list and its actions.
 
-The tools report their own actions (deepagents does not pass callbacks into subagents, so a
-callback would see only the main agent). Saved on the run's `sync_runs` row after every change;
-a failed save is printed and ignored, so progress never stops a run.
+Every action remembers the todo that was in progress when it started (`todo`), so the page can
+show each step with its own actions. The tools report their own actions (deepagents does not
+pass callbacks into subagents, so a callback would see only the main agent). Saved on the run's
+`sync_runs` row after every change; a failed save is printed and ignored, so progress never
+stops a run.
 """
 
 from collections.abc import Callable, Iterator
@@ -10,8 +12,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-# Only the latest actions are kept; older ones scroll away on the page anyway.
-MAX_ACTIONS = 40
+# Only the latest actions are kept; the page shows them under their steps.
+MAX_ACTIONS = 100
 
 Save = Callable[[list[dict[str, Any]], list[dict[str, Any]], str | None], None]
 
@@ -21,6 +23,8 @@ class Action:
     text: str
     status: str = "running"  # running | done | failed
     detail: str = ""
+    # The todo in progress when the action started; None before the agent's plan.
+    todo: str | None = None
 
 
 @dataclass
@@ -43,7 +47,7 @@ class Progress:
     @contextmanager
     def action(self, text: str) -> Iterator[Action]:
         """One step the page shows as running, then done (with `detail`) or failed."""
-        entry = Action(text)
+        entry = Action(text, todo=self.active_todo())
         self.activity = None  # stale once a tool reports its own step
         self.actions = [*self.actions, entry][-MAX_ACTIONS:]
         self.flush()
@@ -59,7 +63,8 @@ class Progress:
 
     def note(self, text: str, detail: str = "") -> None:
         """A finished step, such as handing work to a subagent."""
-        self.actions = [*self.actions, Action(text, "done", detail)][-MAX_ACTIONS:]
+        entry = Action(text, "done", detail, self.active_todo())
+        self.actions = [*self.actions, entry][-MAX_ACTIONS:]
         self.flush()
 
     def set_activity(self, text: str | None) -> None:
@@ -69,14 +74,17 @@ class Progress:
             self.activity = text
             self.flush()
 
+    def active_todo(self) -> str | None:
+        active = [t["content"] for t in self.todo_list if t["status"] == "in_progress"]
+        return active[0] if active else None
+
     def step(self) -> str | None:
         running = [a.text for a in self.actions if a.status == "running"]
         if running:
             return running[-1]
         if self.activity:
             return self.activity
-        active = [t["content"] for t in self.todo_list if t["status"] == "in_progress"]
-        return active[0] if active else None
+        return self.active_todo()
 
     def flush(self) -> None:
         if self.save is None:
@@ -84,7 +92,10 @@ class Progress:
         try:
             self.save(
                 self.todo_list,
-                [{"text": a.text, "status": a.status, "detail": a.detail} for a in self.actions],
+                [
+                    {"text": a.text, "status": a.status, "detail": a.detail, "todo": a.todo}
+                    for a in self.actions
+                ],
                 self.step(),
             )
         except Exception as error:

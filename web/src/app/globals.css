@@ -173,16 +173,3 @@
     @apply overflow-x-auto py-1;
   }
 }
-
-/* The AI Note Taker console: an indeterminate bar for downloads and other waits. */
-@theme {
-  --animate-indeterminate: indeterminate 1.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
-  @keyframes indeterminate {
-    0% {
-      transform: translateX(-100%);
-    }
-    100% {
-      transform: translateX(250%);
-    }
-  }
-}

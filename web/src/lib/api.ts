@@ -410,6 +410,8 @@ export type AgentAction = {
   text: string;
   status: "running" | "done" | "failed";
   detail: string;
+  /** The todo in progress when the action started; missing on older runs. */
+  todo?: string | null;
 };
 
 export type AgentRun = {

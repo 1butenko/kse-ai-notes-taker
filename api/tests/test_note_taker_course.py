@@ -248,6 +248,7 @@ def test_progress_saves_every_change_and_names_the_current_step() -> None:
             "text": "Reading the course outline in Moodle",
             "status": "done",
             "detail": "12 activities",
+            "todo": "Gather the course materials from Moodle",
         }
     ]
     with pytest.raises(RuntimeError), progress.action("Downloading"):
@@ -256,6 +257,7 @@ def test_progress_saves_every_change_and_names_the_current_step() -> None:
         "text": "Downloading",
         "status": "failed",
         "detail": "Moodle is down",
+        "todo": "Gather the course materials from Moodle",
     }
 
 

@@ -16,6 +16,7 @@ The AI Note Taker's data is in Aurora PostgreSQL (IAM authentication, no passwor
 ### `lecture_note_runs`
 
 - `status`: `running`, `succeeded`, `failed` or `cancelled`. `step`, `todos`, `actions`, `report` and `error` show progress.
+- `actions` (here and in `sync_runs`) is a JSON list of `{text, status, detail, todo}`, at most the latest 100 (`MAX_ACTIONS` in `note_taker/progress.py`). `todo` is the todo in progress when the action started; it is missing on older runs.
 - `s3_prefix` and `files`: where the published page is and which files it has.
 - `readings_fingerprint`: the lecture's readings when the run started (`app.plan.session_fingerprint`).
 - `model`, `prompt_versions`, `langfuse_trace_id`, `renders`.

@@ -57,6 +57,8 @@ class AgentAction(BaseModel):
     text: str
     status: str  # running | done | failed
     detail: str = ""
+    # The todo in progress when the action started; None before the plan or on older runs.
+    todo: str | None = None
 
 
 class Run(BaseModel):
