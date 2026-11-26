@@ -29,6 +29,7 @@ margin notes and a reference list.
 | Add an analogy, an intuition, a picture | Nothing, if it is plainly an illustration |
 | Add your own worked example or exercise | "(our example)" in its title |
 | Add background a student needs from earlier courses | "Recall:" in a margin note or `callout-note` |
+| In the opening hook only: a fact checked on the web | A link to its page, `[text](https://...)` |
 | State a fact the readings do not contain | Not allowed |
 
 If the readings disagree with each other, say so and cite both. If a reading's page text is

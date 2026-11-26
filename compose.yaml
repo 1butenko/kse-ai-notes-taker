@@ -61,6 +61,8 @@ services:
     build:
       context: ./web
       target: dev
+    # Webpack, not Turbopack, so WATCHPACK_POLLING picks up edits made on a Windows host.
+    command: ["npm", "run", "dev", "--", "--webpack", "--hostname", "0.0.0.0"]
     ports:
       - "3000:3000"
     environment:
@@ -74,6 +76,9 @@ services:
       AUTH_ALLOWED_DOMAINS: ${AUTH_ALLOWED_DOMAINS:-kse.org.ua}
       AUTH_URL: http://localhost:3000
       AUTH_TRUST_HOST: "true"
+      # Bind mounts on Docker Desktop for Windows send no file events, so `next dev` never sees
+      # edits. Turbopack's own polling misses them too; webpack's polling works (see `command`).
+      WATCHPACK_POLLING: "true"
     volumes:
       - ./web:/app
       # Keep the image's Linux node_modules and build cache instead of the host's.

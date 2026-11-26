@@ -1,0 +1,54 @@
+/*-- scss:defaults --*/
+
+// The KSE brand tokens of the web app (web/src/app/tokens.css), in hex because Bootstrap's Sass
+// colour functions do not take oklch. The shadcn-named custom properties and the component
+// styles are in lecture-notes.css.
+
+$kse-paper: #fcfdff;
+$kse-paper-2: #f4f5f9;
+$kse-paper-3: #e9ebf2;
+$kse-ink: #0c0d37;
+$kse-ink-2: #303652;
+$kse-ink-3: #585c72;
+$kse-rule: #dddfe8;
+$kse-signal: #00249c;
+$kse-positive: #197037;
+$kse-caution: #8d5406;
+$kse-danger: #be2323;
+$kse-notice: #0062a1;
+
+$body-bg: $kse-paper;
+$body-color: $kse-ink;
+$body-secondary-color: $kse-ink-3;
+$headings-color: $kse-ink;
+$primary: $kse-ink;
+$secondary: $kse-ink-3;
+$info: $kse-notice;
+$success: $kse-positive;
+$warning: $kse-caution;
+$danger: $kse-danger;
+$link-color: $kse-signal;
+$border-color: $kse-rule;
+
+$font-family-sans-serif: "KSE Sans", "Helvetica Neue", Arial, sans-serif;
+$font-family-monospace: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+$headings-font-weight: 500;
+
+$border-radius: 0.6rem;
+$border-radius-sm: 0.45rem;
+$border-radius-lg: 0.75rem;
+
+$code-color: $kse-ink-2;
+$code-bg: $kse-paper-2;
+$code-block-bg: $kse-paper-2;
+
+$callout-color-note: $kse-notice;
+$callout-color-tip: $kse-positive;
+$callout-color-important: $kse-signal;
+$callout-color-caution: $kse-caution;
+$callout-color-warning: $kse-danger;
+
+$toc-color: $kse-ink-3;
+$toc-active-border: $kse-ink;
+
+/*-- scss:rules --*/

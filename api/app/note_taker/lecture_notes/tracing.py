@@ -51,9 +51,12 @@ class Trace:
     trace_id: str | None = None
     root: Any = None
 
-    def finish(self, output: str) -> None:
+    def finish(self, output: str, metadata: dict[str, Any] | None = None) -> None:
         if self.root is not None:
-            self.root.update(output=output)
+            if metadata:
+                self.root.update(output=output, metadata=metadata)
+            else:
+                self.root.update(output=output)
 
 
 @contextmanager

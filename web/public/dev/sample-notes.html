@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lecture 3: Supply, demand and market equilibrium</title>
+<!-- Development sample for /dev/notes: stands in for a Quarto page the lecture-notes agent publishes. -->
+<style>
+  /* Same scrollbar as api/app/note_taker/lecture_notes/templates/lecture-notes.css. */
+  html { scrollbar-width: thin; scrollbar-color: rgb(30 40 140 / 0.3) transparent; }
+  body { font-family: system-ui, sans-serif; line-height: 1.6; color: #1f2430; margin: 0; }
+  main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .25rem; }
+  .subtitle { color: #6b7080; margin: 0 0 2rem; }
+  h2 { margin-top: 2.5rem; border-bottom: 1px solid #e4e6ec; padding-bottom: .3rem; }
+  .callout { border-left: 4px solid #2a3fa8; background: #f3f5fc; padding: .75rem 1rem; border-radius: 0 .5rem .5rem 0; margin: 1.25rem 0; }
+  .callout strong { display: block; margin-bottom: .25rem; }
+  .math { display: block; text-align: center; font-family: "Cambria Math", "STIX Two Math", serif; font-size: 1.15rem; margin: 1rem 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #e4e6ec; padding: .4rem .6rem; text-align: left; }
+  th { background: #f6f7fa; }
+  figure { margin: 1.5rem 0; }
+  figcaption { color: #6b7080; font-size: .9rem; text-align: center; }
+  code { background: #f1f2f6; padding: .1rem .3rem; border-radius: .25rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Lecture 3: Supply, demand and market equilibrium</h1>
+  <p class="subtitle">Principles of Economics · sample notes for design work</p>
+
+  <div class="callout">
+    <strong>Learning goals</strong>
+    Explain how buyers and sellers set a market price; find the equilibrium from linear demand and
+    supply; predict how shocks move price and quantity.
+  </div>
+
+  <h2>1. Demand</h2>
+  <p>
+    The <em>quantity demanded</em> is how much buyers are willing and able to buy at a given price.
+    Holding everything else fixed, a higher price lowers it: the <strong>law of demand</strong>.
+    We write a linear demand curve as
+  </p>
+  <span class="math">Q<sub>d</sub> = a − b·P, &nbsp; b &gt; 0</span>
+  <p>
+    Income, the prices of related goods, tastes, expectations and the number of buyers shift the
+    whole curve; a change in the good's own price only moves us along it.
+  </p>
+
+  <h2>2. Supply</h2>
+  <p>
+    The <em>quantity supplied</em> rises with price, because higher prices cover the higher marginal
+    cost of producing more:
+  </p>
+  <span class="math">Q<sub>s</sub> = c + d·P, &nbsp; d &gt; 0</span>
+
+  <figure>
+    <svg viewBox="0 0 320 220" width="100%" role="img" aria-label="Supply and demand curves crossing at equilibrium">
+      <line x1="40" y1="190" x2="300" y2="190" stroke="#1f2430"/>
+      <line x1="40" y1="190" x2="40" y2="15" stroke="#1f2430"/>
+      <line x1="55" y1="30" x2="280" y2="180" stroke="#2a3fa8" stroke-width="2.5"/>
+      <line x1="55" y1="175" x2="280" y2="35" stroke="#c0392b" stroke-width="2.5"/>
+      <circle cx="166" cy="104" r="4" fill="#1f2430"/>
+      <line x1="166" y1="104" x2="166" y2="190" stroke="#6b7080" stroke-dasharray="4 3"/>
+      <line x1="40" y1="104" x2="166" y2="104" stroke="#6b7080" stroke-dasharray="4 3"/>
+      <text x="284" y="184" font-size="12" fill="#2a3fa8">D</text>
+      <text x="284" y="38" font-size="12" fill="#c0392b">S</text>
+      <text x="22" y="108" font-size="12">P*</text>
+      <text x="158" y="206" font-size="12">Q*</text>
+      <text x="292" y="206" font-size="11">Q</text>
+      <text x="26" y="20" font-size="11">P</text>
+    </svg>
+    <figcaption>Figure 1. The market clears where the curves cross.</figcaption>
+  </figure>
+
+  <h2>3. Equilibrium</h2>
+  <p>Setting <code>Q<sub>d</sub> = Q<sub>s</sub></code> gives the equilibrium price and quantity:</p>
+  <span class="math">P* = (a − c) / (b + d), &nbsp;&nbsp; Q* = a − b·P*</span>
+
+  <div class="callout">
+    <strong>Worked example</strong>
+    With Q<sub>d</sub> = 100 − 2P and Q<sub>s</sub> = 10 + 4P: P* = 90 / 6 = 15 and
+    Q* = 100 − 30 = 70.
+  </div>
+
+  <h2>4. Shifts and their effects</h2>
+  <table>
+    <thead><tr><th>Shock</th><th>Curve</th><th>Price</th><th>Quantity</th></tr></thead>
+    <tbody>
+      <tr><td>Incomes rise (normal good)</td><td>Demand right</td><td>↑</td><td>↑</td></tr>
+      <tr><td>Input costs fall</td><td>Supply right</td><td>↓</td><td>↑</td></tr>
+      <tr><td>Substitute gets cheaper</td><td>Demand left</td><td>↓</td><td>↓</td></tr>
+      <tr><td>New tax on producers</td><td>Supply left</td><td>↑</td><td>↓</td></tr>
+    </tbody>
+  </table>
+  <p>
+    When both curves shift at once, the direction of one variable is certain and the other depends
+    on which shift is larger.
+  </p>
+
+  <h2>5. Elasticity, briefly</h2>
+  <p>
+    The price elasticity of demand measures how strongly quantity responds to price:
+  </p>
+  <span class="math">ε = (ΔQ / Q) ÷ (ΔP / P)</span>
+  <p>
+    Demand is elastic when |ε| &gt; 1, so revenue falls as price rises; inelastic when |ε| &lt; 1.
+    We return to this in Lecture 4.
+  </p>
+
+  <h2>Summary</h2>
+  <ul>
+    <li>Demand slopes down, supply slopes up; other factors shift the curves.</li>
+    <li>The market clears at the price where quantity demanded equals quantity supplied.</li>
+    <li>Compare the old and new equilibrium to read the effect of any shock.</li>
+  </ul>
+</main>
+</body>
+</html>

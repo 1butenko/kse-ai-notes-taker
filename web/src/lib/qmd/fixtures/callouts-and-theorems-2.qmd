@@ -1,0 +1,11 @@
+::: {#def-eigen}
+## Eigenvector
+A non-zero vector $v$ is an **eigenvector** of $A$ if $Av = \lambda v$ for some scalar $\lambda$.
+:::
+
+::: {#thm-char}
+## Characteristic equation
+$\lambda$ is an eigenvalue of $A$ exactly when $\det(A - \lambda I) = 0$.
+:::
+
+As @thm-char shows, ...

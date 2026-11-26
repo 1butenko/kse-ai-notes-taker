@@ -1,0 +1,26 @@
+::: {.hook}
+Before you read on, play a game with yourself. Type 40 zeros and ones, as randomly as you can.
+
+```{ojs}
+//| echo: false
+viewof bits = Inputs.text({label: "Your random 0s and 1s", placeholder: "0110100111...", width: 360})
+```
+
+```{ojs}
+//| echo: false
+{
+  const s = bits.replace(/[^01]/g, "");
+  if (s.length < 20) return md`*Type at least 20 digits to see how random you are.*`;
+  let switches = 0, run = 1, longest = 1;
+  for (let i = 1; i < s.length; i++) {
+    if (s[i] !== s[i - 1]) { switches++; run = 1; } else { run++; longest = Math.max(longest, run); }
+  }
+  const rate = Math.round(100 * switches / (s.length - 1));
+  return md`You switched digits **${rate}%** of the time, and your longest run was **${longest}**.
+A fair coin switches about 50% of the time, and in 40 tosses it usually has a run of 5 or more.`;
+}
+```
+
+Most people switch too often and avoid long runs. A machine can tell you are not a coin.
+This lecture is about how: tests that measure what "random" looks like.
+:::

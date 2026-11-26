@@ -1,0 +1,3 @@
+## Eigenvalues as stretch factors {#sec-stretch}
+
+### Finding them {#sec-finding}

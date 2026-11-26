@@ -35,6 +35,7 @@ PROMPTS: dict[str, Path] = {
     "note-taker/moodle": APP_DIR / "note_taker" / "prompts" / "moodle.md",
     "note-taker/lecture-notes/writer": LECTURE_NOTES / "writer.md",
     "note-taker/lecture-notes/reviewer": LECTURE_NOTES / "reviewer.md",
+    "note-taker/lecture-notes/motivation": LECTURE_NOTES / "motivation.md",
     "note-taker/lecture-notes/skills-system": LECTURE_NOTES / "skills_system.md",
     "note-taker/lecture-notes/request": LECTURE_NOTES / "request.md",
 }

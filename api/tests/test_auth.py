@@ -219,7 +219,7 @@ def test_published_notes_page_needs_no_token(
 ) -> None:
     from app.routers import lecture_notes
 
-    monkeypatch.setattr(lecture_notes, "get_run", lambda run_id: None)
+    monkeypatch.setattr(lecture_notes, "current_run", lambda run_id: None)
 
     response = real_auth.get(f"/lecture-notes/runs/{uuid4()}/site/index.html")
 

@@ -1,0 +1,10 @@
+::: {.panel-tabset group="views"}
+## Intuition
+A matrix moves most vectors off their line; eigenvectors stay on it.
+
+## Formal
+$Av = \lambda v$, $v \ne 0$.
+
+## Example
+For $A = \begin{pmatrix} 2 & 0 \\ 0 & 3 \end{pmatrix}$, $e_1$ and $e_2$ are eigenvectors.
+:::

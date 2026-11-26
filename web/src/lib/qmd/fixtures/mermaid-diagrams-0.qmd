@@ -1,0 +1,10 @@
+```{mermaid}
+%%| label: fig-handshake
+%%| fig-cap: "TCP three-way handshake"
+sequenceDiagram
+  participant C as "Client"
+  participant S as "Server"
+  C->>S: SYN
+  S->>C: SYN-ACK
+  C->>S: ACK
+```

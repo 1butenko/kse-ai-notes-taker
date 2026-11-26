@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import {
   BookMarkedIcon,
   BookOpenIcon,
   CheckIcon,
-  ChevronDownIcon,
   CircleAlertIcon,
   GraduationCapIcon,
   LibraryIcon,
@@ -16,9 +14,10 @@ import {
 } from "lucide-react";
 import { cn } from "cn";
 
+import { AgentTrace, runTodos, useNow } from "@/components/agent/agent-trace";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import type { AgentAction, AgentRun, AgentTodo } from "@/lib/api";
+import type { AgentRun } from "@/lib/api";
 
 // The study icons the loader cycles through while the agent works.
 const STUDY_ICONS: LucideIcon[] = [
@@ -29,27 +28,6 @@ const STUDY_ICONS: LucideIcon[] = [
   BookMarkedIcon,
   GraduationCapIcon,
 ];
-
-// Actions that move files: they get a progress bar while they run.
-const TRANSFER = /^(Downloading|Adding|Saving)/;
-
-function useNow(active: boolean, ms: number) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => setNow(Date.now()), ms);
-    return () => clearInterval(timer);
-  }, [active, ms]);
-  return now;
-}
-
-function elapsed(from: string, to: string | null, now: number) {
-  const end = to ? Date.parse(to) : now;
-  const seconds = Math.max(0, Math.round((end - Date.parse(from)) / 1000));
-  return seconds < 60
-    ? `${seconds}s`
-    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
 
 /** Study icons cross-fading into each other while the agent works. */
 function StudyLoader({ run }: { run: AgentRun }) {
@@ -86,175 +64,6 @@ function StudyLoader({ run }: { run: AgentRun }) {
   );
 }
 
-function ProgressBar() {
-  return (
-    <span className="relative block h-1 w-full overflow-hidden rounded-full bg-primary/15">
-      <span className="absolute inset-y-0 left-0 w-2/5 rounded-full bg-primary motion-safe:animate-indeterminate motion-reduce:w-full motion-reduce:opacity-40" />
-    </span>
-  );
-}
-
-type StepState = "done" | "active" | "failed" | "pending";
-
-function todoState(todo: AgentTodo, run: AgentRun): StepState {
-  if (todo.status === "completed") return "done";
-  if (todo.status === "in_progress")
-    return run.status === "failed" ? "failed" : "active";
-  return "pending";
-}
-
-/** One general step: a marker on a rail, its name, and under the active one what the agent
- * is doing right now. */
-function Step({
-  todo,
-  state,
-  last,
-  current,
-}: {
-  todo: AgentTodo;
-  state: StepState;
-  last: boolean;
-  current: AgentAction | undefined;
-}) {
-  return (
-    <li className="relative flex gap-4 pb-6 last:pb-0">
-      {!last && (
-        <span
-          aria-hidden
-          className={cn(
-            "absolute top-8 bottom-1 left-[0.9375rem] w-px transition-colors duration-700",
-            state === "done" ? "bg-success/60" : "bg-border",
-          )}
-        />
-      )}
-      <span
-        aria-hidden
-        className={cn(
-          "relative flex size-8 shrink-0 items-center justify-center rounded-full border transition-all duration-500",
-          state === "done" && "border-success bg-success text-white",
-          state === "active" && "border-primary bg-primary/10 text-primary",
-          state === "failed" &&
-            "border-destructive bg-destructive/10 text-destructive",
-          state === "pending" && "bg-background text-muted-foreground",
-        )}
-      >
-        {state === "done" ? (
-          <CheckIcon className="size-4 animate-in zoom-in-50 duration-300" />
-        ) : state === "failed" ? (
-          <CircleAlertIcon className="size-4" />
-        ) : state === "active" ? (
-          <span className="size-2 rounded-full bg-primary motion-safe:animate-pulse" />
-        ) : (
-          <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-        )}
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-1">
-        <span
-          className={cn(
-            "transition-colors duration-500",
-            state === "pending" && "text-muted-foreground",
-            state === "active" && "font-medium",
-            state === "done" && "text-muted-foreground",
-          )}
-        >
-          {todo.content}
-        </span>
-        {state === "active" && current && (
-          <div
-            key={current.text}
-            className="flex flex-col gap-2 animate-in fade-in slide-in-from-top-1 duration-500"
-          >
-            <span className="text-sm text-muted-foreground">
-              {current.text}…
-            </span>
-            {TRANSFER.test(current.text) && <ProgressBar />}
-          </div>
-        )}
-      </div>
-    </li>
-  );
-}
-
-function LogLine({ action }: { action: AgentAction }) {
-  return (
-    <li className="flex flex-col animate-in fade-in slide-in-from-top-1 duration-300">
-      <span className="flex gap-2">
-        <span
-          aria-hidden
-          className={cn(
-            "shrink-0",
-            action.status === "done" && "text-success",
-            action.status === "failed" && "text-destructive",
-            action.status === "running" &&
-              "text-primary motion-safe:animate-pulse",
-          )}
-        >
-          ●
-        </span>
-        <span>{action.text}</span>
-      </span>
-      {action.detail && (
-        <span
-          className={cn(
-            "flex gap-2 pl-1 text-muted-foreground",
-            action.status === "failed" && "text-destructive",
-          )}
-        >
-          <span aria-hidden className="shrink-0">
-            └
-          </span>
-          <span className="break-words">{action.detail}</span>
-        </span>
-      )}
-    </li>
-  );
-}
-
-/** The detailed log, folded away behind a chevron. */
-function Details({ actions }: { actions: AgentAction[] }) {
-  const [open, setOpen] = useState(false);
-  const failed = actions.filter((a) => a.status === "failed").length;
-  return (
-    <div className="flex flex-col border-t pt-4">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="flex items-center gap-2 self-start rounded-md text-sm text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ChevronDownIcon
-          className={cn(
-            "size-4 transition-transform duration-300",
-            open && "rotate-180",
-          )}
-        />
-        {open ? "Hide details" : "Show details"}
-        <span className="tabular-nums">
-          · {actions.length} {actions.length === 1 ? "action" : "actions"}
-          {failed > 0 && (
-            <span className="text-destructive">, {failed} failed</span>
-          )}
-        </span>
-      </button>
-      {/* Grid rows animate the height from 0 to the log's own. */}
-      <div
-        className={cn(
-          "grid transition-[grid-template-rows,opacity] duration-500 ease-out",
-          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
-        )}
-      >
-        <div className="overflow-hidden">
-          <ol className="mt-3 flex max-h-[40svh] flex-col gap-1.5 overflow-y-auto rounded-lg bg-muted/60 p-4 font-mono text-xs">
-            {actions.map((action, index) => (
-              <LogLine key={index} action={action} />
-            ))}
-          </ol>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 type AgentConsoleProps = {
   run: AgentRun;
   /** Starts the agent again after a failed or unfinished run. */
@@ -265,8 +74,8 @@ type AgentConsoleProps = {
 };
 
 /**
- * The AI Note Taker at work, filling the page: a study-icon loader, what it is doing now, its
- * general steps, and the detailed log behind a chevron.
+ * The AI Note Taker at work, filling the page: a study-icon loader, what it is doing now, and
+ * its run as a Trace (steps, then every action behind one line).
  */
 export function AgentConsole({
   run,
@@ -275,21 +84,7 @@ export function AgentConsole({
   incomplete,
 }: AgentConsoleProps) {
   const working = run.status === "running";
-  const now = useNow(working, 1000);
-
-  // Before the agent writes its todo list, planning is the one step there is.
-  const todos: AgentTodo[] =
-    run.todos.length > 0
-      ? run.todos
-      : [
-          {
-            content: "Planning the work",
-            status: working ? "in_progress" : "completed",
-          },
-        ];
-  const current = [...run.actions]
-    .reverse()
-    .find((a) => a.status === "running");
+  const todos = runTodos(run);
   const done = todos.filter((t) => t.status === "completed").length;
   const position = Math.min(done + 1, todos.length);
 
@@ -310,7 +105,7 @@ export function AgentConsole({
         <div className="flex flex-col items-center gap-4 text-center">
           <StudyLoader run={run} />
           <p className="text-sm text-muted-foreground tabular-nums">
-            AI Note Taker · {elapsed(run.started_at, run.finished_at, now)}
+            AI Note Taker
             {working && ` · step ${position} of ${todos.length}`}
           </p>
           <h2
@@ -328,17 +123,9 @@ export function AgentConsole({
           )}
         </div>
 
-        <ol className="w-full max-w-md" aria-label="Steps">
-          {todos.map((todo, index) => (
-            <Step
-              key={todo.content}
-              todo={todo}
-              state={todoState(todo, run)}
-              last={index === todos.length - 1}
-              current={current}
-            />
-          ))}
-        </ol>
+        <div className="w-full max-w-md">
+          <AgentTrace run={run} />
+        </div>
 
         {!working && onRetry && (run.status === "failed" || incomplete) && (
           <Button variant="outline" disabled={retrying} onClick={onRetry}>
@@ -347,8 +134,6 @@ export function AgentConsole({
           </Button>
         )}
       </div>
-
-      {run.actions.length > 0 && <Details actions={run.actions} />}
     </section>
   );
 }

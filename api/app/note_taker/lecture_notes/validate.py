@@ -7,7 +7,9 @@ sandboxed iframe. Nothing in it may run on the server, read files, or reach outs
 - cells only `{mermaid}`, `{dot}` and `{ojs}`, with allowlisted options; other code is shown in
   a plain fence (```python);
 - div, span and heading attributes from an allowlist; tiny inline HTML only;
-- images only the note's own SVG assets, which are parsed and checked element by element;
+- images: the note's own SVG assets, which are parsed and checked element by element, or
+  `https://` images on the web (hot-linked) whose caption links their source;
+- one `.hook` div (the opening motivation), before the first section heading;
 - links only http(s), mailto and in-page anchors;
 - OJS cells without network, storage or frame access (the sandbox and CSP contain the rest).
 
@@ -16,14 +18,22 @@ Each problem comes back with its line, so the agent can fix it and render again.
 
 import html
 import re
+from bisect import bisect_right
 from dataclasses import dataclass
 from urllib.parse import unquote
 from xml.etree import ElementTree
 
+from app.note_taker.lecture_notes.svg_layout import overlap_issues
+
 MAX_BODY_BYTES = 300_000
+# The line checks below are written to run in linear time (no backtracking regexes on a teacher's
+# text); the cap is a second line of defence against slow input.
+MAX_LINE_CHARS = 5_000
 MAX_ASSET_BYTES = 200_000
 MAX_DIAGRAMS = 20
 MAX_OJS_CELLS = 6
+MAX_WEB_IMAGES = 6
+TAG_NAME = re.compile(r"</?([A-Za-z][\w-]*)")
 ASSET_NAME = re.compile(r"^assets/[a-z0-9][a-z0-9-]{0,60}\.svg$")
 
 CELLS = {"mermaid", "dot", "ojs"}
@@ -47,6 +57,8 @@ CLASSES = {
     "callout-important",
     "callout-warning",
     "callout-caution",
+    "learning-goals",
+    "hook",
     "panel-tabset",
     "panel-sidebar",
     "panel-fill",
@@ -128,7 +140,14 @@ SVG_ELEMENTS = {
     "use",
     "symbol",
     "style",
+    # SMIL animation; attributeName may not animate links or handlers (svg_issues).
+    "animate",
+    "animateTransform",
+    "animateMotion",
+    "set",
+    "mpath",
 }
+ANIMATIONS = {"animate", "animateTransform", "animateMotion", "set"}
 
 OJS_FORBIDDEN = re.compile(
     r"\b(?:FileAttachment|fetch|XMLHttpRequest|WebSocket|EventSource|importScripts|eval|"
@@ -187,9 +206,87 @@ def attribute_issues(line: int, attrs: list[tuple[str, str]]) -> list[Issue]:
     return issues
 
 
+def strip_code_spans(text: str) -> str:
+    """Text with each inline code span replaced by a space.
+
+    As in CommonMark, a run of n backticks opens a span that the next run of exactly n closes.
+    Runs are paired through an index by length, so this is linear; the backreference regex
+    (`+)(.+?)\\1 backtracks polynomially on long backtick runs.
+    """
+    runs = [(m.start(), m.end()) for m in re.finditer(r"`+", text)]
+    by_length: dict[int, list[int]] = {}
+    for index, (start, end) in enumerate(runs):
+        by_length.setdefault(end - start, []).append(index)
+    out, pos, index = [], 0, 0
+    while index < len(runs):
+        start, end = runs[index]
+        same = by_length[end - start]
+        later = bisect_right(same, index)
+        if later == len(same):
+            index += 1
+            continue
+        close = same[later]
+        out += [text[pos:start], " "]
+        pos, index = runs[close][1], close + 1
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def images(text: str) -> list[tuple[int, int, str, str]]:
+    """(start, end, caption, target) of each Markdown image `![caption](target ...)`.
+
+    The caption may hold links (`![Photo. Source: [Site](https://...)](https://.../a.jpg)`), so
+    brackets are matched with one stack pass first; then each `![` is read in constant time
+    plus the scan to its ')'. Linear, unlike a nested-bracket regex.
+    """
+    close: dict[int, int] = {}
+    stack: list[int] = []
+    for index, char in enumerate(text):
+        if char == "[":
+            stack.append(index)
+        elif char == "]" and stack:
+            close[stack.pop()] = index
+    found = []
+    pos = 0
+    while (bang := text.find("![", pos)) != -1:
+        end = close.get(bang + 1)
+        if end is None or end + 1 >= len(text) or text[end + 1] != "(":
+            pos = bang + 2
+            continue
+        stop = text.find(")", end + 2)
+        if stop == -1:
+            break  # no ')' further on, so no later image either
+        words = text[end + 2 : stop].strip().lstrip("<").split(None, 1)
+        target = words[0].rstrip(">") if words else ""
+        found.append((bang, stop + 1, text[bang + 2 : end], target))
+        pos = stop + 1
+    return found
+
+
+def html_tags(text: str) -> list[tuple[str, str]]:
+    """(name, attributes) of each <tag ...> or </tag ...>, read up to the next '>'.
+
+    Same result as re.findall(r"</?([A-Za-z][\\w-]*)([^>]*)>", text), without that regex's
+    quadratic time on many '<' and no '>'.
+    """
+    tags = []
+    pos = 0
+    while (start := text.find("<", pos)) != -1:
+        name = TAG_NAME.match(text, start)
+        if not name:
+            pos = start + 1
+            continue
+        end = text.find(">", name.end())
+        if end == -1:
+            break  # no '>' further on, so no later tag either
+        tags.append((name[1], text[name.end() : end]))
+        pos = end + 1
+    return tags
+
+
 def strip_inline(text: str) -> str:
     """Prose without inline code and math, which may hold braces and angle brackets."""
-    text = re.sub(r"(`+)(.+?)\1", " ", text)
+    text = strip_code_spans(text)
     return re.sub(r"\$\$.+?\$\$|\$[^$\n]+?\$", " ", text)
 
 
@@ -218,12 +315,24 @@ def cell_issues(kind: str, start: int, lines: list[str]) -> list[Issue]:
     return issues
 
 
-def validate_body(body: str, assets: dict[str, bytes] | None = None) -> list[Issue]:
-    """Problems in a note's body (the .qmd without front matter) and its SVG assets."""
+def validate_body(
+    body: str, assets: dict[str, bytes] | None = None, web_images: set[str] | None = None
+) -> list[Issue]:
+    """Problems in a note's body (the .qmd without front matter) and its SVG assets.
+
+    `web_images`: the `https://` images the agent checked in this run (`check_image`); others
+    are refused. None (a teacher's edit) allows any `https://` image with a source link."""
     assets = assets or {}
     issues: list[Issue] = []
     if len(body.encode()) > MAX_BODY_BYTES:
-        issues.append(Issue(0, f"the note is over {MAX_BODY_BYTES // 1000} KB; shorten it"))
+        return [Issue(0, f"the note is over {MAX_BODY_BYTES // 1000} KB; shorten it")]
+    long_lines = [
+        Issue(n, f"this line is over {MAX_LINE_CHARS:,} characters; break it up")
+        for n, line in enumerate(body.splitlines(), start=1)
+        if len(line) > MAX_LINE_CHARS
+    ]
+    if long_lines:
+        return long_lines
 
     # Reference-style link definitions ([x]: target) are checked like inline links.
     for number, target in (
@@ -240,11 +349,17 @@ def validate_body(body: str, assets: dict[str, bytes] | None = None) -> list[Iss
     cell_start = 0
     cell_lines: list[str] = []
     in_math = False
-    diagrams = ojs = 0
+    diagrams = ojs = web = hooks = 0
+    heading_seen = False
     for number, line in enumerate(lines, start=1):
-        match = re.match(r"^\s*(`{3,}|~{3,})\s*(.*?)\s*$", line)
+        match = re.match(r"(`{3,}|~{3,})(.*)", line.lstrip())
         if fence:
-            if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2]:
+            if (
+                match
+                and match[1][0] == fence[0]
+                and len(match[1]) >= len(fence)
+                and not match[2].strip()
+            ):
                 if cell:
                     issues += cell_issues(cell, cell_start, cell_lines)
                 fence, cell, cell_lines = None, None, []
@@ -252,7 +367,7 @@ def validate_body(body: str, assets: dict[str, bytes] | None = None) -> list[Iss
                 cell_lines.append(line)
             continue
         if match:
-            fence, info = match[1], match[2]
+            fence, info = match[1], match[2].strip()
             braced = re.fullmatch(r"\{\s*([\w-]+)\s*\}", info)
             if braced and braced[1] in CELLS:
                 cell, cell_start = braced[1], number
@@ -269,6 +384,22 @@ def validate_body(body: str, assets: dict[str, bytes] | None = None) -> list[Iss
                     )
                 )
             continue
+        if not in_math:
+            issues += opening_issues(number, line.strip(), heading_seen, hooks)
+            heading_seen = heading_seen or line.startswith("## ") or line.strip() == "##"
+            hooks += bool(is_hook(line.strip()))
+            for _, _, _, target in images(strip_inline(line)):
+                if not target.startswith("https://"):
+                    continue
+                web += 1
+                if web_images is not None and target not in web_images:
+                    issues.append(
+                        Issue(
+                            number,
+                            f"image {target!r} was not checked: call check_image for it and use "
+                            "the Markdown it returns",
+                        )
+                    )
         if in_math or "$$" in line.replace("\\$", ""):
             # Display math may span lines; braces in it ({t=1}) are TeX, not attributes.
             visible, in_math = outside_math(line, in_math)
@@ -283,10 +414,28 @@ def validate_body(body: str, assets: dict[str, bytes] | None = None) -> list[Iss
         issues.append(Issue(0, f"at most {MAX_DIAGRAMS} diagrams per note"))
     if ojs > MAX_OJS_CELLS:
         issues.append(Issue(0, f"at most {MAX_OJS_CELLS} {{ojs}} cells per note"))
+    if web > MAX_WEB_IMAGES:
+        issues.append(Issue(0, f"at most {MAX_WEB_IMAGES} images from the web per note"))
 
     for name, data in assets.items():
         issues += [Issue(0, f"{name}: {problem}") for problem in svg_issues(name, data)]
     return issues
+
+
+def is_hook(stripped: str) -> bool:
+    """A div fence that opens the `.hook` (the page's motivation)."""
+    return stripped.startswith(":::") and re.search(r"\.hook\b", stripped) is not None
+
+
+def opening_issues(number: int, stripped: str, heading_seen: bool, hooks: int) -> list[Issue]:
+    """The hook opens the page: one per note, before the first `##` section."""
+    if not is_hook(stripped):
+        return []
+    if hooks:
+        return [Issue(number, "only one .hook per note")]
+    if heading_seen:
+        return [Issue(number, "the .hook opens the page: put it before the first ## heading")]
+    return []
 
 
 def outside_math(line: str, in_math: bool) -> tuple[str, bool]:
@@ -304,7 +453,7 @@ def outside_math(line: str, in_math: bool) -> tuple[str, bool]:
 
 def line_issues(number: int, line: str, assets: dict[str, bytes]) -> list[Issue]:
     issues = []
-    if re.fullmatch(r"\s*(?:---|\.\.\.)\s*", line):
+    if line.strip() in ("---", "..."):
         return [Issue(number, "metadata blocks are not allowed; use *** for a horizontal rule")]
     if re.search(r"\{\{\s*[<%]", line):
         issues.append(Issue(number, "shortcodes ({{< >}}) are not allowed"))
@@ -314,14 +463,17 @@ def line_issues(number: int, line: str, assets: dict[str, bytes]) -> list[Issue]
         issues.append(Issue(number, "this TeX command is not allowed"))
 
     prose = strip_inline(line)
-    div = re.match(r"^\s*:{3,}\s*(.*?)\s*:*\s*$", prose)
-    if div and div[1]:
-        inner = div[1][1:-1] if div[1].startswith("{") and div[1].endswith("}") else div[1]
+    # A div fence (::: {.callout-note}, ::: aside), read with str methods: the regex for it,
+    # ^\s*:{3,}\s*(.*?)\s*:*\s*$, backtracks polynomially on long runs of spaces.
+    fenced = prose.strip()
+    div = fenced.lstrip(":").strip().rstrip(":").strip() if fenced.startswith(":::") else ""
+    if div:
+        inner = div[1:-1] if div.startswith("{") and div.endswith("}") else div
         attrs = parse_attributes(
             inner if inner.startswith(("{", ".", "#")) or "=" in inner else "." + inner
         )
         if attrs is None:
-            issues.append(Issue(number, f"cannot read the div attributes {div[1]!r}"))
+            issues.append(Issue(number, f"cannot read the div attributes {div!r}"))
         else:
             issues += attribute_issues(number, attrs)
         return issues
@@ -334,18 +486,41 @@ def line_issues(number: int, line: str, assets: dict[str, bytes]) -> list[Issue]
         ):
             issues += attribute_issues(number, attrs)
 
-    for path in re.findall(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)", prose):
-        if not ASSET_NAME.fullmatch(path):
-            issues.append(Issue(number, f"image {path!r}: use your own assets/<name>.svg files"))
+    # The scanned character classes leave out the opening character ('[', '(' and '<'), so a
+    # failed match never rescans text where the next attempt starts: linear, not quadratic.
+    found = images(prose)
+    for _, _, caption, path in found:
+        if path.startswith("https://"):
+            if not re.search(r"\]\(\s*<?https?://", caption):
+                issues.append(
+                    Issue(
+                        number,
+                        f"image {path!r}: add its source to the caption, as "
+                        "'Source: [page title](https://page-url)'",
+                    )
+                )
+        elif not ASSET_NAME.fullmatch(path):
+            issues.append(
+                Issue(
+                    number,
+                    f"image {path!r}: use your own assets/<name>.svg files, or an https:// image "
+                    "with its source in the caption",
+                )
+            )
         elif path not in assets:
             issues.append(Issue(number, f"image {path!r} does not exist in /notes/assets/"))
-    without_images = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", prose)
+    # Links outside images and inside their captions: drop each image's own target.
+    parts, pos = [], 0
+    for start, end, caption, _ in found:
+        parts += [prose[pos:start], " ", caption, " "]
+        pos = end
+    without_images = "".join([*parts, prose[pos:]])
     for target in re.findall(r"\]\(\s*<?([^)\s>]+)", without_images):
         if not re.match(r"(?:https?://|mailto:|#)", target):
             issues.append(Issue(number, f"link {target!r}: only http(s), mailto and # links"))
 
-    without_autolinks = re.sub(r"<(?:https?|mailto):[^>\s]+>", " ", prose)
-    for tag, attrs in re.findall(r"</?([A-Za-z][\w-]*)([^>]*)>", without_autolinks):
+    without_autolinks = re.sub(r"<(?:https?|mailto):[^<>\s]+>", " ", prose)
+    for tag, attrs in html_tags(without_autolinks):
         if tag.lower() not in INLINE_HTML or attrs.strip(" /"):
             issues.append(Issue(number, f"HTML <{tag}> is not allowed; use Markdown"))
     if re.search(r"<[!?]", without_autolinks):
@@ -384,6 +559,15 @@ def svg_issues(name: str, data: bytes) -> list[str]:
                 problems.append(f"<{tag} {attr}> event handlers are not allowed")
             elif attr == "href" and not value.startswith("#"):
                 problems.append(f"<{tag} href> may only point inside the SVG (#id)")
+            elif (
+                tag in ANIMATIONS
+                and attr == "attributeName"
+                and (
+                    value.strip().lower().rsplit(":", 1)[-1] == "href"
+                    or value.strip().lower().startswith("on")
+                )
+            ):
+                problems.append(f"<{tag}> may not animate {value}")
             elif BAD_SCHEME.search(flat) or re.search(r"url\((?!['\"]?#)", flat, re.I):
                 problems.append(f"<{tag} {attr}> has an external or active value")
         if tag == "style" and element.text:
@@ -394,4 +578,6 @@ def svg_issues(name: str, data: bytes) -> list[str]:
                 or "expression(" in css
             ):
                 problems.append("<style> may not import or load anything")
+    if not problems:
+        problems += overlap_issues(root)
     return problems

@@ -18,6 +18,11 @@ Read this page, then the area doc for what you are changing.
 
 <!-- Newest first, at most 20. One line each: - YYYY-MM-DD [#PR title](changes/file.md): summary -->
 
+- 2026-11-24 [#70 Show the note taker's progress as a trace of steps and actions](changes/2026-11-24-pr70.md): actions record their `todo`; shared `AgentTrace` (shadcn `trace` + `collapsible`) groups them under steps in the course console and lecture notes page.
+- 2026-11-23 [#69 Refuse SVG figures whose labels are crossed by lines](changes/2026-11-23-pr69.md): `render_notes` estimates each `<text>` box and refuses figures where a line, curve, shape edge, moving element or other label crosses it (`svg_layout.py`).
+- 2026-11-23 [#68 Open lecture notes with a motivating hook](changes/2026-11-23-pr68.md): a motivation scout subagent (the only one with web tools) drafts an opening `.hook` (checked image, animated SVG or try-it-first); stored in `lecture_note_runs.motivation`; SVG labels stay clear of the data.
+- 2026-11-23 [#67 Make the note checker's line checks linear-time (CodeQL ReDoS)](changes/2026-11-23-pr67.md): lecture-notes validator drops backtracking regexes (code spans, fences, images, autolinks, HTML tags); the line cap stays as a second guard.
+- 2026-11-20 [#64 Edit lecture notes like a Notion page; one current version per lecture](changes/2026-11-20-pr64.md): Plate notes editor; a save renders without the model as an `edit` run; a lecture's links always show its newest published notes; `api.md`, `data.md`, `web.md` written.
 - 2026-11-19 [#61 web: override katex and minimatch to patched versions](changes/2026-11-19-pr61.md): npm `overrides` in `web/package.json` pull `katex` to the root 0.19.1 and `minimatch` to `^11.0.9` under `@ts-morph/common`; closes two Dependabot alerts.
 - 2026-11-19 [#57 Fix the deploy: Python 3.12 image, OIDC subject for the deploy role](changes/2026-11-19-pr57.md): API image back to `python:3.12-slim` (Dependabot ignores Python minor/major); deploy role trusts the immutable OIDC subject and the `Production` environment.
 - 2026-11-18 [#54 Langfuse: cost, per-user and per-session tracking](changes/2026-11-18-pr54.md): every model call is traced with the teacher as user, the course as session, and usage and OpenRouter cost; PDFs are never sent; `worker.md` written.

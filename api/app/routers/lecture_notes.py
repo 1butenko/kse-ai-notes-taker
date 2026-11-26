@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app import db, storage, team
+from app import auth, db, storage, team
 from app.auth import CurrentPrincipal, actor, owned_course, owned_run
 from app.config import Settings, get_settings
 from app.course import load_info
@@ -27,7 +27,7 @@ from app.plan import UnknownSession, aligned, scope_to_session, session_fingerpr
 from app.routers.agent import AgentAction, Todo, ensure_course, storage_errors
 from app.routers.plans import SESSION_ID, course_dir
 from app.worker_client import WorkerClient, get_worker_client
-from app.worker_contract import LectureNotesRequest
+from app.worker_contract import LectureNotesEditRequest, LectureNotesRequest
 
 router = APIRouter(prefix="/lecture-notes", tags=["lecture-notes"])
 # Served without sign-in: see app/main.py.
@@ -51,6 +51,12 @@ class LectureNotesRun(BaseModel):
     prompt_versions: dict[str, Any] = {}
     langfuse_trace_id: str | None = None
     renders: int = 0
+    # `agent`: written by the model; `edit`: a teacher's edit of the `edited_from` run.
+    kind: str = "agent"
+    edited_from: UUID | None = None
+    edited_by: UUID | None = None
+    # The motivation scout's decision on the opening hook (needed, kind, device, reason, ...).
+    motivation: dict[str, Any] | None = None
     # The lecture's readings changed since this run read them.
     readings_changed: bool = False
     started_at: datetime
@@ -155,6 +161,18 @@ def list_lecture_notes(
     return [with_changes(row, fingerprint) for row in rows]
 
 
+def current_run(run_id: UUID) -> dict[str, Any] | None:
+    """The newest published run of `run_id`'s lecture: what any of its runs' links show."""
+    columns = ", ".join("r." + c.strip() for c in runs.RUN_COLUMNS.split(","))
+    with db.transaction() as conn:
+        return conn.execute(
+            f"SELECT {columns} FROM lecture_note_runs r JOIN lecture_note_runs l"
+            " ON l.course_id = r.course_id AND l.session_id = r.session_id"
+            " WHERE l.id = %s AND r.status = 'succeeded' ORDER BY r.started_at DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+
+
 def list_runs(course: str, session_id: str) -> list[dict[str, Any]]:
     columns = ", ".join("r." + c.strip() for c in runs.RUN_COLUMNS.split(","))
     with db.transaction() as conn:
@@ -256,6 +274,116 @@ async def cancel_lecture_notes(
     return with_changes(row, None)
 
 
+class Reference(BaseModel):
+    id: str  # the citation key: [@r1, p. 34]
+    title: str
+
+
+class LectureNotesSource(BaseModel):
+    """What the editor opens: a published version's Quarto body and what it may refer to."""
+
+    run_id: UUID
+    body: str
+    assets: list[str]  # assets/<name>.svg, served under the run's /site/
+    references: list[Reference]
+
+
+def published_run(run_id: UUID) -> dict[str, Any]:
+    row = get_run(run_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    if row["status"] != "succeeded" or not row["s3_prefix"]:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only a published version can be edited")
+    return row
+
+
+@router.get(
+    "/runs/{run_id}/source", response_model=LectureNotesSource, dependencies=[Depends(owned_run)]
+)
+def lecture_notes_source(run_id: UUID) -> dict[str, Any]:
+    from app.note_taker.lecture_notes.rerender import front_references, read_published
+
+    with storage_errors():
+        row = published_run(run_id)
+        old = read_published(row["s3_prefix"], row["files"])
+    return {
+        "run_id": run_id,
+        "body": old.body,
+        "assets": sorted(old.assets),
+        "references": [
+            {"id": item["id"], "title": item.get("title", item["id"])}
+            for item in front_references(old.front) or []
+        ],
+    }
+
+
+class LectureNotesEdit(BaseModel):
+    body: str
+    # New or changed SVG figures, by name (assets/<name>.svg); the others are the version's.
+    assets: dict[str, str] = {}
+
+
+def begin_edit(parent: dict[str, Any], user_id: UUID | None) -> dict[str, Any]:
+    with db.transaction() as conn:
+        return runs.start_edit(conn, parent, user_id)
+
+
+@router.post(
+    "/runs/{run_id}/edits",
+    response_model=LectureNotesRun,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(owned_run)],
+)
+async def edit_lecture_notes(
+    run_id: UUID,
+    edit: LectureNotesEdit,
+    principal: CurrentPrincipal,
+    settings: Annotated[Settings, Depends(get_settings)],
+    worker: Annotated[WorkerClient, Depends(get_worker_client)],
+) -> dict[str, Any]:
+    """Save a teacher's edit of a published version as a new version: checked here, rendered by
+    the worker without the model; poll the returned run. 422 lists what the checker refused."""
+    from app.note_taker.lecture_notes.rerender import read_published
+    from app.note_taker.lecture_notes.runs import edit_assets
+    from app.note_taker.lecture_notes.validate import validate_body
+
+    with storage_errors():
+        parent = await asyncio.to_thread(published_run, run_id)
+        course = await asyncio.to_thread(auth.run_course, run_id)
+    if course is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    _, _, _, fingerprint = await asyncio.to_thread(lecture, settings, course, parent["session_id"])
+    if parent["readings_fingerprint"] and parent["readings_fingerprint"] != fingerprint:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The lecture's readings changed since this version, so its citations would point at "
+            "other readings. Write the notes again instead.",
+        )
+    with storage_errors():
+        old = await asyncio.to_thread(read_published, parent["s3_prefix"], parent["files"])
+    changed = {name: svg.encode("utf-8") for name, svg in edit.assets.items()}
+    issues = validate_body(edit.body, edit_assets(edit.body, old.assets, changed))
+    if issues:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            [{"line": issue.line, "message": issue.message} for issue in issues[:40]],
+        )
+    user_id = principal.user_id if principal.kind == "user" else None
+    with storage_errors():
+        run = await asyncio.to_thread(begin_edit, parent, user_id)
+    request = LectureNotesEditRequest(
+        run_id=run["id"], parent_id=run_id, course=course, body=edit.body, assets=edit.assets
+    )
+    try:
+        await worker.edit_lecture_notes(request)
+    except HTTPException as error:
+        await asyncio.to_thread(
+            runs.finish_run, run["id"], "failed", error=f"Worker: {error.detail}"
+        )
+        raise
+    return with_changes(run, None)
+
+
 def site_policy(base: str) -> str:
     return (
         "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; default-src 'none'; "
@@ -263,7 +391,9 @@ def site_policy(base: str) -> str:
         # opaque origin, so it reaches no cookies or storage of the app.
         f"script-src 'unsafe-inline' 'unsafe-eval' {base} {CDN}; "
         f"style-src 'unsafe-inline' {base} {CDN}; "
-        f"img-src data: blob: {base}; font-src data: {base} {CDN}; "
+        # Images in the note's hook are hot-linked from the web (lecture_notes/web.py); the
+        # page sends no referrer, so their hosts do not see which course links them.
+        f"img-src data: blob: {base} https:; font-src data: {base} {CDN}; "
         f"connect-src {base} {CDN}; worker-src blob:; "
         "base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'"
     )
@@ -273,9 +403,10 @@ def site_policy(base: str) -> str:
 def lecture_notes_site(
     run_id: UUID, path: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> StreamingResponse:
-    """One file of a published page: only the files the run published."""
+    """One file of a lecture's notes: the newest published ones, whichever of the lecture's runs
+    the link names, so a shared link shows later edits. Only files that run published."""
     with storage_errors():
-        row = get_run(run_id)
+        row = current_run(run_id)
     path = path or "index.html"
     if row is None or row["status"] != "succeeded" or path not in (row["files"] or []):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
@@ -292,7 +423,13 @@ def lecture_notes_site(
         "X-Book-Published": "1",
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
-        "Cache-Control": "private, max-age=31536000, immutable",
+        # Quarto's libraries carry a content hash in their names. The page, its CSS, fonts and
+        # assets keep theirs when a run is rendered again (rerender.py), so they are checked.
+        "Cache-Control": (
+            "private, max-age=31536000, immutable"
+            if path.startswith("index_files/")
+            else "private, no-cache"
+        ),
     }
     media = obj.get("ContentType") or "application/octet-stream"
     if path.endswith(".html"):

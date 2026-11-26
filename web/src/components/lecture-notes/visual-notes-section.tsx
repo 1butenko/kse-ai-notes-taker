@@ -3,14 +3,13 @@
 import Link from "next/link";
 import {
   CircleAlertIcon,
-  CircleCheckIcon,
-  CircleDashedIcon,
   CircleStopIcon,
   InfoIcon,
   PresentationIcon,
   SparklesIcon,
 } from "lucide-react";
 
+import { AgentTrace } from "@/components/agent/agent-trace";
 import { useLectureNotes } from "@/components/lecture-notes/use-lecture-notes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -19,15 +18,13 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Item, ItemContent, ItemGroup, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { visualNotesPath, type AgentTodo, type LectureNotesRun } from "@/lib/api";
+import { visualNotesPath } from "@/lib/api";
 
 function when(iso: string) {
   return new Date(iso).toLocaleString(undefined, {
@@ -36,38 +33,6 @@ function when(iso: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function TodoIcon({ status }: { status: AgentTodo["status"] }) {
-  if (status === "completed") return <CircleCheckIcon />;
-  if (status === "in_progress") return <Spinner />;
-  return <CircleDashedIcon />;
-}
-
-/** What the agent is doing: its current step and its todo list. */
-function RunActivity({ run }: { run: LectureNotesRun }) {
-  return (
-    <div className="flex flex-col gap-3">
-      <p className="flex items-center gap-2 text-sm" aria-live="polite">
-        <Spinner />
-        {run.step ?? "Starting"}
-      </p>
-      {run.todos.length > 0 && (
-        <ItemGroup className="gap-1">
-          {run.todos.map((todo, index) => (
-            <Item key={index} size="sm" variant="muted">
-              <ItemMedia variant="icon">
-                <TodoIcon status={todo.status} />
-              </ItemMedia>
-              <ItemContent>
-                <ItemTitle className="font-normal">{todo.content}</ItemTitle>
-              </ItemContent>
-            </Item>
-          ))}
-        </ItemGroup>
-      )}
-    </div>
-  );
 }
 
 type VisualNotesSectionProps = {
@@ -94,10 +59,6 @@ export function VisualNotesSection({ course, sessionId, hasReadings }: VisualNot
           <PresentationIcon aria-hidden="true" />
           Notes
         </CardTitle>
-        <CardDescription>
-          A study page with diagrams, interactive figures, worked examples and self-checks,
-          written by the AI from this lecture&apos;s readings.
-        </CardDescription>
         {current && (
           <CardAction>
             <Badge variant={current.readings_changed ? "outline" : "secondary"}>
@@ -118,7 +79,7 @@ export function VisualNotesSection({ course, sessionId, hasReadings }: VisualNot
           </Alert>
         )}
 
-        {active && <RunActivity run={active} />}
+        {active && <AgentTrace run={active} />}
 
         {finishedBadly && (
           <Alert variant={finishedBadly.status === "cancelled" ? "default" : "destructive"}>
@@ -132,6 +93,9 @@ export function VisualNotesSection({ course, sessionId, hasReadings }: VisualNot
             </AlertDescription>
           </Alert>
         )}
+
+        {/* Where the failed or stopped run got to. */}
+        {finishedBadly && <AgentTrace run={finishedBadly} />}
 
         {current && !active && (
           <p className="text-sm text-muted-foreground">
@@ -154,7 +118,7 @@ export function VisualNotesSection({ course, sessionId, hasReadings }: VisualNot
       <CardFooter className="flex flex-wrap gap-2">
         {current && (
           <Link
-            href={visualNotesPath(course, sessionId, current.id)}
+            href={visualNotesPath(course, sessionId)}
             className={buttonVariants()}
           >
             <PresentationIcon data-icon="inline-start" />

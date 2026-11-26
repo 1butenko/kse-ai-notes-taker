@@ -100,6 +100,15 @@ CREATE TABLE IF NOT EXISTS lecture_note_runs (
 CREATE INDEX IF NOT EXISTS lecture_note_runs_session_idx
     ON lecture_note_runs (course_id, session_id, started_at DESC);
 
+-- A teacher's edit of a published version (runs.execute_edit) is a run of its own: `agent`
+-- runs are written by the model, `edit` runs render the body the editor saved.
+ALTER TABLE lecture_note_runs ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'agent';
+ALTER TABLE lecture_note_runs
+    ADD COLUMN IF NOT EXISTS edited_from uuid REFERENCES lecture_note_runs (id) ON DELETE SET NULL;
+-- The motivation scout's decision on the note's opening hook (lecture_notes/motivation.py):
+-- {"needed", "kind", "device", "reason", "candidates", "sources"}; null for edits and older runs.
+ALTER TABLE lecture_note_runs ADD COLUMN IF NOT EXISTS motivation jsonb;
+
 -- Teachers, signed in with their KSE Google account (the web's Auth.js; app/routers/auth.py).
 CREATE TABLE IF NOT EXISTS users (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -116,6 +125,9 @@ CREATE TABLE IF NOT EXISTS users (
 -- course); still written, so older code keeps working after a rollback.
 ALTER TABLE courses ADD COLUMN IF NOT EXISTS owner_id uuid REFERENCES users (id);
 CREATE INDEX IF NOT EXISTS courses_owner_idx ON courses (owner_id);
+
+-- Who saved an `edit` lecture-notes run.
+ALTER TABLE lecture_note_runs ADD COLUMN IF NOT EXISTS edited_by uuid REFERENCES users (id);
 
 -- Who may work on a course (app/auth.py, app/team.py): one lecturer and any number of TAs.
 -- By email, so a TA can be added before their first sign-in; emails are stored lowercase.

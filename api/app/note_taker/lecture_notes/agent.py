@@ -1,7 +1,8 @@
 """The lecture-notes writer: a deep agent for one lecture.
 
 Built-ins: `write_todos`, the filesystem tools over a `StateBackend` and `task`. Its own tool is
-`render_notes`. Its subagent is the `reviewer`. Its skills (Quarto how-tos) are files under
+`render_notes`. Its subagents are `motivation` (the scout that drafts the opening hook, with the
+web tools when `web` is given) and the `reviewer`. Its skills (Quarto how-tos) are files under
 `/skills/`, listed in its system prompt by a `SkillsMiddleware` whose template is a Langfuse
 prompt. The lecture's brief and readings are files under `/lecture/` and `/readings/`, given to
 `invoke` with the skills; the agent may not overwrite any of them.
@@ -20,6 +21,7 @@ from langchain_core.language_models import BaseChatModel
 
 from app.note_taker.lecture_notes import readings
 from app.note_taker.lecture_notes.build import Runner, default_runner
+from app.note_taker.lecture_notes.motivation import build_motivation
 from app.note_taker.lecture_notes.readings import LectureBundle
 from app.note_taker.lecture_notes.reviewer import build_reviewer
 from app.note_taker.lecture_notes.skill_library import (
@@ -32,6 +34,7 @@ from app.note_taker.lecture_notes.skill_library import (
 )
 from app.note_taker.lecture_notes.tools import RenderState, RunCancelled, make_render_tool
 from app.note_taker.lecture_notes.tracing import link_prompt
+from app.note_taker.lecture_notes.web import WebAccess, make_web_tools
 from app.note_taker.progress import Progress
 from app.prompts import get_prompt_ref
 
@@ -73,11 +76,14 @@ def build_lecture_notes_agent(
     cancelled: threading.Event | None = None,
     max_renders: int = 12,
     skills: list[Skill] | None = None,
+    web: WebAccess | None = None,
 ) -> LectureNotesAgent:
-    """Build the writer for one lecture. The last good render is kept in `output`."""
+    """Build the writer for one lecture. The last good render is kept in `output`. Without
+    `web` the motivation scout works offline (no search, no web images)."""
     backend = StateBackend()
     writer, writer_ref = get_prompt_ref(PROMPT + "writer")
     reviewer, reviewer_ref = get_prompt_ref(PROMPT + "reviewer")
+    motivation, motivation_ref = get_prompt_ref(PROMPT + "motivation")
     skills_prompt, skills_ref = get_prompt_ref(PROMPT + "skills-system")
     request, request_ref = get_prompt_ref(
         PROMPT + "request",
@@ -99,6 +105,8 @@ def build_lecture_notes_agent(
         cancelled=cancelled,
     )
     reviewer_spec = build_reviewer(reviewer, reviewer_ref)
+    web_tools = make_web_tools(state, web, progress=progress, cancelled=cancelled) if web else []
+    motivation_spec = build_motivation(motivation, web_tools, motivation_ref, PROTECTED)
     if reviewer_model is not None:
         reviewer_spec["model"] = reviewer_model
     if model is None:
@@ -111,7 +119,7 @@ def build_lecture_notes_agent(
         tools=[render_notes],
         system_prompt=writer,
         backend=backend,
-        subagents=[reviewer_spec],
+        subagents=[motivation_spec, reviewer_spec],
         middleware=[
             TodoListMiddleware(),
             SkillsMiddleware(
@@ -128,6 +136,7 @@ def build_lecture_notes_agent(
         for name, ref in (
             ("writer", writer_ref),
             ("reviewer", reviewer_ref),
+            ("motivation", motivation_ref),
             ("skills-system", skills_ref),
             ("request", request_ref),
         )

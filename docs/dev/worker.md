@@ -25,7 +25,8 @@ The worker is a second FastAPI service (`api/app/worker`) and the only place tha
 | `POST /map` | `run_mapping`: books to materials, ranges, page offsets | `map-materials` → `match-books`, `read-book-toc`, `locate-reading-pages`, `read-page-offset` |
 | `POST /books/transcribe` (202) | Background vision transcription of garbled pages | `transcribe-pages` → `transcribe-page` |
 | `POST /note-taker/runs` (202) | Background `sync.execute_run` (orchestrator + Moodle subagent); result goes to `sync_runs` | `prepare-course` |
-| `POST /lecture-notes/runs` (202) | Background `runs.execute_run`; 429 above `lecture_notes_concurrency`; result goes to `lecture_note_runs` | `lecture-notes` (writer + reviewer) |
+| `POST /lecture-notes/runs` (202) | Background `runs.execute_run`; 429 above `lecture_notes_concurrency`; result goes to `lecture_note_runs` | `lecture-notes` (writer, reviewer, motivation scout) |
+| `POST /lecture-notes/edits` (202) | Background `runs.execute_edit`: renders a teacher's edit of a succeeded run (`LectureNotesEditRequest`: `run_id`, `parent_id`, `course`, `body`, `assets`) and publishes it, without the model; the outcome goes to the run's row | none |
 | `POST /lecture-notes/cancel` | Sets the run's cancel event | none |
 | `GET /health` | `{status, environment}` | none |
 
@@ -34,7 +35,7 @@ Endpoints return 503 when `OPENROUTER_API_KEY` is missing, and 400 for a bad cou
 ## Interfaces
 
 - **Contract:** every request that calls a model extends `worker_contract.Traced`, which has an optional `user_id`. `get_worker_client` depends on the signed-in principal, and `WorkerClient.call` fills `user_id` with the principal's `id` when it is empty. No route had to change.
-- **Env vars:** see `WorkerSettings`: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `NOTES_VISION_MODEL`, `NOTE_TAKER_MODEL`, `LECTURE_NOTES_MODEL`, `LECTURE_NOTES_REVIEWER_MODEL`, `LECTURE_NOTES_*` limits, `QUARTO_*`, `API_URL`, `API_AUTH_SECRET`, `UPLOADS_DIR`, `ENVIRONMENT`.
+- **Env vars:** see `WorkerSettings`: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `NOTES_VISION_MODEL`, `NOTE_TAKER_MODEL`, `LECTURE_NOTES_MODEL`, `LECTURE_NOTES_REVIEWER_MODEL`, `LECTURE_NOTES_*` limits, `LECTURE_NOTES_WEB`, `LECTURE_NOTES_SEARCH_MODEL`, `LECTURE_NOTES_MAX_SEARCHES`, `LECTURE_NOTES_MAX_IMAGES` (the motivation scout's web search and images; only that subagent has web tools, in [web.py](../../api/app/note_taker/lecture_notes/web.py)), `QUARTO_*`, `API_URL`, `API_AUTH_SECRET`, `UPLOADS_DIR`, `ENVIRONMENT`.
 
 ## Tracing
 

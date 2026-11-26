@@ -46,10 +46,13 @@ export type Section = {
 export class ApiError extends Error {
   /** The HTTP status, or 0 when the server sent none. */
   readonly status: number;
+  /** The response's `detail` when it isn't a message, e.g. a list of problems. */
+  readonly detail: unknown;
 
-  constructor(message: string, status = 0) {
+  constructor(message: string, status = 0, detail?: unknown) {
     super(message);
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -72,7 +75,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const detail = typeof body?.detail === "string" ? body.detail : `Request failed (${res.status})`;
-    throw new ApiError(detail, res.status);
+    throw new ApiError(detail, res.status, body?.detail);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -482,6 +485,8 @@ export type AgentAction = {
   text: string;
   status: "running" | "done" | "failed";
   detail: string;
+  /** The todo in progress when the action started; missing on older runs. */
+  todo?: string | null;
 };
 
 export type AgentRun = {
@@ -534,6 +539,9 @@ export type LectureNotesRun = {
   renders: number;
   /** The lecture's readings changed since this run read them. */
   readings_changed: boolean;
+  /** `agent`: written by the model; `edit`: a teacher's edit of the `edited_from` run. */
+  kind: "agent" | "edit";
+  edited_from: string | null;
   started_at: string;
   finished_at: string | null;
 };
@@ -567,14 +575,56 @@ export function cancelLectureNotes(run: string): Promise<LectureNotesRun> {
   return request(`/lecture-notes/runs/${encodeURIComponent(run)}/cancel`, { method: "POST" });
 }
 
-/** The published page, for a sandboxed iframe or a new tab. */
+/** The published page, for a sandboxed iframe or a new tab. The page used to be served as
+ * immutable for a year; a re-render replaces it, so `?v=2` is a new address that browsers holding
+ * the old copy fetch afresh. The API ignores the query and now serves the page `no-cache`. */
 export function lectureNotesSiteUrl(run: string, file = "index.html"): string {
-  return `${PUBLIC_API_URL}/lecture-notes/runs/${encodeURIComponent(run)}/site/${file}`;
+  const version = file === "index.html" ? "?v=2" : "";
+  return `${PUBLIC_API_URL}/lecture-notes/runs/${encodeURIComponent(run)}/site/${file}${version}`;
 }
 
-export function visualNotesPath(course: string, sessionId: string, run?: string): string {
+/** A published version's Quarto body, for the editor. */
+export type LectureNotesSource = {
+  run_id: string;
+  body: string;
+  /** Its SVG figures, `assets/<name>.svg`, served next to its page. */
+  assets: string[];
+  /** Citation keys (`r1`) and the readings they stand for. */
+  references: { id: string; title: string }[];
+};
+
+export function getLectureNotesSource(run: string): Promise<LectureNotesSource> {
+  return request(`/lecture-notes/runs/${encodeURIComponent(run)}/source`, { cache: "no-store" });
+}
+
+/** One problem the note checker found in an edit; `line` is 0 for the whole note. */
+export type NoteIssue = { line: number; message: string };
+
+/** Save an edit of the published notes; poll the returned run, which replaces them once it is
+ * rendered (the server keeps each save as a run of its own). A 422
+ * `ApiError` carries the checker's `NoteIssue[]` as its `detail`. */
+export function saveLectureNotesEdit(
+  run: string,
+  body: string,
+  assets: Record<string, string> = {},
+): Promise<LectureNotesRun> {
+  return request(`/lecture-notes/runs/${encodeURIComponent(run)}/edits`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body, assets }),
+  });
+}
+
+/** The editor of a lecture's notes: it opens the newest published ones. */
+export function editNotesPath(course: string, sessionId: string): string {
+  return `${lecturePath(course, sessionId)}/edit`;
+}
+
+/** A lecture's notes: the newest published ones. With `saving`, the run of a save being
+ * rendered, shown until it is published. */
+export function visualNotesPath(course: string, sessionId: string, saving?: string): string {
   const path = `${lecturePath(course, sessionId)}/visual`;
-  return run ? `${path}/${encodeURIComponent(run)}` : path;
+  return saving ? `${path}/${encodeURIComponent(saving)}` : path;
 }
 
 /** Starts the AI Note Taker for a course created from Moodle; poll `getAgentCourse`. */

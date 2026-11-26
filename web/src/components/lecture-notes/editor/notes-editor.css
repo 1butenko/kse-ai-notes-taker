@@ -1,0 +1,337 @@
+/* The editor's page in the published notes' look: the rules of the Quarto theme
+   (api/app/note_taker/lecture_notes/templates/lecture-notes.css and kse-theme.scss) applied to
+   the editor's own markup, scoped to `.kse-notes`. Keep the two in step. */
+
+.kse-notes {
+  --notes-radius: 12px;
+  counter-reset: section def thm lem cor prp exm exr cnj rem;
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+
+.kse-notes ::selection {
+  background: var(--color-signal-wash);
+}
+
+/* Type: Bootstrap's spacing, the theme's weights */
+
+.kse-notes .kse-p {
+  margin: 0 0 1rem;
+}
+
+/* A list item is a paragraph too; the items of a list sit close together */
+.kse-notes .kse-p:has(> :is(ul, ol)) {
+  margin-bottom: 0.25rem;
+}
+
+
+.kse-notes :is(h1, h2, h3, h4, h5, h6) {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-body);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  text-wrap: pretty;
+}
+
+.kse-notes h1 { margin-top: 2rem; font-size: 2rem; }
+.kse-notes h2 { margin-top: 2.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--color-rule); font-size: 1.6rem; }
+.kse-notes h3 { margin-top: 1.75rem; font-size: 1.35rem; }
+.kse-notes h4 { margin-top: 1.5rem; font-size: 1.15rem; }
+.kse-notes :is(h5, h6) { margin-top: 1.25rem; font-size: 1.05rem; }
+
+/* The first block of the page needs no gap above it */
+.kse-notes > :first-child :is(h1, h2, h3) {
+  margin-top: 0.5rem;
+}
+
+/* Section numbers, as Quarto draws them on top-level headings: 1, 1.1, 1.1.1. A top-level
+   block sits in its gutter wrapper, so the lower counters restart on the wrapper. */
+.kse-notes :is(h2, h3, h4).kse-section::before {
+  color: var(--color-ink-3);
+}
+
+.kse-notes h2.kse-section:not(.unnumbered) { counter-increment: section; }
+.kse-notes h3.kse-section:not(.unnumbered) { counter-increment: subsection; }
+.kse-notes h4.kse-section:not(.unnumbered) { counter-increment: subsubsection; }
+
+.kse-notes > div:has(> div > h2.kse-section:not(.unnumbered)) {
+  counter-reset: subsection subsubsection;
+}
+
+.kse-notes > div:has(> div > h3.kse-section:not(.unnumbered)) {
+  counter-reset: subsubsection;
+}
+
+.kse-notes h2.kse-section:not(.unnumbered)::before { content: counter(section) " "; }
+.kse-notes h3.kse-section:not(.unnumbered)::before { content: counter(section) "." counter(subsection) " "; }
+.kse-notes h4.kse-section:not(.unnumbered)::before {
+  content: counter(section) "." counter(subsection) "." counter(subsubsection) " ";
+}
+
+.kse-notes a {
+  color: var(--color-signal);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.kse-notes blockquote {
+  margin: 0 0 1rem;
+  padding: 0.25rem 1rem;
+  border-left: 3px solid var(--color-rule);
+  color: var(--color-ink-3);
+}
+
+.kse-notes hr {
+  margin: 1.5rem 0;
+  border: 0;
+  border-top: 1px solid var(--color-rule);
+}
+
+.kse-notes ul,
+.kse-notes ol {
+  margin: 0 0 0.25rem;
+  padding-left: 0;
+}
+
+.kse-notes code:not(pre code) {
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  background: var(--color-paper-2);
+  color: var(--color-ink);
+  font-size: 0.875em;
+}
+
+.kse-notes pre {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--notes-radius);
+  background: var(--color-paper-2);
+  font-family: var(--font-outlier);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.kse-notes table {
+  width: 100%;
+  margin: 0 0 1rem;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.kse-notes :is(td, th) {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--color-rule);
+  text-align: left;
+  vertical-align: top;
+}
+
+.kse-notes th {
+  color: var(--color-ink-3);
+  font-weight: 500;
+}
+
+.kse-notes :is(td, th) > :last-child {
+  margin-bottom: 0;
+}
+
+.kse-notes .kse-caption {
+  color: var(--color-ink-3);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+/* Callouts: the shadcn Card with the kind as an icon in a tinted square */
+
+.kse-notes .kse-callout {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border-radius: calc(var(--notes-radius) * 1.4);
+  background: var(--color-paper);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-ink) 10%, transparent);
+}
+
+.kse-notes .kse-callout-note { --tone: var(--color-notice); }
+.kse-notes .kse-callout-tip { --tone: var(--color-positive); }
+.kse-notes .kse-callout-important,
+.kse-notes .kse-callout.learning-goals { --tone: var(--color-signal); }
+.kse-notes .kse-callout-warning { --tone: var(--color-danger); }
+.kse-notes .kse-callout-caution { --tone: var(--color-caution); }
+
+.kse-notes .kse-callout-icon {
+  color: var(--tone);
+  background: color-mix(in oklab, var(--tone) 12%, transparent);
+}
+
+.kse-notes .kse-callout-icon:hover {
+  background: color-mix(in oklab, var(--tone) 20%, transparent);
+}
+
+.kse-notes .kse-callout-body {
+  margin-top: 0.75rem;
+  font-size: 0.95rem;
+}
+
+.kse-notes .kse-callout-body > :last-child > :last-child,
+.kse-notes .kse-callout-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* Learning goals: the goals as the rows of a bordered table, a check per row */
+
+.kse-notes .learning-goals .kse-callout-body > .kse-p:not(:has(> :is(ul, ol))) {
+  padding-left: 2.75rem;
+  color: var(--color-ink-3);
+  font-size: 0.875rem;
+}
+
+.kse-notes .learning-goals .kse-callout-body > div:has(> :is(ul, ol)) {
+  margin: 0;
+  border: 1px solid var(--color-rule);
+  border-top: 0;
+}
+
+.kse-notes .learning-goals .kse-callout-body > div:has(> :is(ul, ol)):not(div:has(> :is(ul, ol)) + div) {
+  margin-top: 1rem;
+  border-top: 1px solid var(--color-rule);
+  border-top-left-radius: calc(var(--notes-radius) * 0.8);
+  border-top-right-radius: calc(var(--notes-radius) * 0.8);
+}
+
+.kse-notes .learning-goals .kse-callout-body > div:has(> :is(ul, ol)):last-child {
+  border-bottom-left-radius: calc(var(--notes-radius) * 0.8);
+  border-bottom-right-radius: calc(var(--notes-radius) * 0.8);
+}
+
+.kse-notes .learning-goals .kse-callout-body > div + div:has(> :is(ul, ol)) {
+  border-top: 1px solid var(--color-rule);
+}
+
+.kse-notes .learning-goals .kse-callout-body :is(ul, ol) {
+  list-style: none !important;
+}
+
+.kse-notes .learning-goals .kse-callout-body li {
+  position: relative;
+  display: block;
+  padding: 0.7rem 1rem 0.7rem 2.75rem;
+  color: var(--color-ink-3);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.kse-notes .learning-goals .kse-callout-body li::before {
+  content: "";
+  position: absolute;
+  top: 0.8rem;
+  left: 1rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--tone) 14%, transparent);
+}
+
+.kse-notes .learning-goals .kse-callout-body li::after {
+  content: "";
+  position: absolute;
+  top: 1.05rem;
+  left: 1.25rem;
+  width: 0.75rem;
+  height: 0.75rem;
+  background: var(--tone);
+  -webkit-mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>") center / contain no-repeat;
+}
+
+.kse-notes .learning-goals .kse-callout-body li strong:first-child {
+  color: var(--color-ink);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+/* Theorems: "Definition 1 (Name)" in bold, then the text, as Quarto writes them */
+
+.kse-notes .kse-theorem {
+  margin: 0 0 1rem;
+}
+
+.kse-notes .kse-theorem-def { counter-increment: def; }
+.kse-notes .kse-theorem-thm { counter-increment: thm; }
+.kse-notes .kse-theorem-lem { counter-increment: lem; }
+.kse-notes .kse-theorem-cor { counter-increment: cor; }
+.kse-notes .kse-theorem-prp { counter-increment: prp; }
+.kse-notes .kse-theorem-exm { counter-increment: exm; }
+.kse-notes .kse-theorem-exr { counter-increment: exr; }
+.kse-notes .kse-theorem-cnj { counter-increment: cnj; }
+.kse-notes .kse-theorem-rem { counter-increment: rem; }
+
+.kse-notes .kse-theorem-def .kse-theorem-number::after { content: " " counter(def); }
+.kse-notes .kse-theorem-thm .kse-theorem-number::after { content: " " counter(thm); }
+.kse-notes .kse-theorem-lem .kse-theorem-number::after { content: " " counter(lem); }
+.kse-notes .kse-theorem-cor .kse-theorem-number::after { content: " " counter(cor); }
+.kse-notes .kse-theorem-prp .kse-theorem-number::after { content: " " counter(prp); }
+.kse-notes .kse-theorem-exm .kse-theorem-number::after { content: " " counter(exm); }
+.kse-notes .kse-theorem-exr .kse-theorem-number::after { content: " " counter(exr); }
+.kse-notes .kse-theorem-cnj .kse-theorem-number::after { content: " " counter(cnj); }
+.kse-notes .kse-theorem-rem .kse-theorem-number::after { content: " " counter(rem); }
+
+/* The theorem's name is its first heading, drawn as "(Name)" after the label */
+.kse-notes .kse-theorem-label + :is(h1, h2, h3, h4, h5, h6) {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: inherit;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: inherit;
+}
+
+.kse-notes .kse-theorem-label + :is(h1, h2, h3, h4, h5, h6)::before { content: "("; }
+.kse-notes .kse-theorem-label + :is(h1, h2, h3, h4, h5, h6)::after { content: ")"; }
+
+.kse-notes .kse-theorem-label + :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: 0.25rem;
+}
+
+/* Tabsets: tabs over a bordered panel */
+
+.kse-notes .kse-tab-panel {
+  margin-top: 0.75rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--notes-radius);
+}
+
+.kse-notes .kse-tab-panel > :last-child,
+.kse-notes .kse-tab-panel > div > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
+/* Collapsed solutions and proofs, the <details> element */
+
+.kse-notes .kse-details {
+  margin: 1rem 0;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--notes-radius);
+}
+
+/* Margin notes */
+
+.kse-notes .kse-margin {
+  color: var(--color-ink-3);
+  font-size: 0.85rem;
+}
+
+/* Figures and diagrams */
+
+.kse-notes .kse-figure {
+  margin: 1.5rem 0;
+  text-align: center;
+}

@@ -5,7 +5,7 @@ A deep agent that turns **one lecture's readings** into a **visual study page**.
 It is separate from the [orchestrator](orchestrator.md) and is the only way the app writes notes (it replaced the older multi-stage notes pipeline). It is started from the lecture page with **Write the notes**.
 
 - Code: [`api/app/note_taker/lecture_notes/`](../../api/app/note_taker/lecture_notes/)
-- Prompts: Langfuse `note-taker/lecture-notes/{writer,reviewer,skills-system,request}`, fallback `lecture_notes/prompts/*.md`
+- Prompts: Langfuse `note-taker/lecture-notes/{writer,reviewer,motivation,skills-system,request}`, fallback `lecture_notes/prompts/*.md`
 - Skills: Langfuse Skills tagged `lecture-notes`, fallback `lecture_notes/skills/<name>/SKILL.md`
 
 ## How a run goes
@@ -18,6 +18,7 @@ Lecture page "Create visual notes"
        lecture-notes-writer (create_deep_agent, StateBackend)
          files: /lecture/brief.md, /readings/NN-*.md, /skills/<name>/SKILL.md
          tools: write_todos, ls/read_file/write_file/edit_file/glob/grep, task, render_notes
+         subagent: motivation (the hook; web_search, page_images, check_image)
          subagent: reviewer (reads only)
        last good build -> S3 courses/<course-id>/lecture-notes/<session>/<run>/
   -> API  GET /lecture-notes/runs/{run}/site/index.html   sandboxed iframe on /lectures/.../visual
@@ -26,11 +27,12 @@ Lecture page "Create visual notes"
 The writer's prompt sets this workflow:
 1. Plan with `write_todos`.
 2. Read the brief, the skills it needs and every reading.
-3. Outline: sections in teaching order, a visual and a worked example for each.
-4. Write `/notes/index.qmd` (body only) and any `/notes/assets/*.svg`.
-5. Call `render_notes` and fix problems until it says OK.
-6. Call `task("reviewer")` once and fix what it reports. A second review is allowed only after large changes.
-7. Render again and finish with a short report.
+3. Call `task("motivation")` once; if the subagent drafted a hook, the note opens with it (see [The hook](#the-hook)).
+4. Outline: sections in teaching order, a visual and a worked example for each.
+5. Write `/notes/index.qmd` (body only) and any `/notes/assets/*.svg`.
+6. Call `render_notes` and fix problems until it says OK.
+7. Call `task("reviewer")` once and fix what it reports. A second review is allowed only after large changes.
+8. Render again and finish with a short report.
 
 ## Inputs
 
@@ -56,9 +58,10 @@ The writer's only custom tool. It takes no arguments.
 | Cells | Only `{dot}`, `{mermaid}` and `{ojs}` with allowlisted options (`label: fig-…`, `fig-cap`, `echo`, `panel`, …). Other code goes in plain fences (```` ```python ````) and is only displayed |
 | Markdown | No shortcodes, raw blocks or raw attributes |
 | HTML | Only `kbd sub sup br details summary`, without attributes |
-| Divs and spans | Allowlisted classes (callouts, `panel-tabset`, columns, margin, layout) and attributes; ids prefixed `sec- fig- tbl- eq- def- thm- exm-` … |
-| Images | Only the note's own `assets/<name>.svg` |
-| SVG assets | Parsed element by element: no script, `foreignObject`, `image`, event handlers or external references |
+| Divs and spans | Allowlisted classes (callouts, `learning-goals`, `hook`, `panel-tabset`, columns, margin, layout) and attributes; ids prefixed `sec- fig- tbl- eq- def- thm- exm-` … |
+| The hook | At most one `::: {.hook}`, before the first `##` heading |
+| Images | The note's own `assets/<name>.svg`, or up to 6 `https://` images from the web. A web image is hot-linked and its caption must hold a source link (`Source: [title](https://page)`). In an agent run each must have been checked with `check_image`; a teacher's edit may use any such image |
+| SVG assets | Parsed element by element: no script, `foreignObject`, `image`, event handlers or external references. SMIL animation (`animate`, `animateTransform`, `animateMotion`, `set`, `mpath`) is allowed, except animating `href` or `on*`. Layout (`svg_layout.py`): a `<text>` that a line, curve, shape edge or another label runs through is refused, including where animated elements move to. Label boxes are estimated from font size and character count; labels with a halo (`stroke` + `paint-order="stroke"`) and rotated text are exempt |
 | Links | `http(s)`, `mailto` and `#` only |
 | OJS | No network, storage, frame access, imports or eval |
 | Math | No `\href`, `\url`, `\require` or `\input` |
@@ -70,6 +73,8 @@ Problems come back with their line numbers, so the agent can fix them.
    - HTML options: TOC, numbered sections, MathJax, margin citations.
    - The CSL references.
    - Ukrainian callout and cross-reference titles when the syllabus is Ukrainian; Quarto's own file is `ua`, not `uk`.
+   - The web app's look: `theme: [default, kse-theme.scss]` sets Bootstrap's colours, font and radius to the KSE tokens; `lecture-notes.css` holds the shadcn tokens (`--background`, `--muted-foreground`, ...) and draws callouts, tabsets, tables, code, `details` and Observable inputs like the app's shadcn components. Callouts are Cards with a lucide icon for their kind; the objectives callout (`.callout-note .learning-goals`) is a Card whose goals are table rows, each a bold label over a muted line. KSE Sans ships with the page (`templates/fonts/`, published under `fonts/`).
+   - Our header and footer (`build.page_chrome`, styled in `templates/lecture-notes.css`): the KSE logo (`templates/kse-logo.svg`, inlined) with a "Notes" badge, and a footer with "Generated with ♥ by KSE Note Agent" and a sign-off line. The agent may write that line to `/notes/sign-off.txt`: one plain-text line of at most 120 characters, escaped, checked by `check_sign_off`. Without it a default line is shown in the page's language.
 
 3. It renders with `quarto render index.qmd --to html --no-execute`:
    - in a fresh temporary project;
@@ -77,6 +82,8 @@ Problems come back with their line numbers, so the agent can fix them.
    - with an environment stripped of our secrets.
 
 4. It reports OK with a summary and Quarto's warnings (unresolved references or citations), or the failure log. The last good build is kept and published at the end. Renders are capped (`LECTURE_NOTES_MAX_RENDERS`, default 12).
+
+**Re-rendering without the model.** After a change to our page (front matter, theme, CSS, header, footer), a finished run can be rendered again from the body and assets it published, with no model calls: `docker compose exec worker python -m app.note_taker.lecture_notes.rerender <run-id> ...`. It keeps the agent's sign-off, replaces the run's published files, and refuses when the lecture's readings changed since the run (the citation keys would point at other readings).
 
 How the visuals are drawn:
 
@@ -87,11 +94,46 @@ How the visuals are drawn:
 | `{ojs}` (Observable JS) | In the browser; Inputs, Plot and d3 load from jsDelivr | Shown in the page |
 | Math | MathJax from jsDelivr | — |
 
+## The hook
+
+The note opens with a hook: a few sentences and one piece of media, right under the title and before "What you will learn". Its job is to make the student want to learn the lecture. It is not a callout and has no heading, because readers skip anything that looks like a "Motivation" box. It is written as `::: {.hook}`, which `lecture-notes.css` draws as the page's lead paragraph, with full-width media, a muted caption and a short fade-in.
+
+**The `motivation` subagent (scout).** Code: `motivation.py`; prompt: `note-taker/lecture-notes/motivation`; skill: `motivation-hooks`. The writer calls it once, before outlining. It works in three steps:
+
+1. It decides whether a hook is needed. Introductions to the course and organisational, exam or revision sessions get none.
+2. It thinks of 2 or 3 candidates and picks exactly one kind: `tangible-problem`, `application`, `nerd-snipe` or `historical`.
+3. It picks one device:
+   - `web-image`: a real image from the web;
+   - `animated-svg`: a SMIL or CSS animation in `/notes/assets/`;
+   - `try-first`: an `{ojs}` interaction the reader does before the reveal, like calmcode's "Inverse Turing Test".
+
+It writes its decision to `/notes/motivation.json` (`needed`, `kind`, `device`, `reason`, `candidates`, `sources`) and its draft to `/notes/motivation.md`. The writer puts the draft at the top of the note and keeps its facts and links. The scout may not write `/notes/index.qmd`, the sign-off, or the protected files.
+
+**Web tools** (`web.py`). Only the scout has them, so no web text reaches the writer's context.
+
+| Tool | Does |
+|------|------|
+| `web_search(query)` | One call to OpenRouter's chat API with the `web` plugin on `LECTURE_NOTES_SEARCH_MODEL`. Returns the answer and its `url_citation` sources. It is a direct HTTP call, because LangChain's OpenRouter model drops the annotations; so its cost is not on the trace. At most `LECTURE_NOTES_MAX_SEARCHES` per run |
+| `page_images(url)` | The page's title, its `og:image`/`twitter:image` and its `<img>` tags with alt text |
+| `check_image(image_url, source_page, source_title)` | Fetches the image once and checks with Pillow that it is a JPEG, PNG, GIF or WebP of at least 200x120. `NOTES_VISION_MODEL` describes it in one sentence, since the agent cannot see it. The image is recorded in `RenderState.web_images`, and the tool returns the Markdown to use, with the `Source:` link. At most `LECTURE_NOTES_MAX_IMAGES` per run |
+
+**Hot-linked images.** Images are **not copied**: the page's `<img>` points at the original URL, so a removed image shows as broken, which is accepted for now. Each fetch follows these rules:
+- `https://` only, without credentials or ports;
+- every address of the host must be public;
+- redirects are followed by hand, up to 4, and the check is repeated on each;
+- a page may be at most 2 MB and an image at most 10 MB;
+- a 15 s timeout.
+
+DNS rebinding between the check and the connection is not prevented.
+
+**Where the decision goes.** It is stored on the run's row (`motivation`) and on the trace's metadata (`motivation.needed/kind/device`), so hooks can be evaluated in Langfuse.
+
 ## Skills
 
 | Skill | Teaches |
 |-------|---------|
-| `lecture-notes-structure` | Page shape, headings and ids, cross-references |
+| `lecture-notes-structure` | Page shape (hook, goals, sections, summary), headings and ids, cross-references |
+| `motivation-hooks` | When a hook is needed, its four kinds, and its devices (web image, animated SVG, "try it first") |
 | `callouts-and-theorems` | Callout meanings, collapsed proofs, `#def-`/`#thm-` blocks |
 | `math-explanations` | MathJax-safe math, numbered equations, step-by-step derivations |
 | `graphviz-diagrams` | Concept maps, trees, flowcharts and state machines in `{dot}` |
@@ -134,10 +176,22 @@ Every run is one Langfuse trace when `LANGFUSE_*` keys are set and `LANGFUSE_TRA
 
 **Privacy.** Traces contain the reading text the agent read. Set `LANGFUSE_TRACING=false` where that must not leave the app; prompts and skills still load from Langfuse.
 
+## Editing by hand
+
+A teacher can edit a lecture's published notes in the web editor (`/lectures/<course>/<session>/edit`, Plate). The editor turns the Quarto body into blocks and back (`web/src/lib/qmd/`); see [web.md](../dev/web.md).
+
+1. `GET /lecture-notes/runs/{run}/source` gives the body, the SVG asset names and the readings' citation keys (`rerender.read_published`, `front_references`).
+2. `POST /lecture-notes/runs/{run}/edits` checks the body with the same validator as the agent's notes (`validate_body`) and refuses with 422 and line numbers. The validator first refuses a body over 300 KB, and any line over 5,000 characters (`MAX_LINE_CHARS`), before its line checks run; the checks themselves run in linear time (no backtracking regexes), so the cap is a second guard (CodeQL ReDoS). It also refuses (409) when the lecture's readings changed since that version, because the citations would point at other readings.
+3. The API inserts a run with `kind = 'edit'`, `edited_from` and `edited_by` (`runs.start_edit`). Unlike an agent run, it is never refused because another run is going.
+4. The worker's `runs.execute_edit` renders the body with `rerender.render_and_publish`, with no model call. The figures are the old version's plus the editor's new or changed ones, minus those the body no longer shows (`edit_assets`). The agent's sign-off is kept. The run ends `succeeded` with the report "Edited by hand.", or `failed` with the error.
+
+The lecture's current notes are its newest succeeded run. Earlier runs stay in the database and S3, but the web shows no version picker.
+
 ## Storage and API
 
 **PostgreSQL `lecture_note_runs`.** One row per run:
 - the course and lecture;
+- the kind: `agent` or `edit`, and for an edit the run it started from and the teacher who saved it;
 - the status: `running`, `succeeded`, `failed` or `cancelled`;
 - the step, todos and actions, report and error;
 - the published files, the readings fingerprint, the model, prompt versions, trace id and render count.
@@ -152,9 +206,11 @@ Run `make db-init` to create it.
 | `GET /lecture-notes/{course}/{session}/runs` | The lecture's runs, newest first, with `readings_changed` |
 | `GET /lecture-notes/runs/{run}` | One run, to poll |
 | `POST /lecture-notes/runs/{run}/cancel` | Stop it, before the next model call or render |
-| `GET /lecture-notes/runs/{run}/site/{path}` | A published file; only paths the run published |
+| `GET /lecture-notes/runs/{run}/source` | The published body, asset names and readings, for the editor. 409 unless the run is published |
+| `POST /lecture-notes/runs/{run}/edits` | Save an edit as a new `edit` run (202). 409 when not published or the readings changed; 422 with the checker's problems |
+| `GET /lecture-notes/runs/{run}/site/{path}` | A file of the lecture's newest published run, whichever of its runs `{run}` names (so a shared link shows later edits); only paths that run published |
 
-**How the page is served.** It is model-written, so HTML is served with `Content-Security-Policy: sandbox allow-scripts …` and an opaque origin. Its own files and `https://cdn.jsdelivr.net/npm/` are the only sources it may load. `'unsafe-eval'` is allowed because OJS compiles cells in the browser.
+**How the page is served.** It is model-written, so HTML is served with `Content-Security-Policy: sandbox allow-scripts …` and an opaque origin. Its own files and `https://cdn.jsdelivr.net/npm/` are the only sources it may load scripts, styles and data from. Images may also come from any `https:` host (the hook's hot-linked images). `Referrer-Policy: no-referrer` keeps those hosts from seeing the course link. `'unsafe-eval'` is allowed because OJS compiles cells in the browser. Only Quarto's hashed libraries (`index_files/`) are cached as immutable; the page, its CSS, fonts and assets are `no-cache`, because a re-render replaces them under the same names.
 
 ## Configuration (worker)
 
@@ -165,12 +221,18 @@ Run `make db-init` to create it.
 | `LECTURE_NOTES_MAX_CHARS` | 400000 | Reading text given to the agent |
 | `LECTURE_NOTES_MAX_RENDERS` | 12 | `render_notes` calls per run |
 | `LECTURE_NOTES_CONCURRENCY` | 2 | Runs at once on the worker |
+| `LECTURE_NOTES_WEB` | true | Give the motivation scout web access (also needs `OPENROUTER_API_KEY`) |
+| `LECTURE_NOTES_SEARCH_MODEL` | `OPENROUTER_MODEL` | The model behind `web_search` |
+| `LECTURE_NOTES_MAX_SEARCHES` | 6 | `web_search` calls per run (pages: twice that) |
+| `LECTURE_NOTES_MAX_IMAGES` | 4 | Images `check_image` accepts per run |
 | `LANGFUSE_TRACING` | true | Trace runs in Langfuse |
 
 ## Limits
 
 - **The CDN.** OJS libraries and MathJax load from jsDelivr when the page is viewed. A reader without access to it sees no math or interactive figures.
 - **Mermaid** errors show only in the browser.
+- **Hot-linked images** can disappear or change at their source; the page then shows a broken image.
+- **Web search cost** is not on the Langfuse trace (the search is a plain HTTP call).
 - **Runs are lost on a worker restart.** The row is marked failed when the worker starts again.
 
 ## Tests

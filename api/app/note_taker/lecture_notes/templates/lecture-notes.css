@@ -1,24 +1,611 @@
-/* Lecture notes written by the lecture-notes agent. Quarto's default (Bootstrap) theme does the
-   rest; this keeps long reads comfortable and figures centred. */
+/* Lecture notes written by the lecture-notes agent, in the web app's look: the shadcn tokens of
+   web/src/app/globals.css, pointed at the KSE colours (kse-theme.scss sets Bootstrap's own), and
+   Quarto's parts drawn like the app's shadcn components (Alert, Tabs, Table, Card, Badge). */
+
+@font-face {
+  font-family: "KSE Sans";
+  src: url("fonts/KSE-SansRegular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "KSE Sans";
+  src: url("fonts/KSE-SansMedium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "KSE Sans";
+  src: url("fonts/KSE-SansBold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --radius: 12px;
+  --background: oklch(99.3% 0.003 275);
+  --foreground: oklch(19.2% 0.08 274.9);
+  --card: var(--background);
+  --card-foreground: var(--foreground);
+  --primary: var(--foreground);
+  --primary-foreground: var(--background);
+  --secondary: oklch(97% 0.005 275);
+  --muted: oklch(97% 0.005 275);
+  --muted-foreground: oklch(48% 0.035 275);
+  --accent: oklch(94% 0.01 275);
+  --border: oklch(90.5% 0.012 275);
+  --ring: oklch(37% 0.2 264);
+  --sidebar: var(--secondary);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --signal: oklch(34.8% 0.194 263.8);
+  --signal-wash: oklch(94.5% 0.03 264);
+  --success: oklch(48% 0.12 150);
+  --warning: oklch(50% 0.11 65);
+  --destructive: oklch(52% 0.19 27);
+  --info: oklch(48% 0.13 245);
+
+  --bs-border-color: var(--border);
+  --bs-secondary-color: var(--muted-foreground);
+}
+
+/* The page sits in the platform's frame: a slim scrollbar in the KSE ink, with no track and no
+   arrow buttons, instead of the browser's default one. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(30 40 140 / 0.3) transparent;
+}
 
 body {
+  background: var(--background);
+  color: var(--foreground);
   font-size: 1.05rem;
   line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--signal-wash);
+}
+
+/* Type */
+
+h1,
+h2,
+h3,
+h4,
+.title {
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+#title-block-header .subtitle {
+  color: var(--muted-foreground);
 }
 
 main h2 {
-  margin-top: 2.5rem;
-  padding-bottom: 0.3rem;
-  border-bottom: 1px solid var(--bs-border-color, #dee2e6);
+  margin-top: 2.75rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
 }
 
 main h3 {
   margin-top: 1.75rem;
 }
 
-.callout {
-  margin: 1.5rem 0;
+.header-section-number {
+  color: var(--muted-foreground);
 }
+
+a {
+  color: var(--signal);
+  text-underline-offset: 3px;
+}
+
+a:focus-visible,
+button:focus-visible,
+.nav-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Table of contents: the shadcn Sidebar (base-nova), floating variant. The panel is the
+   Sidebar, the title its SidebarGroupLabel, sections SidebarMenuButtons and subsections a
+   SidebarMenuSub. Quarto's scroll spy sets `.active`, which reads as `data-active`. The #TOC
+   selectors outrank Quarto's own `.sidebar nav[role=doc-toc]` rules. */
+
+#TOC {
+  padding: 0.5rem;
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius);
+  background: var(--sidebar);
+  box-shadow: 0 1px 2px rgb(12 13 55 / 0.05);
+}
+
+/* SidebarGroupLabel: h-8 px-2 text-xs font-medium text-sidebar-foreground/70 */
+#TOC > #toc-title {
+  display: flex;
+  align-items: center;
+  height: 2rem;
+  margin: 0;
+  padding: 0 0.5rem;
+  border: 0;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: color-mix(in oklab, var(--sidebar-foreground) 70%, transparent);
+}
+
+/* SidebarMenu: a column of items */
+#TOC ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+}
+
+/* SidebarMenuButton, size default: rounded-md p-2 text-sm; hover and active on the accent */
+#TOC ul > li > a {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-height: 2rem;
+  padding: 0.45rem 0.5rem;
+  border: 0;
+  border-radius: calc(var(--radius) * 0.8);
+  color: var(--sidebar-foreground) !important;
+  line-height: 1.25rem;
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+}
+
+#TOC ul > li > a:hover {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground) !important;
+}
+
+#TOC ul > li > a.active {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground) !important;
+  font-weight: 500;
+}
+
+#TOC ul > li > a:focus-visible {
+  outline: 2px solid var(--sidebar-ring);
+  outline-offset: 0;
+}
+
+/* The section number, muted and aligned, like an item's icon slot */
+#TOC a > .header-section-number {
+  flex-shrink: 0;
+  min-width: 1.25rem;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+/* SidebarMenuSub: mx-3.5 border-l px-2.5 py-0.5 gap-1 */
+#TOC ul ul {
+  gap: 0.25rem;
+  margin: 0.125rem 0.875rem;
+  padding: 0.125rem 0 0.125rem 0.625rem;
+  border-left: 1px solid var(--sidebar-border);
+}
+
+/* SidebarMenuSubButton, size md: h-7 px-2 text-sm */
+#TOC ul ul > li > a {
+  min-height: 1.75rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.875rem;
+}
+
+#TOC ul ul .header-section-number {
+  display: none;
+}
+
+/* Callouts: the shadcn Card (base-nova): rounded-xl, ring-1 ring-foreground/10, py-4 with the
+   header and content at px-4, a medium title. The kind shows as a lucide icon in a tinted square
+   (like an Item's icon media), not as Quarto's coloured left bar. A collapsible callout (a
+   solution, a proof) is the same Card with a chevron. The icons are masks, so they take the
+   kind's colour. */
+
+.callout-note {
+  --callout-tone: var(--info);
+  --callout-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='M12 16v-4'/><path d='M12 8h.01'/></svg>");
+}
+
+.callout-tip {
+  --callout-tone: var(--success);
+  --callout-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5'/><path d='M9 18h6'/><path d='M10 22h4'/></svg>");
+}
+
+.callout-important {
+  --callout-tone: var(--signal);
+  --callout-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='M12 8v4'/><path d='M12 16h.01'/></svg>");
+}
+
+.callout-warning {
+  --callout-tone: var(--destructive);
+  --callout-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/><path d='M12 9v4'/><path d='M12 17h.01'/></svg>");
+}
+
+.callout-caution {
+  --callout-tone: var(--warning);
+  --callout-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 16h.01'/><path d='M12 8v4'/><path d='M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z'/></svg>");
+}
+
+/* Card */
+.callout.callout-style-default {
+  margin: 1.5rem 0;
+  padding: 1rem 0;
+  border: 0 !important;
+  border-radius: calc(var(--radius) * 1.4) !important;
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent);
+  overflow: hidden;
+}
+
+/* CardHeader and CardTitle: px-4, text-base font-medium leading-snug */
+.callout.callout-style-default > div.callout-header {
+  display: flex;
+  align-items: center !important;
+  gap: 0.75rem;
+  margin: 0 !important;
+  padding: 0 1rem !important;
+  border: 0;
+  background: transparent !important;
+  opacity: 1;
+  color: var(--card-foreground);
+  font-size: 1rem !important;
+  font-weight: 500 !important;
+  line-height: 1.375;
+}
+
+.callout.callout-style-default .callout-title-container {
+  margin: 0 !important;
+}
+
+/* The kind: a size-8 tinted square with a size-4 icon */
+.callout.callout-style-default .callout-icon-container {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0 !important;
+  border-radius: calc(var(--radius) * 0.8);
+  background: color-mix(in oklab, var(--callout-tone) 12%, transparent);
+  color: var(--callout-tone);
+}
+
+.callout.callout-style-default .callout-icon::before {
+  display: block;
+  width: 1rem !important;
+  height: 1rem !important;
+  background: currentColor !important;
+  -webkit-mask: var(--callout-icon) center / contain no-repeat;
+  mask: var(--callout-icon) center / contain no-repeat;
+}
+
+/* CardContent: px-4, gap-4 below the header */
+.callout.callout-style-default .callout-body {
+  padding: 0 1rem !important;
+  color: var(--card-foreground);
+  font-size: 0.95rem;
+}
+
+.callout.callout-style-default .callout-body > :first-child,
+.callout.callout-style-default .callout-body > div > :first-child {
+  margin-top: 0.75rem !important;
+  padding-top: 0 !important;
+}
+
+.callout.callout-style-default .callout-body > :last-child,
+.callout.callout-style-default .callout-body > div > :last-child {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* A code block that ends the card: Quarto wraps it in a copy-button scaffold */
+.callout.callout-style-default .callout-body > div.sourceCode:last-child,
+.callout.callout-style-default .callout-body > .code-copy-outer-scaffold:last-child div.sourceCode,
+.callout.callout-style-default .callout-body > :last-child pre.sourceCode {
+  margin-bottom: 0 !important;
+}
+
+/* A callout without a title: the icon beside the content */
+.callout.callout-style-default:not(.callout-titled) > .callout-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.callout.callout-style-default:not(.callout-titled) .callout-body > :first-child,
+.callout.callout-style-default:not(.callout-titled) .callout-body > div > :first-child {
+  margin-top: 0.3rem !important;
+}
+
+/* Collapsible: the whole header toggles; a ghost icon button with a chevron at the end */
+.callout.callout-style-default > .callout-header[data-bs-toggle="collapse"] {
+  cursor: pointer;
+}
+
+.callout.callout-style-default .callout-btn-toggle {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-left: auto;
+  padding: 0 !important;
+  border-radius: calc(var(--radius) * 0.8);
+  color: var(--muted-foreground);
+}
+
+.callout.callout-style-default > .callout-header:hover .callout-btn-toggle {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.callout.callout-style-default .callout-toggle::before {
+  display: block;
+  width: 1rem !important;
+  height: 1rem !important;
+  margin: 0 !important;
+  background: currentColor !important;
+  -webkit-mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>") center / contain no-repeat;
+}
+
+/* Learning goals (`::: {.callout-note .learning-goals}`): the Card with a CardDescription under
+   the title and the goals as the rows of a bordered table (the shadcn Table in a Card): a check
+   per row, no numbers. A goal written `**Label**\` + a line holds a title and a muted
+   description, like an Item's ItemTitle and ItemDescription. */
+
+.callout.learning-goals {
+  --callout-tone: var(--signal);
+  --callout-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z'/><path d='M22 10v6'/><path d='M6 12.5V16a6 3 0 0 0 12 0v-3.5'/></svg>");
+}
+
+/* CardDescription: text-sm text-muted-foreground, under the title */
+.callout.learning-goals .callout-body > p:first-child {
+  margin-top: 0.25rem !important;
+  padding-left: 2.75rem;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+
+/* The table */
+.callout.learning-goals .callout-body > :is(ol, ul) {
+  margin: 1rem 0 0 !important;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 0.8);
+  list-style: none;
+  overflow: hidden;
+}
+
+/* A row: border-b, hover:bg-muted/50, a size-4 check in the leading cell */
+.callout.learning-goals .callout-body > :is(ol, ul) > li {
+  position: relative;
+  margin: 0;
+  padding: 0.7rem 1rem 0.7rem 2.75rem;
+  border-top: 1px solid var(--border);
+  color: var(--card-foreground);
+  line-height: 1.5;
+  transition: background-color 0.15s ease;
+}
+
+.callout.learning-goals .callout-body > :is(ol, ul) > li:first-child {
+  border-top: 0;
+}
+
+.callout.learning-goals .callout-body > :is(ol, ul) > li:hover {
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
+}
+
+/* The check: a size-5 tinted circle with a bold lucide check, centred on the first line (the
+   row's top padding, 0.7rem, plus half of a 1.425rem line) */
+.callout.learning-goals .callout-body > :is(ol, ul) > li {
+  --goal-line-middle: calc(0.7rem + 0.7125rem);
+}
+
+.callout.learning-goals .callout-body > :is(ol, ul) > li::before,
+.callout.learning-goals .callout-body > :is(ol, ul) > li::after {
+  content: "";
+  position: absolute;
+}
+
+.callout.learning-goals .callout-body > :is(ol, ul) > li::before {
+  top: calc(var(--goal-line-middle) - 0.625rem);
+  left: 1rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--callout-tone) 14%, transparent);
+}
+
+.callout.learning-goals .callout-body > :is(ol, ul) > li::after {
+  top: calc(var(--goal-line-middle) - 0.375rem);
+  left: 1.25rem;
+  width: 0.75rem;
+  height: 0.75rem;
+  background: var(--callout-tone);
+  -webkit-mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>") center / contain no-repeat;
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>") center / contain no-repeat;
+}
+
+.callout.learning-goals li > p {
+  margin: 0;
+}
+
+/* A labelled goal: the label is the row's title, the rest its muted description */
+.callout.learning-goals li:has(> strong:first-child),
+.callout.learning-goals li:has(> p:first-child > strong:first-child) {
+  color: var(--muted-foreground);
+  font-size: 0.9rem;
+}
+
+.callout.learning-goals li > strong:first-child,
+.callout.learning-goals li > p:first-child > strong:first-child {
+  display: block;
+  color: var(--card-foreground);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.callout.learning-goals li > strong:first-child + br,
+.callout.learning-goals li > p:first-child > strong:first-child + br {
+  display: none;
+}
+
+/* Tabsets: the shadcn Tabs, a muted track with the active tab raised */
+
+.panel-tabset .nav-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+
+.panel-tabset .nav-tabs .nav-link {
+  margin: 0;
+  padding: 0.3rem 0.85rem;
+  border: 0;
+  border-radius: calc(var(--radius) * 0.75);
+  color: var(--muted-foreground);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.panel-tabset .nav-tabs .nav-link.active {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgb(12 13 55 / 0.08);
+}
+
+.panel-tabset .tab-content {
+  margin-top: 0.75rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* Tables: the shadcn Table */
+
+table,
+.table {
+  font-size: 0.95rem;
+  --bs-table-bg: transparent;
+  --bs-table-striped-bg: var(--muted);
+  --bs-table-hover-bg: var(--muted);
+  --bs-table-border-color: var(--border);
+}
+
+table thead th,
+.table > thead > tr > th {
+  color: var(--muted-foreground);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border) !important;
+}
+
+table td,
+table th {
+  border-color: var(--border);
+}
+
+/* Code: the app's muted blocks */
+
+div.sourceCode,
+pre:not(.mermaid) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted) !important;
+}
+
+code:not(pre code) {
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+/* Collapsed solutions and proofs: the shadcn Collapsible */
+
+details {
+  margin: 1rem 0;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+details > summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+details[open] > summary {
+  margin-bottom: 0.5rem;
+}
+
+kbd {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-size: 0.85em;
+}
+
+/* Interactive controls (Observable Inputs): the shadcn Input, Select and Slider */
+
+form[class^="oi-"] select,
+form[class^="oi-"] input[type="number"],
+form[class^="oi-"] input[type="text"],
+form[class^="oi-"] input[type="search"] {
+  height: 2.25rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 0.7);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+form[class^="oi-"] select:focus-visible,
+form[class^="oi-"] input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+form[class^="oi-"] input[type="range"],
+form[class^="oi-"] input[type="checkbox"],
+form[class^="oi-"] input[type="radio"] {
+  accent-color: var(--primary);
+}
+
+form[class^="oi-"] > label {
+  color: var(--muted-foreground);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+/* Figures */
 
 .cell-output-display svg,
 figure svg,
@@ -35,7 +622,7 @@ figure,
 .figure-caption,
 figcaption {
   font-size: 0.9rem;
-  color: var(--bs-secondary-color, #6c757d);
+  color: var(--muted-foreground);
 }
 
 pre.mermaid {
@@ -43,15 +630,153 @@ pre.mermaid {
   border: 0;
 }
 
-.panel-tabset .nav-tabs {
-  flex-wrap: wrap;
-}
-
-table {
-  font-size: 0.95rem;
-}
-
 mjx-container[display="true"] {
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+/* Margin notes and citations */
+
+.column-margin,
+.margin-aside,
+div.csl-entry {
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+}
+
+/* Our header and footer (build.page_chrome): the KSE logo, as the brand requires, our credit and
+   the agent's one-line sign-off. */
+
+.kse-header {
+  margin-bottom: 2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.kse-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.25rem 0 1rem;
+}
+
+.kse-header .kse-logo {
+  display: block;
+  width: auto;
+  height: 30px;
+}
+
+.kse-badge {
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  padding: 0.15rem 0.85rem;
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.kse-header-agent {
+  margin-left: auto;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+}
+
+.kse-footer {
+  margin-top: 4rem;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.kse-footer-inner {
+  padding: 2rem 0 2.5rem;
+}
+
+.kse-footer .kse-logo {
+  width: auto;
+  height: 22px;
+  margin-bottom: 0.75rem;
+  opacity: 0.85;
+}
+
+.kse-footer p {
+  margin: 0.25rem 0;
+}
+
+.kse-footer-made {
+  font-size: 0.95rem;
+}
+
+.kse-footer-sign-off {
+  font-size: 0.9rem;
+  font-style: italic;
+  color: var(--muted-foreground);
+}
+
+.kse-heart {
+  color: var(--destructive);
+}
+
+/* The hook (`::: {.hook}`): the page's opening, written to make the reader want to learn. It is
+   deliberately not a card or a callout, which readers skip: lead-paragraph type, media at the
+   text's full width with a muted caption (its source link), and a gentle fade in. */
+
+.hook {
+  margin: 0.5rem 0 2rem;
+  font-size: 1.15rem;
+  line-height: 1.7;
+  animation: hook-in 0.6s ease-out both;
+}
+
+.hook > p:first-child::first-line {
+  font-weight: 500;
+}
+
+.hook figure,
+.hook .quarto-figure {
+  margin: 1.25rem 0;
+}
+
+.hook img {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+
+.hook img[src$=".svg"] {
+  object-fit: contain;
+  background: none;
+}
+
+.hook figcaption,
+.hook .figure-caption {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+}
+
+.hook figcaption a,
+.hook .figure-caption a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+@keyframes hook-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hook {
+    animation: none;
+  }
 }
