@@ -18,6 +18,7 @@ Read this page, then the area doc for what you are changing.
 
 <!-- Newest first, at most 20. One line each: - YYYY-MM-DD [#PR title](changes/file.md): summary -->
 
+- 2026-11-19 [#62 Multiple users: course members, admins, activity log](changes/2026-11-19-pr62.md): a course has one lecturer and TAs (`course_members`), admins via `PLATFORM_ADMINS`, an activity log (`course_events`), `/team/*` routes and a Team tab; `SHARED_COURSES` removed; run `make db-init` before deploying.
 - 2026-11-24 [#70 Show the note taker's progress as a trace of steps and actions](changes/2026-11-24-pr70.md): actions record their `todo`; shared `AgentTrace` (shadcn `trace` + `collapsible`) groups them under steps in the course console and lecture notes page.
 - 2026-11-23 [#69 Refuse SVG figures whose labels are crossed by lines](changes/2026-11-23-pr69.md): `render_notes` estimates each `<text>` box and refuses figures where a line, curve, shape edge, moving element or other label crosses it (`svg_layout.py`).
 - 2026-11-23 [#68 Open lecture notes with a motivating hook](changes/2026-11-23-pr68.md): a motivation scout subagent (the only one with web tools) drafts an opening `.hook` (checked image, animated SVG or try-it-first); stored in `lecture_note_runs.motivation`; SVG labels stay clear of the data.
