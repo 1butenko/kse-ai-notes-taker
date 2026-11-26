@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 import uuid
 from pathlib import Path
@@ -7,7 +8,8 @@ import httpx2
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
-from app.auth import CurrentPrincipal, authorize_course, owned_course
+from app import team
+from app.auth import CurrentPrincipal, actor, authorize_course, owned_course
 from app.config import Settings, get_settings
 from app.links import (
     PageTooLarge,
@@ -30,6 +32,14 @@ Category = Literal["syllabus", "reading"]
 class SavedFile(BaseModel):
     path: str
     size: int
+
+
+async def log_upload(
+    course: str, principal: CurrentPrincipal, category: str, saved_files: list[SavedFile]
+) -> None:
+    if saved_files:
+        details = {"category": category, "files": [f.path.rsplit("/", 1)[-1] for f in saved_files]}
+        await asyncio.to_thread(team.record, course, actor(principal), "material_uploaded", details)
 
 
 class MoodleFileRef(BaseModel):
@@ -128,13 +138,15 @@ async def upload_files(
     principal: CurrentPrincipal,
     course_id: Annotated[int | None, Form()] = None,
 ) -> list[SavedFile]:
-    authorize_course(principal, course_key(course_id))
+    authorize_course(principal, course_key(course_id), settings)
     directory = target_dir(settings, course_id, category)
     with Staging(settings, directory) as staging:
         for upload in files:
             with staging.add(directory / safe_name(upload.filename or "")).open("wb") as out:
                 shutil.copyfileobj(upload.file, out)
-        return staging.commit()
+        saved_files = staging.commit()
+    await log_upload(course_key(course_id), principal, category, saved_files)
+    return saved_files
 
 
 @router.post("/moodle")
@@ -144,7 +156,7 @@ async def upload_moodle_files(
     settings: Annotated[Settings, Depends(get_settings)],
     principal: CurrentPrincipal,
 ) -> list[SavedFile]:
-    authorize_course(principal, course_key(body.course_id))
+    authorize_course(principal, course_key(body.course_id), settings)
     moodle_prefix = f"{settings.moodle_url.rstrip('/')}/"
     for ref in body.files:
         if not ref.fileurl.startswith(moodle_prefix):
@@ -156,7 +168,9 @@ async def upload_moodle_files(
             temporary = staging.add(directory / safe_name(ref.filename))
             with moodle_errors():
                 await moodle.download(settings.moodle_token, ref.fileurl, temporary)
-        return staging.commit()
+        saved_files = staging.commit()
+    await log_upload(course_key(body.course_id), principal, body.category, saved_files)
+    return saved_files
 
 
 async def save_moodle_page(
@@ -197,7 +211,7 @@ async def upload_moodle_links(
     """Save the course's web pages as reading materials: what its `url` modules point to (PDFs
     as they are, HTML pages as Markdown) and its own `page` and `book` modules (as Markdown).
     Only modules of the course itself are fetched."""
-    authorize_course(principal, course_key(body.course_id))
+    authorize_course(principal, course_key(body.course_id), settings)
     with moodle_errors():
         sections = await moodle.get_course_contents(settings.moodle_token, body.course_id)
     modules = {m.id: m for s in sections for m in s.modules}
@@ -249,7 +263,9 @@ async def upload_moodle_links(
                     status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                     f"{name}: {content_type or 'unknown type'} can't be imported",
                 )
-        return staging.commit()
+        saved_files = staging.commit()
+    await log_upload(course_key(body.course_id), principal, "reading", saved_files)
+    return saved_files
 
 
 class CourseFiles(BaseModel):

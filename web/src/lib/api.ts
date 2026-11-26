@@ -238,9 +238,84 @@ export type CourseInfo = {
   readings_approved_at?: string | null;
 };
 
-/** Every course with a name, newest first. */
-export function listCourseInfo(): Promise<CourseInfo[]> {
+/** The caller's role on a course: a member's, or an admin's (a lecturer's rights everywhere). */
+export type CourseRole = "lecturer" | "ta" | "admin";
+
+/** A course in the list, with the caller's role on it. */
+export type CourseListItem = CourseInfo & { role: CourseRole };
+
+/** The signed-in teacher's courses (every course for an admin), newest first. */
+export function listCourseInfo(): Promise<CourseListItem[]> {
   return request("/course-info");
+}
+
+export type TeamMember = {
+  email: string;
+  role: "lecturer" | "ta";
+  /** Empty until they have signed in. */
+  name: string;
+  signed_in: boolean;
+  avatar_url: string | null;
+  added_at: string;
+};
+
+export type Team = {
+  my_role: CourseRole;
+  members: TeamMember[];
+};
+
+export type CourseEvent = {
+  id: string;
+  kind:
+    | "material_uploaded"
+    | "material_deleted"
+    | "moodle_synced"
+    | "notes_generated"
+    | "readings_approved"
+    | "readings_approval_revoked"
+    | "member_added"
+    | "member_removed"
+    | "lecturer_changed"
+    | "course_started_over";
+  details: Record<string, unknown>;
+  at: string;
+  /** null: the worker, or something that happened before the log existed. */
+  actor_email: string | null;
+  actor_name: string | null;
+};
+
+/** The course's members and the caller's role. */
+export function getTeam(course: string): Promise<Team> {
+  return request(`/team/${course}`);
+}
+
+/** Add a TA by email (lecturer or admin). */
+export function addTeamMember(course: string, email: string): Promise<Team> {
+  return request(`/team/${course}/members`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function removeTeamMember(course: string, email: string): Promise<Team> {
+  return request(`/team/${course}/members?email=${encodeURIComponent(email)}`, {
+    method: "DELETE",
+  });
+}
+
+/** Make someone the lecturer; the previous lecturer stays on as a TA. */
+export function setLecturer(course: string, email: string): Promise<Team> {
+  return request(`/team/${course}/lecturer`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+}
+
+/** Who did what on the course, newest first. */
+export function getCourseActivity(course: string): Promise<CourseEvent[]> {
+  return request(`/team/${course}/activity`);
 }
 
 export function saveCourseInfo(course: string, name: string): Promise<CourseInfo> {

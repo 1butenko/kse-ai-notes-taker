@@ -18,8 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app import auth, db, storage
-from app.auth import CurrentPrincipal, owned_course, owned_run
+from app import auth, db, storage, team
+from app.auth import CurrentPrincipal, actor, owned_course, owned_run
 from app.config import Settings, get_settings
 from app.course import load_info
 from app.note_taker.lecture_notes import runs
@@ -118,6 +118,7 @@ async def start_lecture_notes(
     session_id: str,
     settings: Annotated[Settings, Depends(get_settings)],
     worker: Annotated[WorkerClient, Depends(get_worker_client)],
+    principal: CurrentPrincipal,
 ) -> dict[str, Any]:
     """Have the lecture-notes agent write this lecture's visual notes; poll the run."""
     title, label, files, fingerprint = await asyncio.to_thread(
@@ -140,6 +141,8 @@ async def start_lecture_notes(
             runs.finish_run, run["id"], "failed", error=f"Worker: {error.detail}"
         )
         raise
+    details = {"run_id": str(run["id"]), "session_id": session_id, "label": label}
+    await asyncio.to_thread(team.record, course, actor(principal), "notes_generated", details)
     return with_changes(run, fingerprint)
 
 

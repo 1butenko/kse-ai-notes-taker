@@ -1,15 +1,15 @@
-"""Database tasks: `uv run python -m app.manage init-db | list | claim-course <key> <email>`."""
+"""Database tasks: `uv run python -m app.manage init-db | list | set-lecturer <key> <email>`."""
 
 import argparse
 
-from app import db, users
+from app import db, team
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manage the AI Note Taker database.")
-    parser.add_argument("command", choices=["init-db", "list", "claim-course"])
-    parser.add_argument("course_key", nargs="?", help="claim-course: the course key")
-    parser.add_argument("email", nargs="?", help="claim-course: the teacher's email")
+    parser.add_argument("command", choices=["init-db", "list", "set-lecturer"])
+    parser.add_argument("course_key", nargs="?", help="set-lecturer: the course key")
+    parser.add_argument("email", nargs="?", help="set-lecturer: the lecturer's email")
     args = parser.parse_args()
 
     if args.command == "init-db":
@@ -17,21 +17,29 @@ def main() -> None:
         print("Schema applied.")
         return
 
-    if args.command == "claim-course":
+    if args.command == "set-lecturer":
+        # For a course with no lecturer (made before sign-in); admins can also do it in the app.
         if not args.course_key or not args.email:
-            parser.error("claim-course needs a course key and an email")
-        if not users.claim_course(args.course_key, args.email):
-            raise SystemExit("No such course, or that teacher has not signed in yet.")
-        print(f"Course {args.course_key} now belongs to {args.email}.")
+            parser.error("set-lecturer needs a course key and an email")
+        with db.transaction() as conn:
+            course_uuid = team.course_id(conn, args.course_key)
+            if course_uuid is None:
+                raise SystemExit("No such course.")
+            try:
+                team.set_lecturer(conn, course_uuid, args.email, None)
+            except team.TeamError as error:
+                raise SystemExit(str(error)) from error
+        print(f"{args.email} is now the lecturer of course {args.course_key}.")
         return
 
     with db.transaction() as conn:
         rows = conn.execute(
-            "SELECT c.s3_prefix, c.course_key, c.title, u.email FROM courses c"
-            " LEFT JOIN users u ON u.id = c.owner_id ORDER BY c.created_at DESC"
+            "SELECT c.s3_prefix, c.course_key, c.title, m.email FROM courses c"
+            " LEFT JOIN course_members m ON m.course_id = c.id AND m.role = 'lecturer'"
+            " ORDER BY c.created_at DESC"
         ).fetchall()
     for row in rows:
-        owner = row["email"] or "(no owner)"
+        owner = row["email"] or "(no lecturer)"
         print(f"{row['s3_prefix']}  {row['course_key'] or '-'}  {row['title']}  {owner}")
 
 

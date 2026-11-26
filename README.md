@@ -84,17 +84,23 @@ Both services mount their source code, so code changes reload automatically. Cha
 
 ### Sign-in
 
-Teachers sign in with their KSE Google account; each sees and creates only their own courses.
+Teachers sign in with their KSE Google account and see only the courses they are on. A course has one **lecturer** and any number of **TAs**; admins see every course.
 
 - **Web** ([Auth.js](https://authjs.dev), `web/src/auth.ts`): Google sign-in that accepts only accounts whose verified ID token carries an `hd` (Workspace domain) claim listed in `AUTH_ALLOWED_DOMAINS`. No Workspace admin rights are needed. The browser calls the API only through the web's `/api/*` route handler, which forwards each call with a 60-second token signed with `API_AUTH_SECRET`.
-- **API** (`api/app/auth.py`): every route except `/health` and published lecture-notes pages needs that token. A course belongs to the teacher who created it (`courses.owner_id`); other teachers get a 404, and setting up a Moodle course someone else already has gives a 409. The worker signs its own calls with the same secret.
+- **API** (`api/app/auth.py`): every route except `/health` and published lecture-notes pages needs that token. The worker signs its own calls with the same secret.
+- **Who may work on a course** (`course_members`, `api/app/team.py`, the `/team/{course}` routes):
+  - Whoever sets a course up becomes its lecturer. The lecturer (or an admin) adds TAs by KSE email, which works before their first sign-in, and can hand the lecturer role to someone else, staying on as a TA.
+  - TAs do everything except manage members and start the course over.
+  - Admins (`PLATFORM_ADMINS`) have a lecturer's rights on every course. `OPEN_COURSE_ACCESS=true` makes every signed-in user an admin: for test servers only.
+  - Anyone else gets a 404 for the course. Setting up a Moodle course that already has a lecturer gives a 409 naming that lecturer.
+  - Uploads, Moodle syncs, notes runs, readings approvals, member changes and start-overs are logged with who did them (`course_events`), shown in the course's activity.
 
 Setup:
 
 1. Google Cloud Console → **APIs & Services**: set the OAuth consent screen to **External** with the scopes `openid email profile`, and publish it (basic scopes need no verification). Create an **OAuth client ID** (Web application) with the redirect URI `http://localhost:3000/api/auth/callback/google` (plus your deployed web URL's `/api/auth/callback/google`).
 2. In `.env`, set `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET` and `API_AUTH_SECRET` (each secret: `openssl rand -base64 32`), and `AUTH_ALLOWED_DOMAINS` if KSE accounts use more than `kse.org.ua`.
-3. Create the `users` table and the courses' owner column: `make db-init`. Then recreate the containers (`docker compose up -d --force-recreate api worker web`).
-4. Courses created before sign-in have no owner. Once their teacher has signed in, give them one: `cd api && uv run python -m app.manage claim-course <course_key> <email>`. Setting up an unowned course again from the dashboard also claims it.
+3. Create the `users`, `course_members` and `course_events` tables: `make db-init`. Then recreate the containers (`docker compose up -d --force-recreate api worker web`).
+4. Courses created before sign-in have no lecturer and are visible only to admins. An admin gives them one from the course's team, or: `cd api && uv run python -m app.manage set-lecturer <course_key> <email>`. Setting up such a course again from the dashboard also makes you its lecturer.
 
 If KSE's Workspace admins block unconfigured third-party apps, sign-in shows "Access blocked": ask them to trust the OAuth client ID.
 

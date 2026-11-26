@@ -6,12 +6,16 @@ The AI Note Taker's data is in Aurora PostgreSQL (IAM authentication, no passwor
 
 | Table | What it holds |
 |---|---|
-| `courses` | A course: `title`, `s3_prefix` (generated from `id`), `moodle_course_id`, `course_key` (the uploads folder name), `owner_id` |
+| `courses` | A course: `title`, `s3_prefix` (generated from `id`), `moodle_course_id`, `course_key` (the uploads folder name), `owner_id` (still written; `course_members` decides access) |
 | `materials` | Files fetched from Moodle: section, `s3_key`, `source_url`, `moodle_timemodified`. Unique per course, URL and modified time |
 | `course_topics` | A course's Moodle sections: name and summary |
 | `sync_runs` | One row per Moodle Note Taker run: `focus`, `status`, `step`, `todos`, `actions`, `report`, `error` |
 | `lecture_note_runs` | One row per version of a lecture's notes (below) |
 | `users` | Teachers: `google_sub`, `email`, names, `avatar_url`, `last_login_at` |
+| `course_members` | Who may work on a course: `course_id`, `email` (lowercase), `role` (`lecturer` or `ta`), `added_by`, `added_at`. By email, so a TA can be added before signing in. A partial unique index allows one lecturer per course |
+| `course_events` | The activity log: `course_id`, `actor_id` (null: worker, or before the log), `kind` (`team.EventKind`), `details` jsonb, `created_at` |
+
+`make db-init` fills the new tables once: each `owner_id` becomes the course's lecturer (courses that already have members are skipped), and earlier `sync_runs` and `lecture_note_runs` become `moodle_synced` / `notes_generated` events with no actor. Start over deletes the course's members (`team.clear_members`); its events stay.
 
 ### `lecture_note_runs`
 
